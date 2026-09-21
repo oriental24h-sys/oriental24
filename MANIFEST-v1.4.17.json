@@ -1,0 +1,585 @@
+{
+  "version": "1.4.17",
+  "files": [
+    {
+      "path": "oriental24/.env.production.example",
+      "bytes": 735,
+      "sha256": "f6e5e2cfec22dc05fbdb51c1688e4c26146682dce4e3eac1e084a6e82cd85d16"
+    },
+    {
+      "path": "oriental24/.gitignore",
+      "bytes": 121,
+      "sha256": "487882bb8ed867a0ca11719af21e4e634a94d3738e5bb74d0ebea72a6dedd938"
+    },
+    {
+      "path": "oriental24/GUIDE-DEPLOIEMENT-RENDER.md",
+      "bytes": 3714,
+      "sha256": "cc40e43edf9aa8c6a502fcdc6388ce9a7eef1b1288b9388c6ee7031909825e53"
+    },
+    {
+      "path": "oriental24/GUIDE-v1.4.16.md",
+      "bytes": 8915,
+      "sha256": "04201e0391a3d255066a5a57668d2d55e10a1993919ef62be2b94f05da26105d"
+    },
+    {
+      "path": "oriental24/GUIDE-v1.4.17.md",
+      "bytes": 7414,
+      "sha256": "1f14e7a096cb04f81d2d76d44c40df1d8eb741ac5d228a65d9beb0bb52147237"
+    },
+    {
+      "path": "oriental24/Procfile",
+      "bytes": 80,
+      "sha256": "caa2cbca2f35c7a5d05d1c517aae7aa879276192641650ba5a66e2ad89ca42a7"
+    },
+    {
+      "path": "oriental24/README.md",
+      "bytes": 40462,
+      "sha256": "ed0030ff1314d27dbfdc54542d993f8121b2dc3912048b029034b60d5f020146"
+    },
+    {
+      "path": "oriental24/RELEASE-NOTES.md",
+      "bytes": 31958,
+      "sha256": "644d84a6892c568677983084aeee5179eccd863d015a94b74cc29f8ad9cad6d3"
+    },
+    {
+      "path": "oriental24/accounts.py",
+      "bytes": 9281,
+      "sha256": "adebfbcd2855ef8e790430e48558353719a6cf022d4c31581fdc5000af3006b8"
+    },
+    {
+      "path": "oriental24/announcements.py",
+      "bytes": 6405,
+      "sha256": "61dd93c83e910956f0a11009116d330949a58289ced3267bef9de8f362ef20b5"
+    },
+    {
+      "path": "oriental24/app.py",
+      "bytes": 40234,
+      "sha256": "b84872e818c3048e2307b13d8f4e576ac893c00f7a497c61f34dda0b57af8ef0"
+    },
+    {
+      "path": "oriental24/backups/oriental24-v1.4.17-post-cleanup.sqlite",
+      "bytes": 536576,
+      "sha256": "30d0b0b77e83733460374f77edbfb2825f9fda54f4d9dbc0d52b6f6171857d20"
+    },
+    {
+      "path": "oriental24/billing.py",
+      "bytes": 14324,
+      "sha256": "43e8a10075b2165e35b9995116f57bfc63093e77db0ac799626219cf71985278"
+    },
+    {
+      "path": "oriental24/billing_pdf.py",
+      "bytes": 8573,
+      "sha256": "752e67ad8f1970bc84da1a01292b13b7524f8932e7116bfc8b556175bef6d2a9"
+    },
+    {
+      "path": "oriental24/claims.py",
+      "bytes": 4635,
+      "sha256": "2ba7d0598b6afa83e343a18bdaf3abba1d024736cd621d73c692e71654bcba41"
+    },
+    {
+      "path": "oriental24/client_finance.py",
+      "bytes": 8406,
+      "sha256": "6b60cbb8592890223c6a87ba9e6b3fcdb7d4dc788d146c5db920f18725918fb4"
+    },
+    {
+      "path": "oriental24/client_types.py",
+      "bytes": 6730,
+      "sha256": "3dd9b2c4c5efd1d69ca3a579b7a9869ad76a6e48436feff89c1905dcf08d5c45"
+    },
+    {
+      "path": "oriental24/driver_finance.py",
+      "bytes": 26538,
+      "sha256": "71b4a4a0ff6df9fca8184613506517322b2f86f0e6fb519ecb9878a7eda1d6ed"
+    },
+    {
+      "path": "oriental24/driver_workspace.py",
+      "bytes": 13053,
+      "sha256": "61f66f771ccfebc5882f5e98410585f40e9246a8e57cf7206ffaa6993ae32cf3"
+    },
+    {
+      "path": "oriental24/fulfillment.py",
+      "bytes": 11801,
+      "sha256": "b499142dc3e8c9a5cba6eba1cdda82541715cd6ef2e1baaf3e5c3311687939ef"
+    },
+    {
+      "path": "oriental24/invoice_profile.py",
+      "bytes": 3104,
+      "sha256": "8d23fce7d33c8da768b275774d6efe8f3a08ba5b0f6bcad992377372c24e2cc0"
+    },
+    {
+      "path": "oriental24/logistics.py",
+      "bytes": 36383,
+      "sha256": "c99f5884ebf491f1a031bb7c55cf9bea9e94e0da9fa776f6481f2c15e734e72a"
+    },
+    {
+      "path": "oriental24/manage.py",
+      "bytes": 6244,
+      "sha256": "dba3116127e3f75efcc1a4aaa16051e5d1b8fb61c4c1e05b340160d180e6cc30"
+    },
+    {
+      "path": "oriental24/offline/adapter.js",
+      "bytes": 47570,
+      "sha256": "a9a97160f598c335cb4990bc0430cad431a216f61d302db1675a61630df151e3"
+    },
+    {
+      "path": "oriental24/offline/billing.js",
+      "bytes": 9807,
+      "sha256": "723c56d1e44d94db371d890883471fcd5e80151773710938c7970cb9cdef27ab"
+    },
+    {
+      "path": "oriental24/offline/build_html.py",
+      "bytes": 7357,
+      "sha256": "2f6b425167a64782fc2cf2149406cf8ed56749874e6ef2b3ffd841f35dfedbae"
+    },
+    {
+      "path": "oriental24/offline/driver_workspace.js",
+      "bytes": 6456,
+      "sha256": "40b5b3daf8b9c214b003fafba92d02b79d8e6f2c0b3302d780cbaae1b31eabe5"
+    },
+    {
+      "path": "oriental24/offline/partner_palettes.js",
+      "bytes": 15820,
+      "sha256": "6dbc01109b1b2c78c75a6c032d94ec1aacc318e7156081983e6d8ef69b64efbe"
+    },
+    {
+      "path": "oriental24/operations.py",
+      "bytes": 28569,
+      "sha256": "80a19154343351c0edb0643829da6b74f1a0782c94fa5ec0f8aeffbf19823bac"
+    },
+    {
+      "path": "oriental24/parcel_contacts.py",
+      "bytes": 5596,
+      "sha256": "3b107b6a6168701305a13464fe093f1e8ac042aaa47a6f21f9d431e66f9b9538"
+    },
+    {
+      "path": "oriental24/parcel_statuses.py",
+      "bytes": 2721,
+      "sha256": "136a59ba009ab4b74c80e2a3902912a60c3d7241eae580e89757fb48c83d25e3"
+    },
+    {
+      "path": "oriental24/partner_api.py",
+      "bytes": 12320,
+      "sha256": "e29c813452ba25df0cb4ad366c39eba4c278674714f1ee526a0136652e2dac4d"
+    },
+    {
+      "path": "oriental24/partner_palettes.py",
+      "bytes": 18719,
+      "sha256": "4394656045fdb03b2e3f73294cc7273222901a9e1dbbca937277f530779318ce"
+    },
+    {
+      "path": "oriental24/qa/browser_check.py",
+      "bytes": 2420,
+      "sha256": "a3916666d378cda1ef61a2a3646c2a2c60191a24a2863a2a42237d82d1baec39"
+    },
+    {
+      "path": "oriental24/qa/offline_html_check.py",
+      "bytes": 6574,
+      "sha256": "cffeabcbc35e12cf8febbf3e142bbda6aad4b29a73c6eea476bb37c670807ca7"
+    },
+    {
+      "path": "oriental24/qa/partner_palettes_workflow.py",
+      "bytes": 11394,
+      "sha256": "8fd733f1a3d73bd7a27182279f50c129de1e4226ad226e994f259ca769b4182e"
+    },
+    {
+      "path": "oriental24/qa/pilotage_1417_workflow.py",
+      "bytes": 6862,
+      "sha256": "94c13ce1b0b845d0651c94764c5fd192543f3e81250ab5d947cee958e50180dd"
+    },
+    {
+      "path": "oriental24/qa/pilotage_check.py",
+      "bytes": 6955,
+      "sha256": "ad4350643f676a9be9e6ba6e583d33ef92693283e79f849f0287cb428c575833"
+    },
+    {
+      "path": "oriental24/qa/reception_extras_workflow.py",
+      "bytes": 11214,
+      "sha256": "713bf5bd1562b379225a6f923fa1b787c0bf7def90fd1642cda454230771a558"
+    },
+    {
+      "path": "oriental24/qa/v1416-agent-home.png",
+      "bytes": 73239,
+      "sha256": "c1de5e441411e8a9d3273f7c52f126032a570d39366661a1becf1d1622819654"
+    },
+    {
+      "path": "oriental24/qa/v1416-agent-incidents-full.png",
+      "bytes": 162385,
+      "sha256": "c3b7e36bd1992355824cb10d9a41aec017234bfdde59ade7cffca5e7e89ed7b6"
+    },
+    {
+      "path": "oriental24/qa/v1416-agent-incidents.png",
+      "bytes": 162385,
+      "sha256": "c3b7e36bd1992355824cb10d9a41aec017234bfdde59ade7cffca5e7e89ed7b6"
+    },
+    {
+      "path": "oriental24/qa/v1416-alerts.png",
+      "bytes": 81659,
+      "sha256": "bbf7d0ea9c9e99cf9ef7596898f58ad140cf5a3f9b4bc675f8d1eb074dbc9fbb"
+    },
+    {
+      "path": "oriental24/qa/v1416-apikey.png",
+      "bytes": 134215,
+      "sha256": "48597a09b67dfe1038cfd35b9f0b7405da3d4a2fb7b27f2d96f7dcb98f94b20c"
+    },
+    {
+      "path": "oriental24/qa/v1416-company-reply.png",
+      "bytes": 192499,
+      "sha256": "e030e35ef2031f9ad1e572f2e56ba770100025c0da1ec85b5eb17a2fadeea7cc"
+    },
+    {
+      "path": "oriental24/qa/v1416-html-agent-alerts.png",
+      "bytes": 75280,
+      "sha256": "3104d61f78ae097ed24275ba03f772aba1531ce915c5c73edbe2adb9bbb0369f"
+    },
+    {
+      "path": "oriental24/qa/v1416-tariffs.png",
+      "bytes": 159847,
+      "sha256": "377221abd7e652310a5f39d92bee55f4dc258376595c5310ab53f7319b6c5457"
+    },
+    {
+      "path": "oriental24/qa/v1417-receiveall-conflict.png",
+      "bytes": 215569,
+      "sha256": "8038af85f0e48052314b7232c5fd9146301ca616e64c92fa0c26116320ae743b"
+    },
+    {
+      "path": "oriental24/qa_logs/unit-final.txt",
+      "bytes": 420,
+      "sha256": "6472b8cfe3fd7222ca211795a0d3729b27a354c0f601a70b44038445d49937b9"
+    },
+    {
+      "path": "oriental24/reception_extras.py",
+      "bytes": 24997,
+      "sha256": "ccd0e01b838b34a7c136b0c090cb70face798a3843c45c58e33d86acb8896f0d"
+    },
+    {
+      "path": "oriental24/render.yaml",
+      "bytes": 1174,
+      "sha256": "15fef8e7d85989e1727fbe20dc77fab29a5dfc29365d44f9ad1769d820ee8f73"
+    },
+    {
+      "path": "oriental24/requirements-qa.txt",
+      "bytes": 86,
+      "sha256": "bf5de79a5e9379b136958df35d0141bfd742192373dbe0ebcbc948a660d6d665"
+    },
+    {
+      "path": "oriental24/requirements.txt",
+      "bytes": 175,
+      "sha256": "197d05b0686cca0dd61ecefee87935fa04749f4d4d8a9002d8c36d4665024149"
+    },
+    {
+      "path": "oriental24/runtime.py",
+      "bytes": 4946,
+      "sha256": "bb950b26599127c8cfa2a0a6cb57ee1fb637853ddc6047e42ef51e5bc9b1d7f5"
+    },
+    {
+      "path": "oriental24/runtime.txt",
+      "bytes": 14,
+      "sha256": "44c5d91f94b686048dac381e293f213ea77b532bc178a4cd9b7fde15b3fd0cb2"
+    },
+    {
+      "path": "oriental24/security.py",
+      "bytes": 12805,
+      "sha256": "7eabbd4d2b2c8e5c10cf4d44d653da1848dd26d14e4ccfcda9eb54bba7534287"
+    },
+    {
+      "path": "oriental24/static/app.js",
+      "bytes": 84019,
+      "sha256": "30924d2f31d2e21244ff42a5c50a681e73d6aaf011dc3933255ada015f402ea1"
+    },
+    {
+      "path": "oriental24/static/billing.css",
+      "bytes": 5460,
+      "sha256": "b392fbabb2cb1455193693317cdb4b9a6f3c675e25309a6a1756d932ff435185"
+    },
+    {
+      "path": "oriental24/static/billing.js",
+      "bytes": 17975,
+      "sha256": "b7a4610cfb66b88cf02fe8c35676f623c2c6b2cf1986305a20fdcfea58f7ebc6"
+    },
+    {
+      "path": "oriental24/static/driver-finance.css",
+      "bytes": 22134,
+      "sha256": "aa735b57601ec89ccee42c5f9eb4936b110e66d863fdcfe4997b4a3a3172e629"
+    },
+    {
+      "path": "oriental24/static/driver-finance.js",
+      "bytes": 32719,
+      "sha256": "fbd3c931bf75f95baca1cd93c1b58098cfb84699e2e48de0eee077b786b77d14"
+    },
+    {
+      "path": "oriental24/static/driver-invoice-print.js",
+      "bytes": 15309,
+      "sha256": "374acddd055be1279a9d1509687c6acd3c8d53a11349e32a2d0fbcd51151397e"
+    },
+    {
+      "path": "oriental24/static/driver-invoice.js",
+      "bytes": 4639,
+      "sha256": "7183612bf5dd46bb92b0340ca72a8dd012db9d195195f8f43754cd123faea020"
+    },
+    {
+      "path": "oriental24/static/driver-workspace.css",
+      "bytes": 5068,
+      "sha256": "9183715f15a01f8da7982733a24f724c2975c5cfdeb451ad214b43f1dc8e0cfc"
+    },
+    {
+      "path": "oriental24/static/driver-workspace.js",
+      "bytes": 15679,
+      "sha256": "27295cd535629f69d469b16a03cd6835fe371561cc290653b4c86aa9a71cef59"
+    },
+    {
+      "path": "oriental24/static/fonts/DejaVuSans-Bold.ttf",
+      "bytes": 708920,
+      "sha256": "a4c5bc453ca281d90ea079e596da7ae0dfeb5777497c29ec254e76d97ff6f890"
+    },
+    {
+      "path": "oriental24/static/fonts/DejaVuSans.ttf",
+      "bytes": 759720,
+      "sha256": "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e"
+    },
+    {
+      "path": "oriental24/static/fonts/LICENSE-DejaVu.txt",
+      "bytes": 3859,
+      "sha256": "63d3ba759d12804c5b31a9d5940d855c1820d1f5999e6b0872eb1c7ff045fbc9"
+    },
+    {
+      "path": "oriental24/static/logistics.css",
+      "bytes": 3710,
+      "sha256": "8301276e8b26a3d4cfc232e4808e19d741bbf0eb01bb4c940c3849a82f69a325"
+    },
+    {
+      "path": "oriental24/static/logistics.js",
+      "bytes": 47220,
+      "sha256": "8c4853e7de0b4348a841fc6435582364b162294061d58f159bb9b380f9dbc70e"
+    },
+    {
+      "path": "oriental24/static/logo.png",
+      "bytes": 870185,
+      "sha256": "198ed0adbc474f2a4e7dc8d7ff277777d76d1357b08d09d7ede17ef0fb2a136d"
+    },
+    {
+      "path": "oriental24/static/operations.css",
+      "bytes": 21121,
+      "sha256": "957673dbdf06f60fa69e16c98bc87f3f3e045d712bd36494c490f8c41448a324"
+    },
+    {
+      "path": "oriental24/static/operations.js",
+      "bytes": 30750,
+      "sha256": "c20521ba6e5fe9e9fae0f44dcd02d1320d77b8c7126654e069eed127ab749aab"
+    },
+    {
+      "path": "oriental24/static/parcel-city.css",
+      "bytes": 3022,
+      "sha256": "c598f413cbd2bf5df75fc622633498260ac5817291de46635fc7b9a303d31e4d"
+    },
+    {
+      "path": "oriental24/static/parcel-city.js",
+      "bytes": 5579,
+      "sha256": "fd164c6b5544ada26c12594d5be0a611861127ca4409e45b00a8e55990ed04d2"
+    },
+    {
+      "path": "oriental24/static/parcel-claim.css",
+      "bytes": 3140,
+      "sha256": "662e122b0d68adb38baed5acb01139029bbb8633c5518b382adcd33dadedb9ec"
+    },
+    {
+      "path": "oriental24/static/parcel-claim.js",
+      "bytes": 7304,
+      "sha256": "bd6bc0af094be2bc637e30f0f114933c0c5f1693a06e59c611603abf8ee9d8f8"
+    },
+    {
+      "path": "oriental24/static/parcel-contacts.css",
+      "bytes": 6033,
+      "sha256": "6cae1c1db5567f02c3844381f82c9450b605cbc78b0b7e9bc6bfdf6a71a4bfb9"
+    },
+    {
+      "path": "oriental24/static/parcel-contacts.js",
+      "bytes": 10881,
+      "sha256": "2256ee08b261a2f742e6a7d554f366daf195fb9413732c4ded529000c519ae85"
+    },
+    {
+      "path": "oriental24/static/parcel-copy.js",
+      "bytes": 3722,
+      "sha256": "6ce23be15fa35ceee5719988b5248bef639b8c4f073954dc4cf382577ada4b8d"
+    },
+    {
+      "path": "oriental24/static/parcel-state.css",
+      "bytes": 3985,
+      "sha256": "2f4d4b65525a0b88fb28e3cb29068554c792e0e015244384c816add918dd7628"
+    },
+    {
+      "path": "oriental24/static/parcel-state.js",
+      "bytes": 15294,
+      "sha256": "02561f232dd97e1b89ca661095dd323f069d42e4b9522288d3b140c629ed615b"
+    },
+    {
+      "path": "oriental24/static/partner-palettes.css",
+      "bytes": 3881,
+      "sha256": "66ba0e38ffda92281be128d0f0c1a0de4e387f78b75a7fc4b17e050829c7b776"
+    },
+    {
+      "path": "oriental24/static/partner-palettes.js",
+      "bytes": 20911,
+      "sha256": "3dd48588463927ed166ad1b3156ee15488668582cd728b070e7bd2627ee9ca23"
+    },
+    {
+      "path": "oriental24/static/pilotage.css",
+      "bytes": 6244,
+      "sha256": "e3e565a2160bae46e7d19245fc418eb6914371aff49e9e2ce4d1a4e33b8232d3"
+    },
+    {
+      "path": "oriental24/static/pilotage.js",
+      "bytes": 16161,
+      "sha256": "1ea2151751c2096503e0450b41aa84709d99c5bad9fa9ebfa715ac5c3ca35153"
+    },
+    {
+      "path": "oriental24/static/reception-extras.js",
+      "bytes": 26717,
+      "sha256": "3b1c5a83bdeb663205ae01165bfbec1a931bc0c454db7c15d1c945caebc28dc2"
+    },
+    {
+      "path": "oriental24/static/security.js",
+      "bytes": 5450,
+      "sha256": "3bc6e262ffc38bec872493fc43067f9d6b324b8851c47ae86147fde2d663e1e9"
+    },
+    {
+      "path": "oriental24/static/style.css",
+      "bytes": 38335,
+      "sha256": "9f3e681aebd815b88003f81ad3e3ffd978165a64c669b5b32c75ad016624620f"
+    },
+    {
+      "path": "oriental24/static/van.png",
+      "bytes": 394605,
+      "sha256": "912cb0bed50167700a8d7dbc78da5dd7b23208980521596672e99d9742ebc9ea"
+    },
+    {
+      "path": "oriental24/static/wordmark.png",
+      "bytes": 73450,
+      "sha256": "4590a42e48edf7ce345d25eb0d035ac861f985b2827b418c24fe970245f9de7a"
+    },
+    {
+      "path": "oriental24/static/workspace-ui.css",
+      "bytes": 4940,
+      "sha256": "cd2c62ddaa53504b2061d825ec0d8746708847b4f8e5e2005c62b73918394960"
+    },
+    {
+      "path": "oriental24/static/workspace-ui.js",
+      "bytes": 11818,
+      "sha256": "7d8aa54d85a468a55faec0972c765c9b5dc7d7086cb54af5a1fdd6194136c392"
+    },
+    {
+      "path": "oriental24/tariffs.py",
+      "bytes": 5799,
+      "sha256": "3b98bc462aa77211e73676c48769fc9066a16fa49eef7cc0c0fe132c02f6c52b"
+    },
+    {
+      "path": "oriental24/templates/index.html",
+      "bytes": 2419,
+      "sha256": "5d704c91eb028141593ac31f7a4f094ec664859a456b836a7d043a82ff0bbeb6"
+    },
+    {
+      "path": "oriental24/test_accounts.py",
+      "bytes": 4527,
+      "sha256": "04e03a4c28d29c61a9474d63b2f11fb153512b08b50846931af25eca809e0632"
+    },
+    {
+      "path": "oriental24/test_announcements.py",
+      "bytes": 5229,
+      "sha256": "ea3b3823373bb3eb2a886d0bc665526fab5dbd6e9ade9b26b24bd9bac0fbdc24"
+    },
+    {
+      "path": "oriental24/test_app.py",
+      "bytes": 9984,
+      "sha256": "5859acdeb93d2a0e6949119b04e2db9e5cb61421002dad180b782d539a0b7262"
+    },
+    {
+      "path": "oriental24/test_billing.py",
+      "bytes": 12131,
+      "sha256": "5e38b5903218e6ae25f9905c4d8229f4cc1ac5751df6525573d50299bb062ba0"
+    },
+    {
+      "path": "oriental24/test_client_finance.py",
+      "bytes": 4898,
+      "sha256": "6ac46abd55e56f716275fa43d3fbb0d12359ff7818633cc85eb0f878c5f3254d"
+    },
+    {
+      "path": "oriental24/test_client_types.py",
+      "bytes": 14952,
+      "sha256": "7b7073d7987bdae012d2102464d29e07e785d98a1a99fef7595dcddff355cd5e"
+    },
+    {
+      "path": "oriental24/test_driver_finance.py",
+      "bytes": 14560,
+      "sha256": "e10dae73cdd123a58a224edde97b6638c2f24f666c3669fe376a88bf9e0e2f0f"
+    },
+    {
+      "path": "oriental24/test_driver_workspace.py",
+      "bytes": 8612,
+      "sha256": "61f1fbfaf1d546f178ed217a1e168d4193d8c87c72e6aae32cad814d453808b0"
+    },
+    {
+      "path": "oriental24/test_invoice_profile.py",
+      "bytes": 4996,
+      "sha256": "0bb0ea82eef0d41eb185d2669624583297682b06321961bc3f944e69b94396d5"
+    },
+    {
+      "path": "oriental24/test_logistics.py",
+      "bytes": 16859,
+      "sha256": "32a95e9c23e2b877e850d5c49aeb0b3365ebf7dc8afef0396e6ededa422f4c35"
+    },
+    {
+      "path": "oriental24/test_operations.py",
+      "bytes": 11890,
+      "sha256": "fca5418e5876ab52e9341e7d6169e9ceac799b1e434f3f28b9f0c60657a5a42b"
+    },
+    {
+      "path": "oriental24/test_parcel_city.py",
+      "bytes": 5693,
+      "sha256": "dabfac540786e29c6fcf2061c5905132003ef816b585afafb3a1384a6055947b"
+    },
+    {
+      "path": "oriental24/test_parcel_claim.py",
+      "bytes": 6276,
+      "sha256": "c54ebfee6f7f9b36be0bf9c0934f4caf36b81ac88af0a89400d366d40405ba8a"
+    },
+    {
+      "path": "oriental24/test_parcel_contacts.py",
+      "bytes": 4591,
+      "sha256": "3bf77e5ae552b56655ec3f49923e3dc005459e3ac6d8aa12687aaaced364eec6"
+    },
+    {
+      "path": "oriental24/test_parcel_state.py",
+      "bytes": 6412,
+      "sha256": "165ccbd6ad9606d5a71900c13b04d2b319b652134271f071546df00a0f883984"
+    },
+    {
+      "path": "oriental24/test_partner_api.py",
+      "bytes": 8299,
+      "sha256": "6811c2055b367c2f8156b829415a476802d719a9afe7fafe94c6b15cfd22f107"
+    },
+    {
+      "path": "oriental24/test_partner_palettes.py",
+      "bytes": 15493,
+      "sha256": "6324c52af74e0490402adfb9288fc810bf986ec2a103e27d7e8ced5a144b9f30"
+    },
+    {
+      "path": "oriental24/test_reception_extras.py",
+      "bytes": 19244,
+      "sha256": "86e3bb10a61f4a67624fcd3ebc60e0895b2a5d162f2fd54ee340e21a5f54cf65"
+    },
+    {
+      "path": "oriental24/test_reception_guard_audit.py",
+      "bytes": 5175,
+      "sha256": "b9c0447670e00f3f543f6a6380174c6d27c9aa1732d422e5002e6dbeda9ba0c6"
+    },
+    {
+      "path": "oriental24/test_security.py",
+      "bytes": 14991,
+      "sha256": "26d89f2f50fb49f1b3c6c91da3abb8364b1939677525c78b8d953027e20a7737"
+    },
+    {
+      "path": "oriental24/test_status_catalogue.py",
+      "bytes": 7872,
+      "sha256": "8b61197160447b3f400e4fc55955cb0a3ce5882d932553d27795c3c2545a4ead"
+    }
+  ]
+}

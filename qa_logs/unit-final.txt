@@ -1,0 +1,6 @@
+Intégrité OK · permissions 0600 · SHA256 ce6a7a785fa22109e3fc1b10f6157cf1a8179f9f1de96ebc993837130498d9b0
+Restauration vers nouveau fichier : /tmp/tmpoffwydk7/restored.sqlite
+Intégrité OK · permissions 0600 · SHA256 96141090169aa9dbe2401b5ac7c240871effadd211d6c0b7b0ee790117658d24
+Sessions révoquées. Vérifiez comptes/droits/mots de passe restaurés avant de relancer le service.
+Ran 244 tests in 132.687s
+OK
