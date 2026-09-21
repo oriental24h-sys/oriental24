@@ -583,3 +583,24 @@ if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':
             c.execute('INSERT INTO users(name,email,password,role,company,phone,active,client_type,agent_hub_id,created_at) VALUES(?,?,?,?,?,?,1,?,?,?)',('Nadia Réception','agent@oriental24.ma',generate_password_hash('Oriental24!Demo'),'agent','ORIENTAL24','0600000000','vendeur',hid,t))
 
 if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.getenv('PORT',3000)),debug=False)
+
+# Production bootstrap (hosts without shell access, e.g. Render free plan):
+# ORIENTAL24_BOOTSTRAP_ADMIN="email|nom|mot_de_passe" crée le premier Admin UNE FOIS,
+# uniquement si aucun admin actif n'existe encore (jamais en mode demo).
+_boot=os.environ.get('ORIENTAL24_BOOTSTRAP_ADMIN','')
+if app.config['PRODUCTION_MODE'] and _boot:
+    try:
+        from runtime import DEMO_EMAILS as _DEMO_EMAILS
+        bemail,bname,bpwd=_boot.split('|',2)
+        assert '@' in bemail and bname and len(bpwd)>=12,'format attendu : email|nom|mot_de_passe (>= 12 caractères)'
+        assert bemail.lower() not in {e.lower() for e in _DEMO_EMAILS},'e-mail réservé à la démo : choisissez votre propre adresse'
+        with conn() as c:
+            n_admins=c.execute("SELECT count(*) k FROM users WHERE role='admin' AND active=1").fetchone()['k']
+            if n_admins==0 and not c.execute("SELECT 1 FROM users WHERE lower(email)=lower(?)",(bemail,)).fetchone():
+                c.execute('INSERT INTO users(name,email,password,role,company,phone,active,client_type,created_at) VALUES(?,?,?,?,?,?,1,?,?)',
+                    (bname,bemail,generate_password_hash(bpwd),'admin',bname,'', 'vendeur',now()))
+                print('Bootstrap : premier administrateur créé pour',bemail,'— changez le mot de passe puis retirez ORIENTAL24_BOOTSTRAP_ADMIN.')
+            else:
+                print('Bootstrap : administrateur déjà présent, aucune création.')
+    except (ValueError,AssertionError) as e:
+        print('Bootstrap ignoré :',e)

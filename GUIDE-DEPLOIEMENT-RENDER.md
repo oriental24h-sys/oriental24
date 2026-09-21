@@ -16,11 +16,11 @@
 2. على [dashboard.render.com](https://dashboard.render.com) → **New → Blueprint** → اختر المستودع. Render يقرأ `render.yaml` تلقائياً.
 3. Render سيطلب قيمة **`ORIENTAL24_TRUSTED_HOSTS`** (sync:false): ضع اسم النطاق بدون https، مثال: `oriental24.onrender.com` (أو نطاقك الخاص بعد ربطه).
 4. باقي المتغيرات محسوبة تلقائياً: `SECRET_KEY` تُولَّد عشوائياً، `DB_PATH=/var/data/oriental24/app.sqlite` على القرص الدائم (صلاحيات 0700 في أمر التشغيل)، `ORIENTAL24_MODE=production`، `ORIENTAL24_PUBLIC_REGISTRATION=0`، `ORIENTAL24_PROXY_HOPS=1` (خلف بروكسي Render).
-5. بعد أول نشر، افتح **Shell** من لوحة Render ونفّذ إنشاء المدير الأول (كلمة السر تُكتب تفاعلياً، لا تظهر في الأوامر):
-   ```bash
-   python manage.py init-admin --email admin@votre-domaine.ma --name "Votre Nom"
-   ```
+5. **أول مدير (حسب الخطة)** :
+   - **خطة مدفوعة (Shell متاح)** : من Shell ديال Render نفّذ `python manage.py init-admin --email admin@votre-domaine.ma --name "Votre Nom"` (كلمة السر تُكتب تفاعلياً).
+   - **خطة مجانية (بلا Shell)** : أضف قبل Deploy المتغير `ORIENTAL24_BOOTSTRAP_ADMIN` بالشكل `votre-email@domaine.ma|Votre Nom|MotDePasse>=12` — يُنشأ المدير تلقائياً عند أول تشغيل فقط. ⚠️ لا تستعمل ايميلات الديمو (`admin@/client@/livreur@oriental24.ma`) — مرفوضة. بعد أول دخول ناجح: بدّل كلمة السر من الملف الشخصي ثم احذف المتغير (الخطة المجانية: أبقِه إن أردت استرجاع الحساب بعد مسح البيانات المؤقتة).
 6. أنشئ من حساب المدير: المدن والتعريفات، حسابات العملاء والسائقين — **لا توجد أي بيانات تجريبية في وضع الإنتاج** (`ORIENTAL24_PUBLIC_REGISTRATION=0` يغلق التسجيل العمومي).
+NOTE: في النشر اليدوي (New Web Service) بدل Blueprint: Build=`pip install -r requirements.txt` · Start=`mkdir -p /var/data/oriental24 && chmod 700 /var/data/oriental24 && gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60 app:app` · المتغيرات الستة أعلاه تُضاف يدوياً (الخطة المجانية: بدون قرص — البيانات مؤقتة وتُمسح عند إعادة النشر).
 
 ## تحققات تمت قبل التسليم (وضع الإنتاج)
 
