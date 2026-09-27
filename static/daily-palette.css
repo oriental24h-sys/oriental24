@@ -1,0 +1,45 @@
+/* v1.4.21 · Bloc « Palette du jour » (société) — carte simple, cohérente avec les cartes ORIENTAL24. */
+.daily-palette { margin-bottom: 22px; }
+.daily-palette .card h3 { font-size: 15px; }
+.daily-palette-empty { padding: 22px 26px; }
+.daily-palette-empty .flex { align-items: center; gap: 16px; }
+.daily-palette-card { padding: 22px 26px 24px; }
+.daily-palette-card .tag { text-transform: none; font-size: 11px; }
+.daily-palette-list {
+  margin: 16px 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.daily-palette-line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-top: 1px solid #eef2f7;
+  font-size: 13px;
+  background: #fff;
+}
+.daily-palette-line:first-child { border-top: 0; }
+.daily-palette-line .tracking { min-width: 130px; }
+.daily-palette-line b { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 650; }
+.daily-palette-line small { color: var(--muted, #7c899d); }
+.daily-palette-line .lp-badge { flex-shrink: 0; }
+.daily-palette .pp-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.daily-palette .pp-actions .sub { margin-left: auto; font-size: 11px; }
+.daily-palette .sub { color: var(--muted, #7c899d); font-size: 12px; }
+.daily-palette .form-hint {
+  margin-left: 0;
+  margin-right: 0;
+}
+@media (max-width: 720px) {
+  .daily-palette-line { flex-wrap: wrap; gap: 6px 10px; padding: 10px 12px; }
+  .daily-palette-line .tracking { min-width: 0; width: 100%; }
+  .daily-palette .pp-actions .sub { margin-left: 0; width: 100%; }
+}
+
+/* v1.4.22 · badge « palette du jour » dans la barre latérale (société) */
+.sidebar .nav-item .daily-badge { background: linear-gradient(120deg, #f97316, #ea580c); color: #fff; box-shadow: 0 1px 3px rgba(234, 88, 12, .35); }
+.theme-light .sidebar .nav-item .daily-badge, .sidebar.light .nav-item .daily-badge { box-shadow: none; }

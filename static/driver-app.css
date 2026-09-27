@@ -1,0 +1,84 @@
+/* v1.4.24 · « Mon app » livreur — coquille mobile façon application, identité ORIENTAL24 (orange / bleu nuit). */
+
+.da { display: flex; flex-direction: column; gap: 12px; max-width: 640px; margin: 0 auto; }
+.da-top { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.da-version { color: var(--muted); font-size: 12px; letter-spacing: .3px; }
+.da-top .icon-btn { width: 40px; height: 40px; border-radius: 10px; }
+
+.da-update { display: block; width: 100%; border: 0; cursor: pointer; text-align: center; padding: 10px 14px; border-radius: 10px; background: #e11d48; color: #fff; font-weight: 600; font-size: 13px; }
+.da-update[hidden] { display: none; }
+
+.da-search { display: flex; align-items: center; gap: 8px; background: #f1f4f9; border-radius: 12px; padding: 4px 6px 4px 14px; border: 1px solid transparent; }
+.da-search:focus-within { border-color: rgba(249, 115, 22, .5); }
+.da-search svg { opacity: .55; flex: none; }
+.da-search input { flex: 1; border: 0; background: transparent; padding: 10px 0; font-size: 14px; }
+.da-search input:focus { outline: none; }
+.da-search .icon-btn { width: 38px; height: 38px; border-radius: 10px; background: #fff; }
+
+.da-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.da-chip { display: inline-flex; align-items: center; gap: 7px; border: 0; cursor: pointer; padding: 9px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: #eef1f6; color: #334155; }
+.da-chip.active { background: linear-gradient(120deg, #f97316, #ea580c); color: #fff; box-shadow: 0 2px 8px rgba(234, 88, 12, .3); }
+.da-chip.ghost { background: transparent; color: var(--muted); }
+.da-chip svg { opacity: .8; }
+
+.da-list { display: flex; flex-direction: column; gap: 10px; }
+.da-card { text-align: left; border: 1px solid #e7eaf1; background: #fff; border-radius: 14px; padding: 13px 15px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; transition: box-shadow .15s ease, transform .15s ease; width: 100%; }
+.da-card:active { transform: scale(.995); }
+.da-card:hover { box-shadow: 0 4px 16px rgba(11, 21, 38, .08); }
+.da-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.da-card-top .tracking { font-weight: 700; font-size: 13px; letter-spacing: .2px; }
+.da-card-main b { font-size: 14.5px; }
+.da-card-main .sub { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.da-card-main .sub svg { opacity: .6; }
+.da-card-foot { display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed #edf0f5; padding-top: 8px; }
+.da-card-foot strong { font-size: 14px; color: #0b1526; }
+.da-card-foot strong small { color: var(--muted); font-weight: 600; font-size: 10px; }
+.da-card-foot .sub { color: var(--muted); font-size: 11.5px; }
+
+.da-empty { text-align: center; color: #64748b; padding: 56px 16px; font-size: 14.5px; line-height: 1.9; }
+.da-empty small { color: #94a3b8; font-size: 12px; }
+
+.da-drawer { position: fixed; inset: 0; z-index: 60; background: rgba(11, 21, 38, .45); }
+.da-drawer[hidden] { display: none; }
+.da-drawer-panel { position: absolute; top: 0; bottom: 0; left: 0; width: min(320px, 86vw); background: #fff; box-shadow: 8px 0 30px rgba(11, 21, 38, .2); display: flex; flex-direction: column; padding: 18px 16px; gap: 14px; animation: daSlide .18s ease; }
+@keyframes daSlide { from { transform: translateX(-16px); opacity: .4; } to { transform: none; opacity: 1; } }
+.da-drawer-head { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid #edf0f5; }
+.da-drawer-head .avatar { width: 44px; height: 44px; border-radius: 50%; font-size: 15px; }
+.da-drawer-head .link { border: 0; background: none; color: #0ea5e9; font-weight: 600; padding: 0; cursor: pointer; font-size: 12.5px; }
+.da-drawer-head .icon-btn { margin-left: auto; }
+.da-drawer-menu { display: flex; flex-direction: column; gap: 2px; }
+.da-drawer-menu button { display: flex; align-items: center; gap: 10px; border: 0; background: none; text-align: left; padding: 11px 10px; border-radius: 10px; font-size: 14px; font-weight: 550; color: #0b1526; cursor: pointer; }
+.da-drawer-menu button:hover { background: #f4f6fa; }
+.da-drawer-menu button.danger { color: #dc2626; }
+.da-drawer-foot { margin-top: auto; color: var(--muted); font-size: 11px; text-align: center; }
+
+.da-sheet { display: flex; flex-direction: column; gap: 4px; max-height: 55vh; overflow: auto; }
+.da-sheet-row { display: flex; justify-content: space-between; align-items: center; border: 1px solid #edf0f5; background: #fff; padding: 11px 14px; border-radius: 10px; cursor: pointer; font-size: 14px; }
+.da-sheet-row.sel { border-color: rgba(249, 115, 22, .6); background: #fff7ed; }
+.da-sheet-row b { color: var(--muted); font-size: 12px; }
+/* v1.4.26 : liste métier « Changer le statut » du livreur. */
+.da-status-row { justify-content: flex-start; gap: 10px; text-align: left; }
+.da-status-row:disabled { opacity: .42; cursor: not-allowed; }
+.da-status-row .da-status-ic { width: 34px; height: 34px; flex: none; border-radius: 10px; background: #eef4ff; color: #1d4ed8; display: flex; align-items: center; justify-content: center; }
+.da-status-row .da-status-ic.danger { background: #fee2e2; color: #b91c1c; }
+.da-status-row .da-status-label { flex: 1; display: flex; flex-direction: column; }
+.da-status-row .da-status-label small { color: var(--muted); font-weight: 400; }
+.da-status-row .da-actuel { color: #f97316; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; flex: none; }
+.da-status-row.sel { border-color: rgba(249, 115, 22, .6); background: #fff7ed; }
+/* v1.4.27 « Journée » : stats, filtres rapides, bannière de rappel. */
+.da-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0 2px; }
+.da-stat { background: #fff; border: 1px solid #edf0f5; border-radius: 12px; padding: 9px 8px 7px; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+.da-stat small { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .03em; }
+.da-stat b { font-size: 15px; }
+.da-stat b i { font-style: normal; font-size: 9px; color: var(--muted); font-weight: 600; }
+.da-kchips { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 2px; scrollbar-width: none; }
+.da-chip.sm { padding: 6px 11px; font-size: 12px; flex: none; }
+.da-chip.sel { background: #f97316; border-color: #f97316; color: #fff; }
+.da-chip.sel.warn { background: #b91c1c; border-color: #b91c1c; }
+.da-banner { display: flex; flex-direction: column; gap: 6px; background: #fff7ed; border: 1px solid rgba(249, 115, 22, .4); border-radius: 12px; padding: 8px; margin-top: 4px; }
+.da-banner .seg { display: flex; align-items: center; gap: 7px; background: transparent; border: 0; color: #b45309; font-size: 12.5px; font-weight: 700; text-align: left; padding: 2px 4px; }
+.da-banner .seg.warn { color: #b91c1c; }
+/* v1.4.28 : signature tactile. */
+.sigpad { display: block; width: 100%; max-width: 640px; height: 260px; background: #fff; border: 1.5px dashed #c7d2e6; border-radius: 14px; touch-action: none; margin: 0 auto; }
+
+@media (min-width: 821px) { .da { padding-top: 6px; } .da-top .icon-btn:first-child { display: none; } }

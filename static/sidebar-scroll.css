@@ -1,0 +1,114 @@
+/* v1.4.18 · Barre latérale « intelligente » (ordinateur).
+   Avant : barre fixée à l'écran avec son propre ascenseur interne (.nav-scroll { overflow:auto }).
+   Après : une seule barre de défilement, celle de la page. La barre latérale défile avec le contenu,
+   se cale en bas de l'écran quand on descend et en haut quand on remonte (voir sidebar-scroll.js).
+   Mobile (≤ 720 px) : le tiroir reste strictement inchangé. */
+@media (min-width: 721px) {
+  #root.sticky-nav {
+    display: flex;
+    align-items: stretch;
+    min-height: 100vh;
+  }
+  /* Colonne réservée : garde la largeur compacte dans le flux et le fond bleu nuit sur toute la page. */
+  #root.sticky-nav .sidebar-col {
+    flex: 0 0 76px;
+    width: 76px;
+    max-width: 76px;
+    background: var(--navy);
+  }
+  #root.sticky-nav:not(.sidebar-auto) .sidebar-col {
+    flex-basis: 242px;
+    width: 242px;
+    max-width: 242px;
+  }
+  #root.sticky-nav .layout,
+  #root.sticky-nav.sidebar-auto .layout {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-left: 0;
+  }
+  /* La barre elle-même : collante, hauteur naturelle, jamais de défilement interne. */
+  #root.sticky-nav .sidebar,
+  #root.sticky-nav.sidebar-auto .sidebar {
+    position: sticky;
+    top: 0;
+    bottom: auto;
+    left: auto;
+    height: auto;
+    min-height: 100vh;
+  }
+  #root.sticky-nav .nav-scroll,
+  #root.sticky-nav.sidebar-auto .nav-scroll {
+    overflow: visible;
+    scrollbar-width: auto;
+    flex: 1 0 auto;
+  }
+  /* Même hauteur d'entrée en compact (icône seule) et au survol (icône + libellé) : 42 px dans les deux cas. */
+  #root.sticky-nav.sidebar-auto .nav-item {
+    line-height: 18px;
+    min-height: 42px;
+  }
+  #root.sticky-nav.sidebar-auto .nav-count {
+    line-height: 16px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  /* Pendant l'animation de largeur, aucun libellé ne passe à la ligne : la hauteur de la barre ne bouge jamais
+     (la carte d'aide, elle, garde une largeur fixe de 206 px dans les deux modes). */
+  #root.sticky-nav.sidebar-auto .nav-item > span {
+    white-space: nowrap;
+  }
+  /* Mode compact : au lieu d'un vide, un filet discret sépare les rubriques (même hauteur, aucun saut au survol). */
+  #root.sticky-nav.sidebar-auto .nav-section {
+    visibility: visible;
+    color: transparent;
+    user-select: none;
+    margin-left: 6px;
+    margin-right: 6px;
+    background: linear-gradient(#ffffff14, #ffffff14) center / 100% 1px no-repeat;
+  }
+  #root.sticky-nav.sidebar-auto.sidebar-peek .nav-section {
+    color: #607795;
+    margin-left: 13px;
+    margin-right: 13px;
+    background: none;
+  }
+  /* Bas de barre : même hauteur en mode compact et au survol (aucun changement de hauteur, donc aucun saut).
+     Compact : un bouton « ? » ; survol : la carte d'aide et le pied de page apparaissent à la même place. */
+  #root.sticky-nav.sidebar-auto .sidebar-bottom {
+    display: block;
+    position: relative;
+    width: 206px;
+    margin: 12px 0 20px 10px;
+    border-top-color: transparent;
+    background: linear-gradient(#ffffff14, #ffffff14) 6px 0 / 44px 1px no-repeat;
+  }
+  #root.sticky-nav.sidebar-auto .sidebar-help,
+  #root.sticky-nav.sidebar-auto .sidebar-foot {
+    visibility: hidden;
+  }
+  #root.sticky-nav.sidebar-auto .sidebar-help-compact {
+    display: flex;
+    position: absolute;
+    top: 17px;
+    left: 0;
+    width: 56px;
+    margin: 0;
+  }
+  #root.sticky-nav.sidebar-auto.sidebar-peek .sidebar-bottom {
+    margin: 12px 18px 20px;
+    border-top-color: #ffffff0d;
+    background: none;
+  }
+  #root.sticky-nav.sidebar-auto.sidebar-peek .sidebar-help,
+  #root.sticky-nav.sidebar-auto.sidebar-peek .sidebar-foot {
+    visibility: visible;
+  }
+  #root.sticky-nav.sidebar-auto.sidebar-peek .sidebar-help-compact {
+    display: none;
+  }
+  /* Survol : l'expansion reste un calque au-dessus du contenu (la colonne ne bouge pas). */
+  #root.sticky-nav.sidebar-auto.sidebar-peek .sidebar {
+    width: 242px;
+  }
+}
