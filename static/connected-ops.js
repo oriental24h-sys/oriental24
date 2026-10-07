@@ -134,7 +134,7 @@ window.coPanel=async(preId)=>{
     <input id="co-load-driver" placeholder="id livreur (vide = moi)" style="width:150px;padding:6px;border:1px solid #d7deea;border-radius:6px">
     <button class="btn sm primary" id="co-load-btn" type="button" onclick="coLoadPlan()">Générer le plan</button></div>
    <div id="co-load-result"></div>
-   <h3 style="margin:14px 0 6px">🎙️ Voix livreur (mains libres)</h3>
+   <h3 style="margin:14px 0 6px">🎙️ Commandes vocales (mains libres)</h3>
    <p class="form-hint" style="margin:0 0 6px">Commandes : <button class="btn sm" id="co-voice-list-btn" type="button" onclick="coVoiceList()">Afficher</button>
     <button class="btn sm primary" id="co-voice-test" type="button" onclick="coVoiceDictate(window.coCurrentId)">🎙️ Dicter une commande</button></p>
    <ul style="margin:4px 0 4px 18px;font-size:12px">${cmds||'<li class="muted">Indisponible.</li>'}</ul>
@@ -158,8 +158,7 @@ function coInjectRow(id){
   const div=document.createElement('div');
   div.className='co-row flex';
   div.style.cssText='gap:6px;flex-wrap:wrap;margin-top:6px;width:100%';
-  div.innerHTML=`${['admin','agent','livreur'].includes(role)?`<button class="btn sm" type="button" onclick="coPanel(${id})">📡 Traçabilité &amp; chargement</button>
-   <button class="btn sm" type="button" onclick="coVoiceDictate(${id})">🎙️ Voix livreur</button>`:''}`;
+  
   if(div.innerHTML.trim())box.appendChild(div);
 }
 const coBaseInjectRow=techInjectRow;

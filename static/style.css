@@ -298,9 +298,49 @@ svg.ico {
   font-weight: 400;
   font-size: 13px;
 }
+/* v1.14.1 · mot-symbole typographique : le nom en orange gras, dans le même esprit
+   que l'accent « dans l'Oriental » du grand titre d'accueil (em { color: var(--orange) }).
+   Utilisé sur la page de connexion et dans la barre latérale. */
+.brandtext {
+  display: block;
+  font-size: 27px;
+  font-weight: 780;
+  letter-spacing: -1.4px;
+  line-height: 1;
+  font-style: normal;
+  color: var(--orange);
+  white-space: nowrap;
+}
+/* v1.14.2 · assemblage de marque : la pastille du logo + le nom en orange gras. */
+.brandbox {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  background: transparent;
+  padding: 0;
+}
+.brandmark {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: block;
+  border-radius: 11px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
+}
+.login-brand-panel .brandmark { width: 54px; height: 54px; border-radius: 14px; }
+.sidebar .brand .brandmark { width: 36px; height: 36px; border-radius: 10px; }
+.login-brand-panel .brandbox,
+.sidebar .brandbox { background: transparent; padding: 0; }
+.login-brand-panel .brandtext { font-size: 33px; letter-spacing: -1.7px; }
+.sidebar .brand .brandtext { font-size: 22px; letter-spacing: -1.2px; }
+@media (max-width: 1120px) { .sidebar .brand .brandtext { font-size: 21px; } }
+@media (max-width: 860px) { .sidebar .brand .brandtext { font-size: 22px; } }
+/* v1.14.0 · logo carré : on raisonne en hauteur (largeur automatique). */
 .wordmark {
-  width: 164px;
-  height: auto;
+  height: 44px;
+  width: auto;
   display: block;
 }
 .sidebar {
@@ -328,7 +368,8 @@ svg.ico {
   padding: 8px 9px;
 }
 .sidebar .brand .wordmark {
-  width: 164px;
+  height: 46px;
+  width: auto;
 }
 .workspace-label {
   margin: 22px 22px 8px;
@@ -1300,7 +1341,8 @@ td strong {
   gap: 35px;
 }
 .public-nav .wordmark {
-  width: 188px;
+  height: 58px;
+  width: auto;
 }
 .public-links {
   display: flex;
@@ -1617,10 +1659,11 @@ td strong {
   font-size: 11px;
 }
 .public-footer .brandbox {
-  width: 176px;
+  width: auto;
 }
 .public-footer .wordmark {
-  width: 156px;
+  height: 52px;
+  width: auto;
 }
 .public-footer p {
   margin-top: 12px;
@@ -1660,12 +1703,13 @@ td strong {
     0 0 0 130px #ffffff02;
 }
 .login-brand-panel .brandbox {
-  width: 190px;
+  width: auto;
   position: relative;
   z-index: 1;
 }
 .login-brand-panel .wordmark {
-  width: 170px;
+  height: 64px;
+  width: auto;
 }
 .login-brand-panel h1 {
   font-size: 43px;
@@ -1837,7 +1881,7 @@ td strong {
     padding: 0 20px;
   }
   .sidebar .brand .wordmark {
-    width: 152px;
+    height: 42px;
   }
   .content {
     padding: 25px 23px;
@@ -1884,7 +1928,7 @@ td strong {
     padding-left: 200px;
   }
   .sidebar .brand .wordmark {
-    width: 138px;
+    height: 38px;
   }
   .sidebar .brand {
     padding: 0 17px;
@@ -1971,7 +2015,7 @@ td strong {
     box-shadow: 30px 0 0 100vw #071d3c50;
   }
   .sidebar .brand .wordmark {
-    width: 167px;
+    height: 44px;
   }
   .layout {
     padding-left: 0;
@@ -2158,7 +2202,7 @@ td strong {
     padding: 0 20px;
   }
   .public-nav .wordmark {
-    width: 145px;
+    height: 44px;
   }
   .public-nav > .flex {
     gap: 5px;
@@ -2295,7 +2339,7 @@ td strong {
     padding: 25px;
   }
   #print-root .wordmark {
-    width: 190px;
+    height: 58px;
     margin-bottom: 20px;
   }
   #print-root table {

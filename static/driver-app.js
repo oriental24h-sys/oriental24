@@ -390,7 +390,6 @@
           <a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${encodeURIComponent('Bonjour ' + p.recipient + ', ORIENTAL24 : votre colis ' + p.tracking + ' — statut actuel : ' + p.status + '.')}">${icon('chat')} Notifier</a>
           <button class="btn primary sm" onclick="closeModal();daStatusPick(${p.id})">${icon('edit')} Changer le statut</button>
           <button class="btn sm" onclick="closeModal();daMsgSheet(${p.id})">${icon('bell')} Prévenir le client</button>
-          <button class="btn sm" onclick="closeModal();techSensor(${p.id})">🌡️ Capteur IoT</button>
           <button class="btn sm" onclick="closeModal();parcelDetail(${p.id})">${icon('eye')} Fiche complète</button>
         </div></div></div>`, true);
   };

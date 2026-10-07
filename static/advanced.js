@@ -19,7 +19,7 @@ window.techPanel=async()=>{
     <td><input id="tz-${esc(z.code)}" value="${esc(z.pattern)}" style="width:100%;padding:5px;border:1px solid #d7deea;border-radius:6px;font-size:11px"></td>
     <td><button class="btn sm" type="button" onclick="techZoneSave('${esc(z.code)}','${esc(z.label)}',document.getElementById('tz-${esc(z.code)}').value,${z.active?false:true})">${z.active?'Désactiver':'Activer'}</button></td></tr>`).join('');
   modal('Technologies avancées',`
-   <p class="form-hint" style="margin:0 0 10px">WhatsApp/SMS automatiques · IA (ETA apprise sur l'historique) · IoT (capteurs colis) · Blockchain (preuve scellée) · Géofencing · CO₂ · Tri par zones — tout calculé localement, aucune API payante.</p>
+   <p class="form-hint" style="margin:0 0 10px">WhatsApp/SMS automatiques · IA (ETA apprise sur l'historique) · Blockchain (preuve scellée) · Géofencing · CO₂ — tout calculé localement, aucune API payante.</p>
    <div class="stats" style="grid-template-columns:1fr 1fr 1fr 1fr">
     ${stat('WhatsApp/SMS en file',(ob.rows||[]).filter(r=>r.status==='pending').length,'','chat','orange')}
     ${stat('ETA prédictive',m.learned?'apprise':'repli','','clock',m.learned?'green':'navy',(m.n||0)+' tournées')}
@@ -28,23 +28,16 @@ window.techPanel=async()=>{
    <h3 style="margin:16px 0 6px">📨 Boîte d'envoi WhatsApp/SMS</h3>
    ${obRows?`<table><thead><tr><th>Suivi</th><th>Canal</th><th>Gabarit</th><th>Envoi</th></tr></thead><tbody>${obRows}</tbody></table>`:'<p class="muted">File vide — les notifications se remplissent automatiquement aux changements de statut, OTP et messages guidés.</p>'}
    <h3 style="margin:16px 0 6px">🧠 IA · prévisions 7 jours</h3>
-   <p class="form-hint">Modèle ${m.learned?"<b>appris sur l'historique</b>":'de <b>repli</b>'} : ${esc(String(m.a))} min/arrêt + ${esc(String(m.b))} min/km · méthode ${esc((ins.forecasts&&ins.forecasts.method)||'')} · tendance ×${esc(String((ins.forecasts&&ins.forecasts.trend)||1))} · capteurs IoT : ${cnt.telemetry||0}</p>
+   <p class="form-hint">Modèle ${m.learned?"<b>appris sur l'historique</b>":'de <b>repli</b>'} : ${esc(String(m.a))} min/arrêt + ${esc(String(m.b))} min/km · méthode ${esc((ins.forecasts&&ins.forecasts.method)||'')} · tendance ×${esc(String((ins.forecasts&&ins.forecasts.trend)||1))}</p>
    ${fcBars||"<p class=\"muted\">Pas encore d'historique livré.</p>"}
    <h3 style="margin:16px 0 6px">⚠️ Score de risque retard</h3>
    ${riskRows?`<table><thead><tr><th>Suivi</th><th>Ville</th><th>Statut</th><th>Score</th><th>Causes</th></tr></thead><tbody>${riskRows}</tbody></table>`:'<p class="muted">Aucun colis à risque. ✓</p>'}
    <h3 style="margin:16px 0 6px">♻️ Empreinte CO₂ (0,12 kg/km)</h3>
-   <p class="form-hint">Jour : <b>${esc(String(co2.today_kg!=null?co2.today_kg:0))} kg</b> · 7 derniers jours : <b>${esc(String(co2.week_kg!=null?co2.week_kg:0))} kg</b> — estimation par tournée optimisée (2-opt).</p>
-   <h3 style="margin:16px 0 6px">🏷️ Zones de tri automatiques</h3>
-   ${zoneRows?`<table><thead><tr><th>Code</th><th>Libellé</th><th>Motifs de villes (|)</th><th>État</th></tr></thead><tbody>${zoneRows}</tbody></table>`:'<p class="muted">Aucune zone.</p>'}
-   <div class="flex" style="gap:6px;margin-top:8px;flex-wrap:wrap">
-    <input id="tz-new-code" placeholder="Code" style="width:70px;padding:6px;border:1px solid #d7deea;border-radius:6px">
-    <input id="tz-new-label" placeholder="Libellé" style="width:160px;padding:6px;border:1px solid #d7deea;border-radius:6px">
-    <input id="tz-new-pattern" placeholder="motif1|motif2" style="flex:1;min-width:160px;padding:6px;border:1px solid #d7deea;border-radius:6px">
-    <button class="btn sm primary" type="button" onclick="techZoneNew()">Ajouter</button></div>`,true);
+   <p class="form-hint">Jour : <b>${esc(String(co2.today_kg!=null?co2.today_kg:0))} kg</b> · 7 derniers jours : <b>${esc(String(co2.week_kg!=null?co2.week_kg:0))} kg</b> — estimation par tournée optimisée (2-opt).</p>`,true);
 };
 window.techOutboxSent=async(id)=>{await api('/outbox/'+id+'/sent','POST',{});toast('Notification marquée envoyée.');closeModal();techPanel();};
 window.techZoneSave=async(code,label,pattern,active)=>{await api('/sort-zones','POST',{code,label,pattern,active});toast('Zone '+code+' enregistrée.');closeModal();techPanel();};
-window.techZoneNew=()=>{const g=id=>document.getElementById(id).value.trim();
+window.techZoneNew=()=>{const g=id=>{const el=document.getElementById(id);return el?el.value.trim():''};
   if(!g('tz-new-code')||!g('tz-new-label')||!g('tz-new-pattern')){toast('Code, libellé et motif obligatoires.',true);return}
   techZoneSave(g('tz-new-code').toUpperCase(),g('tz-new-label'),g('tz-new-pattern'),true);};
 
@@ -91,7 +84,7 @@ window.techSensorSim=(id)=>{
 };
 window.techZone=async(id)=>{
   let z;try{z=await api('/parcels/'+id+'/zone')}catch(e){toast(e.message,true);return}
-  modal('Zone de tri — colis #'+id,`<p style="margin:6px 0">Ville : <b>${esc(z.city||'—')}</b> → zone <b class="mono">${esc(z.tracking_zone.code||'—')}</b> · ${esc(z.tracking_zone.label)}</p>
+  modal('Affectation au tri — colis #'+id,`<p style="margin:6px 0">Ville : <b>${esc(z.city||'—')}</b> → zone <b class="mono">${esc(z.tracking_zone.code||'—')}</b> · ${esc(z.tracking_zone.label)}</p>
    <p class="form-hint">Règle appliquée : ${esc(z.tracking_zone.rule||'aucune — affectez une zone depuis le panneau Technologies avancées.')}</p>`);
 };
 
@@ -104,8 +97,6 @@ function techInjectRow(id){
   div.className='tech-row flex';
   div.style.cssText='gap:6px;flex-wrap:wrap;margin-top:8px;width:100%';
   div.innerHTML=`${['admin','client','livreur'].includes(role)?`<button class="btn sm" type="button" onclick="techProof(${id})">${icon('shield')}Preuve scellée</button>`:''}
-   ${['admin','livreur'].includes(role)?`<button class="btn sm" type="button" onclick="techSensor(${id})">🌡️ Capteur IoT</button>`:''}
-   ${['admin','agent','livreur'].includes(role)?`<button class="btn sm" type="button" onclick="techZone(${id})">🏷️ Zone de tri</button>`:''}
    ${role==='admin'?`<button class="btn sm" type="button" onclick="techPanel()">${icon('scan')}Technologies</button>`:''}`;
   if(div.innerHTML.trim())box.appendChild(div);
 }
@@ -157,17 +148,17 @@ window.smartPanel=async()=>{
      <button class="btn sm" type="button" onclick="smartVService(${r.id})">🛠️</button></td></tr>`;}).join('');
   const alRows=((v.maintenance||[]).filter(m=>(m.reasons||[]).length)).map(m=>`<tr><td>${esc(m.label)}</td><td class="muted" style="font-size:11px">${esc((m.reasons||[]).join(' · '))}</td><td><b>${m.wear_score}</b></td></tr>`).join('');
   const ppRows=(pp.rows||[]).map(r=>`<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.city||'—')}</td><td><span class="tag">${esc(r.kind)}</span></td>
-    <td>${r.lockers||0} casiers · ${r.free||0} libres</td><td>${r.assigned||0} colis routés</td></tr>`).join('');
+    <td>${r.assigned||0} colis routés</td></tr>`).join('');
   const payRows=(pay.rows||[]).slice(0,12).map(r=>`<tr><td class="mono">${esc(r.reference)}</td><td class="mono">${esc(r.tracking)}</td>
     <td>${Number(r.amount).toFixed(2)} MAD</td><td><span class="tag">${esc(r.method)}</span></td><td><span class="tag">${esc(r.status)}</span></td>
     <td style="white-space:nowrap">${r.links&&r.links.whatsapp?`<a class="btn sm" target="_blank" rel="noopener" href="${r.links.whatsapp}">wa</a> <a class="btn sm" target="_blank" rel="noopener" href="${r.links.sms}">sms</a>`:''}
     ${r.status==='demande'?`<button class="btn sm primary" type="button" onclick="smartPayPaid(${r.id})">💵 Encaissé</button>`:''}</td></tr>`).join('');
   const sla=fleet.sla||{};
   modal('Flotte connectée & livraison augmentée',`
-   <p class="form-hint" style="margin:0 0 10px">Véhicules connectés (thermique/électrique/vélo/<b>drone</b>/camion) · maintenance prédictive · points relais &amp; casiers · jumeau numérique (simulation avant répartition) · e-paiement/mobile money · décisionnel SLA — 100 % local.</p>
+   <p class="form-hint" style="margin:0 0 10px">Véhicules connectés (thermique/électrique/vélo/<b>drone</b>/camion) · maintenance prédictive · points relais · jumeau numérique (simulation avant répartition) · e-paiement/mobile money · décisionnel SLA — 100 % local.</p>
    <div class="stats" style="grid-template-columns:1fr 1fr 1fr 1fr">
     ${stat('Véhicules actifs',(v.rows||[]).length,'','box','navy')}
-    ${stat('Points relais',(pp.rows||[]).length,'','mapPin','navy',((pp.rows||[]).reduce((a,x)=>a+(x.lockers||0),0))+' casiers')}
+    ${stat('Points relais',(pp.rows||[]).length,'','mapPin','navy')}
     ${stat('Paiements en attente',(pay.rows||[]).filter(r=>r.status==='demande').length,'','creditCard','orange')}
     ${stat('Délai moyen',sla.avg_delivery_hours!=null?String(sla.avg_delivery_hours):'—','h','clock','green',(sla.first_pass_rate!=null?('1er passage '+sla.first_pass_rate+' %'):''))}</div>
    <h3 style="margin:16px 0 6px">🚚 Flotte &amp; maintenance prédictive</h3>
@@ -179,13 +170,12 @@ window.smartPanel=async()=>{
     <input id="sv-plate" placeholder="Plaque" style="width:90px;padding:6px;border:1px solid #d7deea;border-radius:6px">
     <input id="sv-battery" type="number" min="0" max="100" placeholder="batterie %" style="width:90px;padding:6px;border:1px solid #d7deea;border-radius:6px">
     <button class="btn sm primary" type="button" onclick="smartVAdd()">Ajouter le véhicule</button></div>
-   <h3 style="margin:16px 0 6px">🏢 Points relais &amp; casiers (smart lockers)</h3>
-   ${ppRows?`<table><thead><tr><th>Point</th><th>Ville</th><th>Type</th><th>Casiers</th><th>Occupation</th></tr></thead><tbody>${ppRows}</tbody></table>`:'<p class="muted">Aucun point relais.</p>'}
+   <h3 style="margin:16px 0 6px">🏢 Points relais</h3>
+   ${ppRows?`<table><thead><tr><th>Point</th><th>Ville</th><th>Type</th><th>Colis routés</th></tr></thead><tbody>${ppRows}</tbody></table>`:'<p class="muted">Aucun point relais.</p>'}
    <div class="flex" style="gap:6px;margin-top:8px;flex-wrap:wrap">
     <input id="sp-name" placeholder="Nom du point" style="width:180px;padding:6px;border:1px solid #d7deea;border-radius:6px">
     <input id="sp-city" placeholder="Ville" style="width:120px;padding:6px;border:1px solid #d7deea;border-radius:6px">
-    <select id="sp-kind" style="padding:6px;border:1px solid #d7deea;border-radius:6px"><option value="relais">relais</option><option value="casier">casier</option><option value="agence">agence</option></select>
-    <input id="sp-lockers" type="number" min="0" placeholder="casiers" style="width:80px;padding:6px;border:1px solid #d7deea;border-radius:6px">
+    <select id="sp-kind" style="padding:6px;border:1px solid #d7deea;border-radius:6px"><option value="relais">relais</option><option value="agence">agence</option></select>
     <button class="btn sm primary" type="button" onclick="smartPointAdd()">Créer le point</button></div>
    <h3 style="margin:16px 0 6px">💳 E-paiement &amp; mobile money</h3>
    ${payRows?`<table><thead><tr><th>Référence</th><th>Suivi</th><th>Montant</th><th>Mode</th><th>Statut</th><th>Envoi / encaissement</th></tr></thead><tbody>${payRows}</tbody></table>`:'<p class="muted">Aucune demande — créez-la depuis la fiche colis (bouton Paiement).</p>'}
@@ -205,7 +195,7 @@ window.smartPanel=async()=>{
     <button class="btn sm" type="button" onclick="smartCsv('vehicles')">⬇️ Flotte CSV</button></div>`,true);
 };
 window.smartVAdd=async()=>{
-  const g=id=>document.getElementById(id).value.trim();
+  const g=id=>{const el=document.getElementById(id);return el?el.value.trim():''};
   if(!g('sv-label')){toast('Libellé obligatoire.',true);return}
   try{await api('/vehicles','POST',{type:g('sv-type'),label:g('sv-label'),plate:g('sv-plate'),battery_pct:g('sv-battery')===''?null:Number(g('sv-battery'))});
     toast('Véhicule enregistré ✓');closeModal();smartPanel();}
@@ -229,9 +219,9 @@ window.smartVTelemetry=async(id)=>{
   catch(e){toast(e.message,true)}
 };
 window.smartPointAdd=async()=>{
-  const g=id=>document.getElementById(id).value.trim();
+  const g=id=>{const el=document.getElementById(id);return el?el.value.trim():''};
   if(!g('sp-name')){toast('Nom obligatoire.',true);return}
-  try{await api('/pickup-points','POST',{name:g('sp-name'),city:g('sp-city'),kind:g('sp-kind'),lockers:Number(g('sp-lockers'))||0});
+  try{await api('/pickup-points','POST',{name:g('sp-name'),city:g('sp-city'),kind:g('sp-kind'),lockers:0});
     toast('Point relais créé ✓');closeModal();smartPanel();}
   catch(e){toast(e.message,true)}
 };
@@ -260,12 +250,12 @@ window.smartCsv=async(kind)=>{
   catch(e){toast(e.message,true)}
 };
 
-/* ---- fiche colis : point relais, casier, paiement ---- */
+/* ---- fiche colis : point relais, paiement ---- */
 window.smartPointSet=async(id)=>{
   let pp;try{pp=await api('/pickup-points')}catch(e){toast(e.message,true);return}
-  const opts=(pp.rows||[]).map(r=>`<option value="${r.id}">${esc(r.name)} (${esc(r.city||'—')} · ${r.free||0} casiers libres)</option>`).join('');
+  const opts=(pp.rows||[]).map(r=>`<option value="${r.id}">${esc(r.name)} (${esc(r.city||'—')})</option>`).join('');
   modal('Retrait au point relais — colis #'+id,`
-   <p class="form-hint">Routage du colis vers un point relais ou des casiers connectés : au dépôt, un <b>code de retrait à 6 chiffres</b> part au client par WhatsApp/SMS, vérifié au comptoir.</p>
+   <p class="form-hint">Routage du colis vers un point relais : au dépôt, un <b>code de retrait à 6 chiffres</b> part au client par WhatsApp/SMS, vérifié au comptoir.</p>
    <select id="sp-choose" style="width:100%;padding:8px;border:1px solid #d7deea;border-radius:8px;margin:8px 0">
     <option value="">— domicile (aucun point) —</option>${opts}</select>
    <button class="btn primary sm" type="button" onclick="smartPointSetSave(${id})">Enregistrer le routage</button>`,true);
@@ -281,8 +271,8 @@ window.smartLocker=async(id)=>{
   const rows=(d.rows||[]).map(r=>`<tr><td>${esc(r.point_name)}</td><td class="mono"><b style="font-size:16px">${esc(r.code)}</b></td>
     <td class="muted" style="font-size:11px">${esc(String(r.delivered_at||'').slice(0,16))}</td>
     <td>${r.picked_at?'<span class="tag">retiré</span>':`<input id="lk-code-${r.id}" placeholder="code" maxlength="6" style="width:70px;padding:5px;border:1px solid #d7deea;border-radius:6px"> <button class="btn sm primary" type="button" onclick="smartLockerPick(${r.id},${id})">Valider</button>`}</td></tr>`).join('');
-  modal('Casier & code de retrait — colis #'+id,
-   rows?`<table><thead><tr><th>Point</th><th>Code</th><th>Déposé le</th><th>Retrait</th></tr></thead><tbody>${rows}</tbody></table>`:'<p class="muted">Aucun casier affecté — routez le colis vers un point relais, le code sera généré au dépôt.</p>',true);
+  modal('Point de retrait & code — colis #'+id,
+   rows?`<table><thead><tr><th>Point</th><th>Code</th><th>Déposé le</th><th>Retrait</th></tr></thead><tbody>${rows}</tbody></table>`:'<p class="muted">Aucun point de retrait affecté — routez le colis vers un point relais, le code sera généré au dépôt.</p>',true);
 };
 window.smartLockerPick=async(lid,pid)=>{
   const code=document.getElementById('lk-code-'+lid).value.trim();
@@ -319,7 +309,6 @@ function smartInjectRow(id){
   div.style.cssText='gap:6px;flex-wrap:wrap;margin-top:6px;width:100%';
   div.innerHTML=`${role==='admin'?`<button class="btn sm" type="button" onclick="smartPointSet(${id})">🏢 Point relais</button>
    <button class="btn sm" type="button" onclick="smartPay(${id})">💳 Paiement</button>`:''}
-   ${['admin','agent','livreur'].includes(role)?`<button class="btn sm" type="button" onclick="smartLocker(${id})">🔑 Casier</button>`:''}
    ${role==='admin'?`<button class="btn sm" type="button" onclick="smartPanel()">🚚 Flotte &amp; relais</button>`:''}`;
   if(div.innerHTML.trim())box.appendChild(div);
 }
