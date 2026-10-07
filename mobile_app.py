@@ -22,7 +22,7 @@ APK_FILENAME = 'ORIENTAL24-Livreur.apk'
 # vers la dernière version déposée. Utilisé quand le fichier n'est pas dans le dépôt.
 RELEASE_URL = ('https://github.com/oriental24h-sys/oriental24/releases/'
                'latest/download/ORIENTAL24-Livreur.apk')
-APK_VERSION = '1.0'
+APK_VERSION = '1.2'
 APK_MIN_ANDROID = 'Android 5.0 وأكثر'
 
 QR = {
@@ -73,7 +73,7 @@ footer{text-align:center;color:#7c8aa8;font-size:12px;margin-top:26px}
 <body>
 <div class="wrap">
   <header>
-    <img src="/static/wordmark.png" alt="ORIENTAL24">
+    <img src="/static/icon-driver-192.png" alt="ORIENTAL24">
     <div>
       <h1>تطبيق الليفرو</h1>
       <p>ORIENTAL24 · الإصدار __VERSION__ · __SIZE__</p>

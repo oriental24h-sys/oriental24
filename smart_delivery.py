@@ -66,9 +66,12 @@ def register_smart_delivery(app, s):
         cols = {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
         if 'pickup_point_id' not in cols:
             c.execute('ALTER TABLE parcels ADD COLUMN pickup_point_id INTEGER REFERENCES pickup_points(id)')
+        # v1.15.0 : plus de « casier » — on normalise l'ancien libellé s'il existe déjà
+        c.execute("UPDATE pickup_points SET name='Point relais Oujda Centre', kind='relais' "
+                  "WHERE name='Casier intelligent Oujda Centre'")
         if not c.execute('SELECT 1 FROM pickup_points LIMIT 1').fetchone():
             seed = [
-                ('Casier intelligent Oujda Centre', 'Oujda', 'Avenue Mohammed V — démo', 'casier', 24),
+                ('Point relais Oujda Centre', 'Oujda', 'Avenue Mohammed V — démo', 'relais', 0),
                 ('Point relais Casablanca Maârif', 'Casablanca', 'Boulevard Bir Anzarane — démo', 'relais', 0),
                 ('Point relais Agadir Talborjt', 'Agadir', 'Rue Oued Souss — démo', 'relais', 0),
             ]
