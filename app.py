@@ -460,6 +460,11 @@ def settings():
                 if v:c.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(k,v))
                 else:c.execute('DELETE FROM settings WHERE key=?',(k,))   # vide = masqué (en démonstration : coordonnées fictives par défaut)
         # Seuils des alertes de retard, en heures ; 0 désactive la catégorie.
+        # v1.22.0 · ancienneté minimale (jours) d'un colis chez nous avant retour au vendeur.
+        if 'return_week_days' in d:
+            v=d['return_week_days']
+            if type(v) is not int or not 1<=v<=90:raise APIError('Seuil invalide : return_week_days (1 à 90 jours).')
+            c.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',('return_week_days',str(v)))
         for k in ('alert_transit_hours','alert_partial_hours','alert_unassigned_hours'):
             if k in d:
                 v=d[k]
@@ -737,6 +742,9 @@ from partner_palettes import register_partner_palettes
 register_partner_palettes(app, globals())
 from return_palettes import register_return_palettes
 register_return_palettes(app, globals())
+
+from return_scan import register_return_scan
+register_return_scan(app, globals())
 from fusion_reception import register_fusion_reception
 register_fusion_reception(app, globals())
 from palette_console import register_palette_console
@@ -760,6 +768,9 @@ register_partner_api(app, globals())
 
 from mobile_app import register_mobile_app
 register_mobile_app(app, globals())
+
+from contact_log import register_contact_log
+register_contact_log(app, globals())
 
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.
