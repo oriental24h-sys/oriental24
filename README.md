@@ -1,7 +1,7 @@
 # ORIENTAL24 — Plateforme de livraison & logistique
 
 Version **1.12.0** — 35 technologies (RFID, pick-by-voice, chargement LIFO, IA locale, IoT,
-blockchain de preuve, entrepôt intelligent, robotique, drone, casiers intelligents…).
+blockchain de preuve, entrepôt intelligent, robotique, drone, points relais…).
 
 Interface française, adaptée au mobile, **sans aucune dépendance payante** (pas de Google Maps,
 Firebase, WhatsApp Business API ni agrégateur de paiement).

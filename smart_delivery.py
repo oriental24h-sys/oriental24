@@ -4,7 +4,7 @@
     CO₂ et vitesse par type (le drone = « livraison par véhicule aérien », prêt côté logiciel).
  2. Maintenance prédictive : usure kilométrique + entretien + alertes batterie (électrique/drone),
     score d'usure transparent et remise à zéro à l'atelier.
- 3. Points relais & casiers intelligents (smart lockers) : routage du colis vers un point, dépôt
+ 3. Points relais & codes de retrait : routage du colis vers un point, dépôt
     avec CODE DE RETRAIT à 6 chiffres (transmis WhatsApp/SMS), retrait vérifié en temps constant.
  4. Jumeau numérique : simulation de la journée (Monte-Carlo sur le modèle ETA appris) avant
     d'appliquer la répartition — achèvement estimé, taux à l'heure, CO₂, recommandation.
@@ -27,7 +27,7 @@ VEHICLES = {
     'drone':      {'label': 'Drone (aérien)',    'co2_per_km': 0.02, 'speed_kmh': 60, 'service_km': 500},
     'camion':     {'label': 'Camion',            'co2_per_km': 0.25, 'speed_kmh': 28, 'service_km': 20000},
 }
-POINT_KINDS = ('relais', 'casier', 'agence')
+POINT_KINDS = ('relais', 'agence')
 TPL = {
     'locker':   'ORIENTAL24 : votre colis {tracking} vous attend au point relais {point}. Code de retrait : {code}.',
     'payment':  'ORIENTAL24 : demande de paiement {amount} MAD pour le colis {tracking} (référence {ref}).',
@@ -66,9 +66,10 @@ def register_smart_delivery(app, s):
         cols = {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
         if 'pickup_point_id' not in cols:
             c.execute('ALTER TABLE parcels ADD COLUMN pickup_point_id INTEGER REFERENCES pickup_points(id)')
-        # v1.15.0 : plus de « casier » — on normalise l'ancien libellé s'il existe déjà
+        # v1.15.0/1.15.2 : normalisation de l'ancien libellé (nom + type) s'il existe déjà
         c.execute("UPDATE pickup_points SET name='Point relais Oujda Centre', kind='relais' "
                   "WHERE name='Casier intelligent Oujda Centre'")
+        c.execute("UPDATE pickup_points SET kind='relais' WHERE kind NOT IN ('relais','agence')")
         if not c.execute('SELECT 1 FROM pickup_points LIMIT 1').fetchone():
             seed = [
                 ('Point relais Oujda Centre', 'Oujda', 'Avenue Mohammed V — démo', 'relais', 0),
@@ -114,7 +115,7 @@ def register_smart_delivery(app, s):
             c.execute('INSERT INTO outbox(parcel_id,channel,phone,code,text,status,trigger,created_at) VALUES(?,?,?,?,?,?,?,?)',
                       (pid, ch, intl_phone(phone), code, text, 'pending', trigger, now()))
 
-    # ---------- chaînage du hook événements (après advanced_tech) : casier au dépôt ----------
+    # ---------- chaînage du hook événements (après advanced_tech) : point de retrait au dépôt ----------
     _prev = s.get('tech_notify_event')
     def smart_event(c, pid, status, u):
         if _prev: _prev(c, pid, status, u)
@@ -132,7 +133,7 @@ def register_smart_delivery(app, s):
         c.execute('INSERT INTO locker_assignments(parcel_id,point_id,code,delivered_at,created_at) VALUES(?,?,?,?,?)',
                   (pid, p['pickup_point_id'], code, now(), now()))
         text = render_tpl('locker', tracking=p['tracking'], point=p['point_name'], code=code)
-        queue_tpl(c, pid, p['phone'], 'locker', text, 'casier')
+        queue_tpl(c, pid, p['phone'], 'locker', text, 'locker')
         event(c, pid, 'Livré', 'Dépôt au point relais « %s » — code de retrait %s' % (p['point_name'], code), u)
     s['tech_notify_event'] = smart_event
 
@@ -230,7 +231,7 @@ def register_smart_delivery(app, s):
                                    'level': 'alerte' if 'batterie' in why else 'info', 'wear_score': m['wear_score']})
         return jsonify(alerts=alerts)
 
-    # ---------- API : points relais & casiers ----------
+    # ---------- API : points relais ----------
     @app.get('/api/pickup-points')
     @auth('admin', 'agent', 'livreur')
     def points_list():
@@ -247,7 +248,8 @@ def register_smart_delivery(app, s):
         d = request.get_json(silent=True) or {}
         name = str(d.get('name') or '').strip()[:80]
         kind = str(d.get('kind') or 'relais')
-        if not name or kind not in POINT_KINDS: raise Error('Nom et type (relais/casier/agence) obligatoires.')
+        if kind not in POINT_KINDS: kind = 'relais'  # v1.15.2 : types obsolètes normalisés
+        if not name: raise Error('Nom et type de point obligatoires.')
         lockers = int(d.get('lockers') or 0)
         with conn() as c:
             if c.execute('SELECT 1 FROM pickup_points WHERE name=?', (name,)).fetchone():
@@ -294,7 +296,7 @@ def register_smart_delivery(app, s):
         code = str(d.get('code') or '')
         with conn() as c:
             la = c.execute('SELECT la.*,p.tracking FROM locker_assignments la JOIN parcels p ON p.id=la.parcel_id WHERE la.id=?', (lid,)).fetchone()
-            if not la: raise Error('Casier introuvable.', 404)
+            if not la: raise Error('Point de retrait introuvable.', 404)
             if la['picked_at']: raise Error('Colis déjà retiré.', 409)
             if not _sec.compare_digest(code, la['code']): raise Error('Code de retrait incorrect.', 400)
             c.execute('UPDATE locker_assignments SET picked_at=? WHERE id=?', (now(), lid))

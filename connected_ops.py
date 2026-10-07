@@ -1,4 +1,4 @@
-"""v1.12.0 « Traçabilité RFID & exécution terrain » — dernières technologies d'article :
+"""v1.12.0 « Exécution terrain & RFID » — dernières technologies d'article :
 
  1. RFID temps réel : tags EPC par colis, portail de lecture multiple (scan de masse),
     inventaire tournant par balayage (attendu vs lu, écarts).

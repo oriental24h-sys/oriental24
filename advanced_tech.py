@@ -11,7 +11,7 @@
  6. Logistique verte : empreinte CO₂ par tournée (facteur 0,12 kg/km utilitaire).
  7. Assistant conversationnel (règles FR/darija) sur le suivi public — réponses issues d'une
     liste blanche, zéro fuite (jamais d'adresse, de montant ni de nom).
- 8. Tri automatisé : zones de tri affectées par motif de ville (étiquettes A5).
+ 8. Tri automatisé : affectation au tri par motif de ville (étiquettes A5).
 
 Tout est calculé localement : aucune API externe, aucun appel réseau sortant (les liens
 WhatsApp/SMS s'ouvrent côté utilisateur ; la passerelle O24_MSG_GATEWAY reste optionnelle)."""
@@ -180,6 +180,9 @@ def register_advanced_tech(app, s):
         CREATE INDEX IF NOT EXISTS outbox_parcel_idx ON outbox(parcel_id,id);
         CREATE INDEX IF NOT EXISTS telemetry_parcel_idx ON parcel_telemetry(parcel_id,id);
         ''')
+        # v1.15.2 : notes d'alerte déjà enregistrées → libellé actuel (nettoyage historique)
+        c.execute("UPDATE events SET note=replace(note,'Alerte IoT : ','Alerte télémétrie : ') "
+                  "WHERE note LIKE 'Alerte IoT%'")
         for code, label, pattern in DEFAULT_ZONES:
             c.execute('INSERT OR IGNORE INTO sort_zones(code,label,pattern,active) VALUES(?,?,?,1)', (code, label, pattern))
 
@@ -335,7 +338,7 @@ def register_advanced_tech(app, s):
             if 'shock_g' in vals and vals['shock_g'] > 3:
                 alerts.append('choc détecté (%.1f g)' % vals['shock_g'])
             for a in alerts:
-                event(c, pid, p['status'], 'Alerte IoT : ' + a, u)
+                event(c, pid, p['status'], 'Alerte télémétrie : ' + a, u)
         return jsonify(ok=True, alerts=alerts, **vals)
 
     @app.get('/api/parcels/<int:pid>/telemetry')
@@ -345,7 +348,7 @@ def register_advanced_tech(app, s):
         with conn() as c:
             parcel(c, pid, u)
             rows = [dict(r) for r in c.execute('SELECT * FROM parcel_telemetry WHERE parcel_id=? ORDER BY id DESC LIMIT 20', (pid,))]
-            n_alerts = c.execute("SELECT COUNT(*) n FROM events WHERE parcel_id=? AND note LIKE 'Alerte IoT%'", (pid,)).fetchone()['n']
+            n_alerts = c.execute("SELECT COUNT(*) n FROM events WHERE parcel_id=? AND note LIKE 'Alerte %'", (pid,)).fetchone()['n']
         return jsonify(rows=rows, alerts=n_alerts)
 
     # ---------- API : blockchain (preuve de livraison scellée) ----------
@@ -399,7 +402,7 @@ def register_advanced_tech(app, s):
                        co2={'factor_kg_per_km': CO2_PER_KM, 'today_kg': round(co2_today, 2), 'week_kg': co2_week, 'drivers': drivers},
                        counters={'seals': n_seals, 'outbox_pending': n_outbox, 'telemetry': n_iot})
 
-    # ---------- API : zones de tri ----------
+    # ---------- API : affectation au tri ----------
     @app.get('/api/sort-zones')
     @auth('admin', 'agent')
     def zones_list():

@@ -91,5 +91,5 @@ NOTE: في النشر اليدوي (New Web Service) بدل Blueprint: Build=`pi
 ### ترحيل إلى الإصدار v1.12.0
 - تكنولوجيات RFID والتتبع والتنفيذ الميداني : تحميل `oriental24-v1.11.0-to-v1.12.0.patch` أو `oriental24-v1.12.0-full.zip`.
 - التحقق : `python3 -m pytest -q` ثم `python3 qa/connected_ops_workflow.py` (44 تحكماً) ثم `python3 qa/smart_warehouse_workflow.py`.
-- الواجهة : لوحة « Traçabilité & chargement » (التقاط الأبعاد، RFID، الالتقاط الموجه، خطة التحميل، الصوت). الصوت يتطلب Web Speech API (Chrome/Edge) وإلا يعود إلى اللمس.
+- الواجهة : لوحة « Exécution terrain & RFID » (التقاط الأبعاد، RFID، الالتقاط الموجه، خطة التحميل، الصوت). الصوت يتطلب Web Speech API (Chrome/Edge) وإلا يعود إلى اللمس.
 - لا يتطلب أي وسيط RFID أو خدمة صوتية خارجية.
