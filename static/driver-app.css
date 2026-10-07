@@ -82,3 +82,27 @@
 .sigpad { display: block; width: 100%; max-width: 640px; height: 260px; background: #fff; border: 1.5px dashed #c7d2e6; border-radius: 14px; touch-action: none; margin: 0 auto; }
 
 @media (min-width: 821px) { .da { padding-top: 6px; } .da-top .icon-btn:first-child { display: none; } }
+
+/* v1.13.0 · mode « application » (APK ORIENTAL24 / PWA installée) : coquille épurée.
+   La barre du site (fil d'Ariane, avatar, recherche) et la barre d'outils interne (.da-top,
+   avec ≡ et le numéro de version) disparaissent : l'écran s'ouvre directement sur les chiffres
+   et les colis. Aperçu navigateur : ajouter ?app=1 à l'adresse. */
+body.o24-app .topbar { display: none !important; }
+body.o24-app .da-top { display: none !important; }
+body.o24-app .layout { padding-left: 0 !important; }
+body.o24-app .content { padding: 12px 14px calc(96px + env(safe-area-inset-bottom)) !important; }
+body.o24-app .da { padding-top: 2px; }
+body.o24-app .da-list { padding-bottom: 76px; }
+
+/* Actions flottantes conservées : scan et menu (tiroir complet du livreur). */
+.da-fab { position: fixed; right: 14px; bottom: calc(18px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; z-index: 70; }
+.da-fab button { width: 54px; height: 54px; border: 0; border-radius: 50%; cursor: pointer; display: grid; place-items: center; box-shadow: 0 10px 24px rgba(11, 21, 38, .3); transition: transform .12s ease; }
+.da-fab button:active { transform: scale(.95); }
+.da-fab button svg { width: 22px; height: 22px; }
+.da-fab .fab-menu { background: #0b1526; color: #fff; }
+.da-fab .fab-scan { background: linear-gradient(120deg, #f97316, #ea580c); color: #fff; }
+/* v1.13.0 : annonces de l'administration en tête de l'écran livreur. */
+.da-notices .workspace-notices { margin: 0; }
+.da-notices .workspace-notice { border-radius: 14px; }
+.da-notices .notice-copy span { line-height: 1.55; }
+body.o24-app .da-notices .notice-copy a { display: inline-block; margin-top: 6px; }

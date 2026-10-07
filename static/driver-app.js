@@ -12,6 +12,14 @@
   const VIEW = 'driver-app';
   const isDriver = () => typeof S !== 'undefined' && S && S.user && S.user.role === 'livreur';
   const smallScreen = () => typeof matchMedia !== 'undefined' && matchMedia('(max-width: 820px)').matches;
+  /* v1.13.0 : sommes-nous dans l'application installée (APK livreur, PWA en plein écran) ?
+     Dans ce cas l'interface se présente comme une vraie application : pas de barre de site,
+     pas de barre d'outils interne. ?app=1 permet de le prévisualiser dans un navigateur. */
+  const APP_MODE = (typeof navigator !== 'undefined' && /ORIENTAL24APP\//.test(navigator.userAgent || '')) ||
+    (typeof navigator !== 'undefined' && navigator.standalone === true) ||
+    (typeof matchMedia !== 'undefined' && matchMedia('(display-mode: standalone)').matches) ||
+    (typeof location !== 'undefined' && /(^|[?&])app=1(&|$)/.test(location.search || ''));
+  const setAppShell = (on) => { if (typeof document !== 'undefined' && document.body) document.body.classList.toggle('o24-app', !!on); };
   const iso = (d) => d.toISOString().slice(0, 10);
   const frDay = (s) => new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(s + 'T12:00:00'));
 
@@ -87,9 +95,28 @@
     </button>`;
   }
 
+  /* v1.13.0 : l'écran livreur a son propre rendu, il n'héritait donc pas des
+     annonces de l'administration. On les affiche en tête de liste (l'annonce
+     « application » avec son lien de téléchargement arrive jusqu'au livreur). */
+  async function daNotices() {
+    const host = document.getElementById('content');
+    if (!host || !isDriver() || typeof api !== 'function') return;
+    let rows = [];
+    try { rows = await api('/announcements'); } catch (e) { return; }
+    if (!isDriver()) return;
+    const da = document.querySelector('#content .da');
+    if (!da) return;
+    const html = (typeof announcementMarkup === 'function') ? announcementMarkup(Array.isArray(rows) ? rows : []) : '';
+    let box = da.querySelector('.da-notices');
+    if (!html) { if (box) box.remove(); return; }
+    if (!box) { box = document.createElement('div'); box.className = 'da-notices'; da.prepend(box); }
+    box.innerHTML = html;
+  }
+
   function render() {
     const node = document.getElementById('content');
     if (!node || !isDriver()) return;
+    setAppShell(APP_MODE);
     const rows = filtered();
     const st = stats();
     const statuses = [{ s: '', label: 'Tous les colis', n: S.parcels.length }].concat(
@@ -131,6 +158,10 @@
       </div>
       <div class="da-list">${rows.length ? rows.map(card).join('') : `<p class="da-empty">Aucun colis sur cette période.<br><small>Changez la plage de dates, le statut ou le filtre rapide pour voir plus.</small></p>`}</div>
     </div>
+    ${APP_MODE ? `<div class="da-fab">
+      <button class="fab-scan" type="button" onclick="openScanner()" aria-label="Scanner un colis">${icon('scan')}</button>
+      <button class="fab-menu" type="button" onclick="openDaDrawer()" aria-label="Menu du livreur">${icon('menu')}</button>
+    </div>` : ''}
     <div class="da-drawer" id="da-drawer" hidden>
       <div class="da-drawer-panel">
         <div class="da-drawer-head"><span class="avatar orange">${initials(S.user.name)}</span><div><b>${esc(S.user.name)}</b><button class="link" onclick="closeDrawer();navigate('profile')">Voir le profil</button></div><button class="icon-btn" onclick="closeDrawer()" aria-label="Fermer">${icon('close')}</button></div>
@@ -149,6 +180,7 @@
       </div>
     </div>`;
     ensurePwa();
+    daNotices();
   }
 
   /* v1.5.0 : écran équipe du chef — synthèse par membre, filtre par livreur. */
@@ -394,6 +426,7 @@
   /* Branchements : vue dédiée + accueil par défaut du livreur sur petit écran. */
   const baseRenderView = renderView;
   renderView = async function () {
+    if (APP_MODE && isDriver() && typeof view !== 'undefined' && (view === 'dashboard' || view === '')) view = VIEW;
     if (typeof view !== 'undefined' && view === VIEW) {
       if (!isDriver()) { view = 'dashboard'; return baseRenderView.apply(this, arguments); }
       document.getElementById('breadcrumb-title').textContent = titles[VIEW];
@@ -401,6 +434,7 @@
       render();
       return;
     }
+    setAppShell(false);
     return baseRenderView.apply(this, arguments);
   };
   const baseEnterApp = enterApp;
