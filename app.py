@@ -758,6 +758,9 @@ register_reception_extras(app, globals())
 from partner_api import register_partner_api
 register_partner_api(app, globals())
 
+from mobile_app import register_mobile_app
+register_mobile_app(app, globals())
+
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.
 if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':
