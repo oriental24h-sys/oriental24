@@ -240,7 +240,7 @@ function stockOperationsView(products, requests, movements) {
           )}`
         : stockTab === "requests"
           ? `<div class="toolbar"><h3 style="font-size:14px">Demandes d’entrée & de sortie</h3><div class="spacer"></div><select aria-label="Filtrer les demandes de stock" onchange="stockFilter=this.value;drawStockRequests()"><option value="all">Tous les statuts</option>${["En attente", "Validée", "Refusée", "Annulée"].map((s) => `<option ${stockFilter === s ? "selected" : ""}>${s}</option>`).join("")}</select></div><div id="stock-requests-table">${stockRequestsTable()}</div>`
-          : `<div class="card-head"><h3>Traçabilité des quantités</h3><span class="sub">Du plus récent au plus ancien</span></div>${simpleTable(
+          : `<div class="card-head"><h3>Historique des quantités</h3><span class="sub">Du plus récent au plus ancien</span></div>${simpleTable(
               ["Date", "Produit / Boutique", "Quantité", "Motif", "Auteur"],
               movements.map((m) => [
                 date(m.created_at),

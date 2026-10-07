@@ -1,5 +1,5 @@
 /* v1.9.0 « Technologies avancées » : panneau Admin (boîte d'envoi WhatsApp/SMS, IA/ETA prédictive,
-   prévisions, risque, CO₂, zones de tri), preuve de livraison scellée (blockchain), capteurs IoT,
+   prévisions, risque, CO₂, affectation au tri), preuve de livraison scellée (blockchain), télémétrie,
    assistant public (règles FR/darija). Aucune API externe : les liens wa.me/sms s'ouvrent
    sur l'appareil de l'utilisateur. */
 window.techPanel=async()=>{
@@ -41,7 +41,7 @@ window.techZoneNew=()=>{const g=id=>{const el=document.getElementById(id);return
   if(!g('tz-new-code')||!g('tz-new-label')||!g('tz-new-pattern')){toast('Code, libellé et motif obligatoires.',true);return}
   techZoneSave(g('tz-new-code').toUpperCase(),g('tz-new-label'),g('tz-new-pattern'),true);};
 
-/* ---- fiche colis : preuve scellée, capteur IoT, zone de tri ---- */
+/* ---- fiche colis : preuve scellée, télémétrie, affectation au tri ---- */
 window.techProof=async(id)=>{
   let d;try{d=await api('/parcels/'+id+'/proof')}catch(e){toast(e.message,true);return}
   const rows=(d.chain||[]).map(r=>`<tr><td>${r.n}</td><td><span class="tag">${esc(r.status)}</span></td><td class="muted" style="font-size:11px">${esc(String(r.date).slice(0,16))}</td><td class="mono" style="font-size:10px">${esc(r.hash)}…</td></tr>`).join('');
@@ -58,8 +58,8 @@ window.techSensor=async(id)=>{
   const rows=(d.rows||[]).map(r=>`<tr><td class="muted" style="font-size:11px">${esc(String(r.created_at).slice(11,16))}</td>
     <td>${r.temp_c!=null?r.temp_c+' °C':'—'}</td><td>${r.shock_g!=null?r.shock_g+' g':'—'}</td>
     <td>${r.humidity!=null?r.humidity+' %':'—'}</td><td>${r.battery!=null?r.battery+' %':'—'}</td></tr>`).join('');
-  modal('Capteurs IoT — colis #'+id,`
-   <p class="form-hint">Télémétrie colis (chaîne du froid, chocs, humidité, batterie de capteur). Les mesures hors normes déclenchent une alerte <b>Alerte IoT</b> dans la chronologie. ${d.alerts?`<b style="color:#f87171">${d.alerts} alerte(s) enregistrée(s).</b>`:''}</p>
+  modal('Télémétrie du colis #'+id,`
+   <p class="form-hint">Télémétrie colis (chaîne du froid, chocs, humidité, batterie de capteur). Les mesures hors normes déclenchent une alerte <b>Alerte télémétrie</b> dans la chronologie. ${d.alerts?`<b style="color:#f87171">${d.alerts} alerte(s) enregistrée(s).</b>`:''}</p>
    <div class="flex" style="gap:6px;flex-wrap:wrap;margin:8px 0">
     <input id="ts-temp" type="number" step="0.1" placeholder="°C" style="width:80px;padding:6px;border:1px solid #d7deea;border-radius:6px">
     <input id="ts-shock" type="number" step="0.1" placeholder="choc g" style="width:80px;padding:6px;border:1px solid #d7deea;border-radius:6px">

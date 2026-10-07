@@ -1,6 +1,6 @@
-/* v1.12.0 « Traçabilité RFID & exécution terrain » : captation dimensionnelle (poids
+/* v1.12.0 « Exécution terrain & RFID » : captation dimensionnelle (poids
    volumétrique ÷5000, classes S/M/L/XL), RFID temps réel (tags EPC, portail multi-lectures,
-   inventaire tournant), picking guidé pick-by-voice, plan de chargement LIFO, voix livreur.
+   inventaire tournant), picking guidé pick-by-voice, plan de chargement LIFO, commandes vocales.
    100 % local — aucun middleware RFID payant, aucun service vocal cloud. */
 window.coCurrentId=null;
 window.coSay=t=>{try{const u=new SpeechSynthesisUtterance(String(t||''));u.lang='fr-FR';speechSynthesis.speak(u)}catch(e){}};
@@ -104,8 +104,8 @@ window.coPanel=async(preId)=>{
   if(preId)window.coCurrentId=preId;
   let voc={commands:[]};try{voc=await api('/voice-commands')}catch(e){}
   const cmds=(voc.commands||[]).map(c=>`<li><b>${esc(c.key)}</b> — dites « ${esc(c.say)} » (${esc(c.label)})</li>`).join('');
-  modal('Traçabilité & chargement',`
-   <p class="form-hint" style="margin:0 0 10px">RFID temps réel · picking guidé pick-by-voice · captation dimensionnelle (poids volumétrique ÷5000) · plan de chargement LIFO · voix livreur — aucun fournisseur externe (ni middleware RFID, ni service vocal cloud).</p>
+  modal('Exécution terrain & RFID',`
+   <p class="form-hint" style="margin:0 0 10px">RFID temps réel · picking guidé pick-by-voice · captation dimensionnelle (poids volumétrique ÷5000) · plan de chargement LIFO · commandes vocales — aucun fournisseur externe (ni middleware RFID, ni service vocal cloud).</p>
    <h3 style="margin:14px 0 6px">📐 Captation dimensionnelle</h3>
    <p class="form-hint" style="margin:0 0 6px">Colis : <select id="co-parcel" style="padding:6px;border:1px solid #d7deea;border-radius:6px"></select></p>
    <div class="flex" style="gap:6px;flex-wrap:wrap;align-items:center">
