@@ -102,7 +102,7 @@ function tag(s) {
     "Ramassé",
   ].includes(s)
     ? "good"
-    : ["En livraison", "Au hub", "En cours", "Planifié", "En transit", "Transit", "Réceptionné", "Reçu par le livreur", "Intéressé"].includes(
+    : ["En livraison", "Au hub", "En cours", "Planifié", "En transit", "Transit", "Réceptionné", "Reçu par le livreur", "Intéressé", "Appel client", "WhatsApp client"].includes(
           s,
         )
       ? "blue"
@@ -1710,5 +1710,5 @@ async function boot() {
   }
 }
 function driverCards(rows) {
-  return `<div class="driver-mobile-list">${rows.map((p) => `<article class="delivery-card"><div class="flex between"><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button>${tag(p.status)}</div><div class="parcel-copy-recipient">${parcelCopyButton(p)}<h3>${esc(p.recipient)}</h3></div><p>${esc(p.address)} · ${esc(p.city)}</p>${rdvTag(p)}${riskChip(p.phone)}<div class="flex between"><span class="amount">${money(p.amount)} <small>MAD</small></span><a class="btn sm" style="width:auto;margin:0" href="tel:${esc(p.phone.replace(/[^+\d]/g, ""))}">${icon("phone")}Appeler</a></div><button class="btn ${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "" : "primary"}" onclick="${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "parcelDetail" : "changeStatus"}(${p.id})">${icon("box")}${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "Voir le colis" : "Mettre à jour le colis"}</button><div class="driver-note-row">${parcelStatusControl(p)}${parcelNoteControl(p)}</div>${parcelClaimButton(p,true)}</article>`).join("")}</div>`;
+  return `<div class="driver-mobile-list">${rows.map((p) => `<article class="delivery-card"><div class="flex between"><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button>${tag(p.status)}</div><div class="parcel-copy-recipient">${parcelCopyButton(p)}<h3>${esc(p.recipient)}</h3></div><p>${esc(p.address)} · ${esc(p.city)}</p>${rdvTag(p)}${riskChip(p.phone)}<div class="flex between"><span class="amount">${money(p.amount)} <small>MAD</small></span><a class="btn sm" style="width:auto;margin:0" href="tel:${esc(p.phone.replace(/[^+\d]/g, ""))}" data-cl-id="${p.id}" data-cl-phone="${esc(p.phone)}" data-cl-name="${esc(p.recipient)}" onclick="return o24ClCall(this)">${icon("phone")}Appeler</a></div><button class="btn ${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "" : "primary"}" onclick="${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "parcelDetail" : "changeStatus"}(${p.id})">${icon("box")}${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "Voir le colis" : "Mettre à jour le colis"}</button><div class="driver-note-row">${parcelStatusControl(p)}${parcelNoteControl(p)}</div>${parcelClaimButton(p,true)}</article>`).join("")}</div>`;
 }

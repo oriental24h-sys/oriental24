@@ -376,7 +376,7 @@
     const p = S.parcels.find((x) => x.id === id);
     if (!p) return;
     const phone = digits(p.phone), wa = phone.startsWith('212') ? phone : '212' + phone.replace(/^0/, '');
-    modal(`${esc(p.tracking)} <span class="tag ${TAG(p.status)}" style="margin-left:6px">${esc(p.status)}</span>`, `
+    modal(`${p.tracking} · ${p.status}`, `
       <div class="detail-grid"><div><div class="detail-info">
         <h3 style="font-size:16px">${esc(p.recipient)}</h3>
         <p class="muted" style="font-size:13px">${esc(p.address)}<br>${esc(p.city)} · ${esc(p.phone)}</p>
@@ -384,10 +384,10 @@
         <div class="detail-line"><span>Statut</span><span>${esc(p.status)}</span></div>
         ${members().length ? `<div class="detail-line"><span>Livreur</span><select id="da-driver" onchange="daReassign(${p.id},this.value)" style="max-width:190px;padding:6px 9px;border:1px solid #d7deea;border-radius:9px;background:#fff">${[{ id: S.user.id, name: 'Moi — ' + S.user.name }, ...members()].map((u) => `<option value="${u.id}" ${p.driver_id === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></div>` : ''}
         <div class="flex" style="flex-wrap:wrap;margin-top:10px">
-          <a class="btn sm" href="tel:${esc(p.phone)}">${icon('phone')} Appeler</a>
-          <a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${encodeURIComponent('Bonjour ' + p.recipient + ', ORIENTAL24 : votre colis ' + p.tracking)}">${icon('chat')} WhatsApp</a>
+          <a class="btn sm" href="tel:${esc(p.phone)}" data-cl-id="${p.id}" data-cl-phone="${esc(p.phone)}" data-cl-name="${esc(p.recipient)}" onclick="return o24ClCall(this)">${icon('phone')} Appeler</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${encodeURIComponent('Bonjour ' + p.recipient + ', ORIENTAL24 : votre colis ' + p.tracking)}" data-cl-id="${p.id}" data-cl-phone="${esc(p.phone)}" data-cl-name="${esc(p.recipient)}" data-cl-msg="${esc('Bonjour ' + p.recipient + ', ORIENTAL24 : votre colis ' + p.tracking)}" onclick="return o24ClWa(this)">${icon('chat')} WhatsApp</a>
           <a class="btn sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=${encodeURIComponent(mapsAddr(p))}">${icon('pin')} Itinéraire</a>
-          <a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${encodeURIComponent('Bonjour ' + p.recipient + ', ORIENTAL24 : votre colis ' + p.tracking + ' — statut actuel : ' + p.status + '.')}">${icon('chat')} Notifier</a>
+          <a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${encodeURIComponent('Bonjour ' + p.recipient + ', ORIENTAL24 : votre colis ' + p.tracking + ' — statut actuel : ' + p.status + '.')}" data-cl-id="${p.id}" data-cl-phone="${esc(p.phone)}" data-cl-name="${esc(p.recipient)}" data-cl-msg="${esc('Bonjour ' + p.recipient + ', ORIENTAL24 : votre colis ' + p.tracking + ' — statut actuel : ' + p.status + '.')}" onclick="return o24ClWa(this)">${icon('chat')} Notifier</a>
           <button class="btn primary sm" onclick="closeModal();daStatusPick(${p.id})">${icon('edit')} Changer le statut</button>
           <button class="btn sm" onclick="closeModal();daMsgSheet(${p.id})">${icon('bell')} Prévenir le client</button>
           <button class="btn sm" onclick="closeModal();parcelDetail(${p.id})">${icon('eye')} Fiche complète</button>
@@ -468,7 +468,7 @@ window.daMsgSend=async(id,code)=>{
   if(r.links&&r.links.whatsapp){
     modal('Message enregistré',`<p class="form-hint" style="margin-bottom:10px">Message au client : <b>${esc(r.text)}</b><br>Transmettez-le aussi par canal direct (l'appareil ouvre WhatsApp ou SMS) :</p>
      <div class="flex" style="gap:8px;flex-wrap:wrap">
-      <a class="btn sm primary" target="_blank" rel="noopener" href="${r.links.whatsapp}">📲 WhatsApp</a>
+      <a class="btn sm primary" target="_blank" rel="noopener" href="${r.links.whatsapp}" data-cl-id="${id}" data-cl-msg="${esc(r.text)}" onclick="return o24ClWa(this)">📲 WhatsApp</a>
       <a class="btn sm" target="_blank" rel="noopener" href="${r.links.sms}">✉️ SMS</a>
       <button class="btn sm" type="button" onclick="closeModal()">Fermer</button></div>`);
   }

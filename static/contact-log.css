@@ -1,0 +1,38 @@
+/* v1.20.0 « Journal des contacts » : barre d'appel en cours + feuille de confirmation de durée. */
+.o24cl-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:2400;display:flex;align-items:center;gap:10px;background:#071d3c;color:#fff;padding:10px 12px;border-radius:14px;box-shadow:0 14px 34px rgba(7,29,60,.35);max-width:min(560px,94vw)}
+.o24cl-bar[hidden]{display:none}
+.o24cl-dot{width:10px;height:10px;border-radius:50%;background:#ff7c19;box-shadow:0 0 0 0 rgba(255,124,25,.7);animation:o24cl-pulse 1.4s infinite}
+@keyframes o24cl-pulse{70%{box-shadow:0 0 0 12px rgba(255,124,25,0)}100%{box-shadow:0 0 0 0 rgba(255,124,25,0)}}
+.o24cl-txt{display:flex;flex-direction:column;line-height:1.25;min-width:0}
+.o24cl-txt b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px}
+.o24cl-txt small{font-size:11px;color:#a9bcd8}
+.o24cl-stop{background:#ff7c19;border:0;color:#fff;font-weight:700;font-size:12px;border-radius:9px;padding:8px 12px;cursor:pointer}
+.o24cl-x{background:#ffffff14;border:1px solid #ffffff2b;color:#fff;border-radius:9px;padding:6px 9px;cursor:pointer}
+.o24cl{display:flex;flex-direction:column;gap:10px}
+.o24cl-who{margin:0;font-weight:700;font-size:14px}
+.o24cl-hint{margin:0;font-size:12px;color:#6b7a99}
+.o24cl-dur{display:flex;align-items:center;gap:8px;background:#f4f7fc;border:1px solid #e2e8f4;border-radius:12px;padding:10px 12px;flex-wrap:wrap}
+.o24cl-dur label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#5a6b8f}
+.o24cl-dur input{width:96px;font:700 20px/1.2 ui-monospace,Menlo,monospace;padding:6px 10px;border:1px solid #cfd9ea;border-radius:9px;text-align:center;background:#fff;color:#0d1b33}
+.o24cl-quick{display:flex;gap:6px;margin-left:auto}
+.o24cl-quick button{background:#fff;border:1px solid #cfd9ea;border-radius:8px;padding:6px 9px;font-size:11px;cursor:pointer}
+.o24cl-chips{display:flex;flex-wrap:wrap;gap:6px}
+.o24cl-chip{background:#fff;border:1px solid #cfd9ea;border-radius:999px;padding:6px 11px;font-size:12px;cursor:pointer;color:#33415c}
+.o24cl-chip.on{background:#0f3d8a;border-color:#0f3d8a;color:#fff;font-weight:700}
+.o24cl-acts{display:flex;gap:8px;flex-wrap:wrap}
+.o24cl-foot{margin:0;font-size:11px;color:#7c8aa8}
+.o24cl-modal{max-width:520px;width:94vw}
+
+/* v1.20.1 — bandeau d'action : la trace part seule, la correction reste facultative (un geste). */
+.o24cl-act{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:2450;background:#071d3c;color:#fff;border-radius:16px;padding:12px 14px;box-shadow:0 18px 40px rgba(7,29,60,.4);max-width:min(680px,95vw);display:flex;flex-direction:column;gap:10px}
+.o24cl-act-top{display:flex;align-items:flex-start;gap:10px}
+.o24cl-ok{width:24px;height:24px;border-radius:50%;background:#1aa06d;display:grid;place-items:center;font-weight:700;flex-shrink:0}
+.o24cl-act-top b{display:block;font-size:13px}
+.o24cl-act-top small{display:block;font-size:11px;color:#a9bcd8;margin-top:3px;line-height:1.5;overflow-wrap:anywhere}
+.o24cl-act-btns{display:flex;flex-wrap:wrap;gap:6px}
+.o24cl-act-btns button{background:#ffffff14;border:1px solid #ffffff2b;color:#fff;border-radius:9px;padding:7px 11px;font-size:12px;cursor:pointer}
+.o24cl-act-btns button:hover{background:#ff7c19;border-color:#ff7c19}
+.o24cl-act-btns button:disabled{opacity:.5;cursor:default}
+.o24cl-act-btns .o24cl-del{color:#ffb4b4;border-color:#ff8a8a55}
+.o24cl-act-btns .o24cl-x{margin-left:auto}
+.o24cl-bar small{color:#a9bcd8}

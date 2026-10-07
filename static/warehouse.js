@@ -103,11 +103,11 @@ window.whPick=async(id)=>{try{await api('/parcels/'+id+'/pick','POST',{});toast(
 window.whShipOut=async(id)=>{try{await api('/parcels/'+id+'/ship-out','POST',{});toast('Sortie d’entrepôt ✓');closeModal();whStorage(id);}catch(e){toast(e.message,true)}};
 window.whDrone=async(id)=>{
   modal('Mode de livraison — colis #'+id,`
-   <p class="form-hint">Livraison par <b>drone</b> (véhicule aérien) : colis ≤ <b>2 kg</b> depuis un hub aérien (entrepôt de la ville) avec un drone actif en flotte. Modes : standard / drone express / locker.</p>
+   <p class="form-hint">Livraison par <b>drone</b> (véhicule aérien) : colis ≤ <b>2 kg</b> depuis un hub aérien (entrepôt de la ville) avec un drone actif en flotte. Modes : standard / drone express.</p>
    <div class="flex" style="gap:6px;flex-wrap:wrap;margin:8px 0">
     <input id="dm-weight" type="number" step="0.05" min="0.05" placeholder="Poids kg" style="width:100px;padding:6px;border:1px solid #d7deea;border-radius:6px">
     <select id="dm-mode" style="padding:6px;border:1px solid #d7deea;border-radius:6px">
-     <option value="standard">standard</option><option value="drone">🚁 drone express</option><option value="locker">locker</option></select>
+     <option value="standard">standard</option><option value="drone">🚁 drone express</option></select>
     <button class="btn sm primary" type="button" onclick="whDroneSave(${id})">Appliquer</button></div>`,true);
 };
 window.whDroneSave=async(id)=>{

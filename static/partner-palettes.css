@@ -130,3 +130,37 @@
 .pc-st{font-size:8.5px;padding:3px 6px}
 .pc-trash{width:26px;height:24px}
 }
+/* === ORIENTAL24 · palette-scan CSS (début) === */
+/* v1.19.0 — réception palette au scan (collecte puis validation groupée) */
+.pp-rxstart{text-align:center;padding:6px 2px 2px}
+.pp-rxqr{font-size:42px;line-height:1;margin:4px 0 12px;color:#ff7918}
+.pp-rxstart h3{font-size:17px;margin:0 0 14px;color:#0c274c;line-height:1.5}
+.pp-rxbox{display:flex;flex-direction:column;gap:12px;padding:16px;border:2px dashed #ffcca5;border-radius:14px;background:#fffaf5;transition:border-color .15s,background .15s,box-shadow .15s}
+.pp-rxbox label{font-size:12px;font-weight:600;color:#0c274c;text-align:left}
+.pp-rxbox input{width:100%;font-family:ui-monospace,Menlo,monospace;font-size:17px;padding:13px 14px;border:1.5px solid var(--line);border-radius:10px;background:#fff}
+.pp-rxbox.ok{border-color:#0a9e6a;background:#effaf4;box-shadow:0 0 0 4px rgba(10,158,106,.14)}
+.pp-rxbox.err{border-color:#dc2626;background:#fef2f2;box-shadow:0 0 0 4px rgba(220,38,38,.14)}
+.pp-rxbox.dup{border-color:#eab308;background:#fffbea}
+.pp-rx-cam video{width:100%;max-height:300px;border-radius:12px;background:#0a1e3c;display:block}
+.pp-rx-tools{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center;margin-top:4px}
+.pp-rx-msg{margin:12px 0 0;font-size:13px;font-weight:600;color:#65738a;min-height:20px;line-height:1.7}
+.pp-rx-msg.ok{color:#0a7a5c}
+.pp-rx-msg.err{color:#dc2626}
+.pp-rx-msg.dup{color:#a16207}
+.pp-rx-list{margin:14px 0;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.pp-rx-line{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--line);font-size:12.5px}
+.pp-rx-line:last-child{border-bottom:0}
+.pp-rx-line.ok{background:#f4f7fb;color:#7b8aa0}
+.pp-rx-line.scanned{background:#f2fbf7}
+.pp-rx-line.miss{background:#fff8f2}
+.pp-rx-line .mono{font-family:ui-monospace,Menlo,monospace;font-weight:600}
+.pp-rx-x{border:0;background:#ffeceb;color:#c0392b;font-weight:700;line-height:1;padding:5px 9px;border-radius:8px;cursor:pointer}
+.pp-validate{margin:16px 0;padding:18px;border:1px solid rgba(10,158,106,.4);background:#effaf4;border-radius:12px;display:flex;flex-direction:column;gap:10px;align-items:center;text-align:center}
+.pp-validate b{font-size:16px;color:#7b8aa0}
+.pp-validate b.ready{color:#0a7a5c}
+.pp-validate .btn{width:100%;max-width:460px;font-size:16px;padding:15px}
+.pp-validate .btn[disabled]{opacity:.45;cursor:not-allowed;filter:grayscale(.4)}
+.pp-validate .btn.pulse{animation:ppPulse 1.3s ease-in-out infinite}
+@keyframes ppPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,121,24,.55)}50%{box-shadow:0 0 0 12px rgba(255,121,24,0)}}
+@media(max-width:720px){.pp-rxbox{padding:12px}.pp-rx-tools{flex-direction:column}.pp-rx-tools .btn{width:100%}.pp-rx-cam video{max-height:230px}}
+/* === ORIENTAL24 · palette-scan CSS (fin) === */

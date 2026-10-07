@@ -1,0 +1,27 @@
+/* === ORIENTAL24 · return-scan CSS (début) === */
+/* v1.22.0 « Envoi de palette retour au scan » : écran de collecte, lot en bas, validation unique. */
+.rp-sc{display:flex;flex-direction:column;gap:12px}
+.rp-sc-steps{display:flex;gap:8px;flex-wrap:wrap}
+.rp-sc-steps span{font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:#7c8aa8;background:#eef2f9;border-radius:999px;padding:5px 11px}
+.rp-sc-steps span.on{background:#0f3d8a;color:#fff}
+.rp-sc-setup .form-hint{margin:0 0 10px}
+.rp-sc-row{display:grid;grid-template-columns:1fr 220px;gap:10px}
+.rp-sc-head{display:flex;align-items:baseline;gap:10px;justify-content:space-between;flex-wrap:wrap}
+.rp-sc-head b{font-size:14px}
+.rp-sc-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+.rp-sc-tools .field,.rp-sc-tools label{flex:1;min-width:240px}
+.rp-sc-cambox{border:1px solid #e2e8f4;border-radius:12px;overflow:hidden;background:#0b1526;display:flex;flex-direction:column}
+.rp-sc-cambox[hidden]{display:none}
+.rp-sc-cambox video{width:100%;max-height:300px;object-fit:cover;display:block}
+.rp-sc-cambox span{padding:6px 10px;color:#c4d1e2}
+.rp-sc-list{max-height:34vh;overflow:auto;border:1px solid #eef2f9;border-radius:12px;padding:8px}
+.rp-sc-table{width:100%;border-collapse:collapse}
+.rp-sc-table th{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#5a6b8f;text-align:left;padding:6px 8px;border-bottom:1px solid #eef2f9}
+.rp-sc-table td{padding:7px 8px;font-size:12.5px;border-bottom:1px solid #f5f7fb}
+.rp-sc-table tr:last-child td{border-bottom:0}
+.rp-sc-tag{margin-left:6px;background:#fff1e4;color:#b45309;border:1px solid #ffdfc3;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700}
+.rp-sc-foot{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rp-sc-choice{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.rp-sc #rp-sc-msg{min-height:44px}
+@media(max-width:700px){.rp-sc-row{grid-template-columns:1fr}.rp-sc-tools label{min-width:100%}}
+/* === ORIENTAL24 · return-scan CSS (fin) === */

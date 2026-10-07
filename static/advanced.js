@@ -1,10 +1,10 @@
 /* v1.9.0 « Technologies avancées » : panneau Admin (boîte d'envoi WhatsApp/SMS, IA/ETA prédictive,
-   prévisions, risque, CO₂, affectation au tri), preuve de livraison scellée (blockchain), télémétrie,
+   prévisions, risque, CO₂, affectation au tri), preuve de livraison scellée (blockchain),
    assistant public (règles FR/darija). Aucune API externe : les liens wa.me/sms s'ouvrent
    sur l'appareil de l'utilisateur. */
 window.techPanel=async()=>{
-  let ob,ins,zn;
-  try{[ob,ins,zn]=await Promise.all([api('/outbox'),api('/insights'),api('/sort-zones')]);}
+  let ob,ins;
+  try{[ob,ins]=await Promise.all([api('/outbox'),api('/insights')]);}
   catch(e){toast(e.message||'Technologies indisponibles',true);return}
   const m=ins.model||{},fc=(ins.forecasts&&ins.forecasts.rows)||[],risk=ins.risk||[],co2=ins.co2||{},cnt=ins.counters||{};
   const obRows=(ob.rows||[]).slice(0,8).map(r=>`<tr><td class="mono">${esc(r.tracking)}</td><td><span class="tag">${esc(r.channel)}</span></td>
@@ -15,9 +15,6 @@ window.techPanel=async()=>{
     <span style="background:#12b8a6;height:12px;border-radius:6px;display:inline-block;width:${Math.max(4,r.expected*8)}px"></span><b>${r.expected}</b></div>`).join('');
   const riskRows=risk.map(r=>`<tr><td class="mono">${esc(r.tracking)}</td><td>${esc(r.city||'—')}</td><td><span class="tag">${esc(r.status)}</span></td>
     <td style="color:${r.score>=50?'#f87171':'#f59e0b'}"><b>${r.score}</b></td><td class="muted" style="font-size:11px">${esc((r.reasons||[]).join(', '))}</td></tr>`).join('');
-  const zoneRows=(zn.rows||[]).map(z=>`<tr><td class="mono">${esc(z.code)}</td><td>${esc(z.label)}</td>
-    <td><input id="tz-${esc(z.code)}" value="${esc(z.pattern)}" style="width:100%;padding:5px;border:1px solid #d7deea;border-radius:6px;font-size:11px"></td>
-    <td><button class="btn sm" type="button" onclick="techZoneSave('${esc(z.code)}','${esc(z.label)}',document.getElementById('tz-${esc(z.code)}').value,${z.active?false:true})">${z.active?'Désactiver':'Activer'}</button></td></tr>`).join('');
   modal('Technologies avancées',`
    <p class="form-hint" style="margin:0 0 10px">WhatsApp/SMS automatiques · IA (ETA apprise sur l'historique) · Blockchain (preuve scellée) · Géofencing · CO₂ — tout calculé localement, aucune API payante.</p>
    <div class="stats" style="grid-template-columns:1fr 1fr 1fr 1fr">
@@ -36,12 +33,8 @@ window.techPanel=async()=>{
    <p class="form-hint">Jour : <b>${esc(String(co2.today_kg!=null?co2.today_kg:0))} kg</b> · 7 derniers jours : <b>${esc(String(co2.week_kg!=null?co2.week_kg:0))} kg</b> — estimation par tournée optimisée (2-opt).</p>`,true);
 };
 window.techOutboxSent=async(id)=>{await api('/outbox/'+id+'/sent','POST',{});toast('Notification marquée envoyée.');closeModal();techPanel();};
-window.techZoneSave=async(code,label,pattern,active)=>{await api('/sort-zones','POST',{code,label,pattern,active});toast('Zone '+code+' enregistrée.');closeModal();techPanel();};
-window.techZoneNew=()=>{const g=id=>{const el=document.getElementById(id);return el?el.value.trim():''};
-  if(!g('tz-new-code')||!g('tz-new-label')||!g('tz-new-pattern')){toast('Code, libellé et motif obligatoires.',true);return}
-  techZoneSave(g('tz-new-code').toUpperCase(),g('tz-new-label'),g('tz-new-pattern'),true);};
 
-/* ---- fiche colis : preuve scellée, télémétrie, affectation au tri ---- */
+/* ---- fiche colis : preuve scellée ---- */
 window.techProof=async(id)=>{
   let d;try{d=await api('/parcels/'+id+'/proof')}catch(e){toast(e.message,true);return}
   const rows=(d.chain||[]).map(r=>`<tr><td>${r.n}</td><td><span class="tag">${esc(r.status)}</span></td><td class="muted" style="font-size:11px">${esc(String(r.date).slice(0,16))}</td><td class="mono" style="font-size:10px">${esc(r.hash)}…</td></tr>`).join('');
@@ -53,40 +46,6 @@ window.techProof=async(id)=>{
    ${S.user.role==='admin'?`<div style="margin-top:10px"><button class="btn primary sm" type="button" onclick="techProofSeal(${id})">${icon('shield')}Sceller la preuve maintenant</button></div>`:''}`,true);
 };
 window.techProofSeal=async(id)=>{await api('/parcels/'+id+'/proof/seal','POST',{});toast('Preuve scellée ✓');closeModal();techProof(id);};
-window.techSensor=async(id)=>{
-  let d={rows:[],alerts:0};try{d=await api('/parcels/'+id+'/telemetry')}catch(e){toast(e.message,true);return}
-  const rows=(d.rows||[]).map(r=>`<tr><td class="muted" style="font-size:11px">${esc(String(r.created_at).slice(11,16))}</td>
-    <td>${r.temp_c!=null?r.temp_c+' °C':'—'}</td><td>${r.shock_g!=null?r.shock_g+' g':'—'}</td>
-    <td>${r.humidity!=null?r.humidity+' %':'—'}</td><td>${r.battery!=null?r.battery+' %':'—'}</td></tr>`).join('');
-  modal('Télémétrie du colis #'+id,`
-   <p class="form-hint">Télémétrie colis (chaîne du froid, chocs, humidité, batterie de capteur). Les mesures hors normes déclenchent une alerte <b>Alerte télémétrie</b> dans la chronologie. ${d.alerts?`<b style="color:#f87171">${d.alerts} alerte(s) enregistrée(s).</b>`:''}</p>
-   <div class="flex" style="gap:6px;flex-wrap:wrap;margin:8px 0">
-    <input id="ts-temp" type="number" step="0.1" placeholder="°C" style="width:80px;padding:6px;border:1px solid #d7deea;border-radius:6px">
-    <input id="ts-shock" type="number" step="0.1" placeholder="choc g" style="width:80px;padding:6px;border:1px solid #d7deea;border-radius:6px">
-    <input id="ts-hum" type="number" step="1" placeholder="humidité %" style="width:90px;padding:6px;border:1px solid #d7deea;border-radius:6px">
-    <input id="ts-bat" type="number" step="1" placeholder="batterie %" style="width:90px;padding:6px;border:1px solid #d7deea;border-radius:6px">
-    <button class="btn sm primary" type="button" onclick="techSensorSend(${id})">Envoyer la mesure</button>
-    <button class="btn sm" type="button" onclick="techSensorSim(${id})">🎲 Simuler une lecture</button></div>
-   ${rows?`<table><thead><tr><th>Heure</th><th>Temp.</th><th>Choc</th><th>Humidité</th><th>Batterie</th></tr></thead><tbody>${rows}</tbody></table>`:"<p class=\"muted\">Aucune mesure — le capteur n'a pas encore transmis.</p>"}`,true);
-};
-window.techSensorSend=async(id)=>{
-  const g=(k)=>{const v=document.getElementById(k).value;return v===''?null:Number(v)};
-  const d={temp_c:g('ts-temp'),shock_g:g('ts-shock'),humidity:g('ts-hum'),battery:g('ts-bat')};
-  try{const r=await api('/parcels/'+id+'/telemetry','POST',d);closeModal();
-    toast(r.alerts&&r.alerts.length?('Mesure enregistrée — ALERTE : '+r.alerts.join(' / ')):'Mesure enregistrée ✓',!!(r.alerts&&r.alerts.length));}
-  catch(e){toast(e.message,true)};
-};
-window.techSensorSim=(id)=>{
-  document.getElementById('ts-temp').value=(Math.random()*50-5).toFixed(1);
-  document.getElementById('ts-shock').value=(Math.random()*4).toFixed(1);
-  document.getElementById('ts-hum').value=Math.round(30+Math.random()*60);
-  document.getElementById('ts-bat').value=Math.round(20+Math.random()*80);
-};
-window.techZone=async(id)=>{
-  let z;try{z=await api('/parcels/'+id+'/zone')}catch(e){toast(e.message,true);return}
-  modal('Affectation au tri — colis #'+id,`<p style="margin:6px 0">Ville : <b>${esc(z.city||'—')}</b> → zone <b class="mono">${esc(z.tracking_zone.code||'—')}</b> · ${esc(z.tracking_zone.label)}</p>
-   <p class="form-hint">Règle appliquée : ${esc(z.tracking_zone.rule||'aucune — affectez une zone depuis le panneau Technologies avancées.')}</p>`);
-};
 
 /* injection dans la fiche colis (après le rendu de parcel-contacts.js) */
 function techInjectRow(id){
@@ -264,19 +223,6 @@ window.smartPointSetSave=async(id)=>{
   const v=document.getElementById('sp-choose').value;
   try{await api('/parcels/'+id+'/pickup-point','POST',{point_id:v?Number(v):null});
     toast(v?'Colis routé vers le point relais ✓':'Retrait à domicile ✓');closeModal();parcelDetail(id);}
-  catch(e){toast(e.message,true)}
-};
-window.smartLocker=async(id)=>{
-  let d;try{d=await api('/parcels/'+id+'/locker')}catch(e){toast(e.message,true);return}
-  const rows=(d.rows||[]).map(r=>`<tr><td>${esc(r.point_name)}</td><td class="mono"><b style="font-size:16px">${esc(r.code)}</b></td>
-    <td class="muted" style="font-size:11px">${esc(String(r.delivered_at||'').slice(0,16))}</td>
-    <td>${r.picked_at?'<span class="tag">retiré</span>':`<input id="lk-code-${r.id}" placeholder="code" maxlength="6" style="width:70px;padding:5px;border:1px solid #d7deea;border-radius:6px"> <button class="btn sm primary" type="button" onclick="smartLockerPick(${r.id},${id})">Valider</button>`}</td></tr>`).join('');
-  modal('Point de retrait & code — colis #'+id,
-   rows?`<table><thead><tr><th>Point</th><th>Code</th><th>Déposé le</th><th>Retrait</th></tr></thead><tbody>${rows}</tbody></table>`:'<p class="muted">Aucun point de retrait affecté — routez le colis vers un point relais, le code sera généré au dépôt.</p>',true);
-};
-window.smartLockerPick=async(lid,pid)=>{
-  const code=document.getElementById('lk-code-'+lid).value.trim();
-  try{await api('/lockers/'+lid+'/pick','POST',{code});toast('Colis retiré ✓');closeModal();smartLocker(pid);}
   catch(e){toast(e.message,true)}
 };
 window.smartPay=async(id)=>{
