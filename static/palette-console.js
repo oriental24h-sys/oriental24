@@ -14,8 +14,10 @@ function pcAttOpen(id){window.open(pcAttCache[id]||('/api/palette-console/attach
 function pcChip(r){const tone=r.bucket==='OPEN'?'open':r.bucket==='PARTIEL'?'partiel':'closed';return `<span class="pc-chip ${tone}" title="${esc(pcLabel(r.status))}">${r.bucket}</span>${r.sans_reponse?`<span class="pc-chip late" title="Relance envoyée automatiquement au vendeur">RELANCE ${r.days}J</span>`:r.retard_hub?`<span class="pc-chip late orange" title="En attente du scan du hub depuis ${r.days} jours">RETARD ${r.days}J</span>`:''}`}
 function pcActs(r){
  const closable=(r.kind==='partner'&&['En transit','Partiellement reçu'].includes(r.status))||(r.kind==='return'&&['En transit','Partiellement remis'].includes(r.status));
+ const missing=Math.max(0,Number(r.missing)||0);
+ const exceptionBtn=missing?`<button type="button" class="pc-ibtn pc-exception" title="Afficher les ${missing} colis non réceptionnés" aria-label="Afficher les ${missing} colis non réceptionnés" onclick="pcExceptions('${r.kind}',${r.id})">${icon('alert')}<span class="pc-exception-count">${missing}</span></button>`:'';
  const btn=(t,fn,cls,title)=>`<button type="button" class="pc-ibtn ${cls||''}" title="${title}" onclick="${fn}">${t}</button>`;
- return btn(icon('down'),'pcRowRecv(\''+r.kind+'\','+r.id+')','teal','Receptionner')
+ return exceptionBtn+btn(icon('down'),'pcRowRecv(\''+r.kind+'\','+r.id+')','teal','Receptionner')
   +btn(icon('layers'),'pcSticker(\''+r.kind+'\','+r.id+')','','Print Sticker')
   +btn(icon('file'),'pcColisCSV(\''+r.kind+'\','+r.id+')','','Colis CSV')
   +(closable?btn(icon('close'),'pcClose(\''+r.kind+'\','+r.id+','+r.remaining+')','danger',r.kind==='return'?'Close return pallet':'Clôturer : les non scannés seront déclarés non réceptionnés'):'')
@@ -77,12 +79,64 @@ async function pcFusion(){const ids=[...pcSel];if(ids.length<2)return toast('Coc
 async function pcRowRecv(kind,id){
  if(kind==='return'){const r=await api('/palette-console/return/'+id).catch(()=>null);if(r&&r.status==='Préparé')return toast('Retour encore en brouillon : ouvrez la fiche Palettes retour pour l’envoyer.',true);if(typeof openReturnPalette==='undefined')return toast('Fiche retour du vendeur : nécessite la version serveur.',true);return openReturnPalette(id)}
  const d=await api('/palette-console/partner/'+id).catch(()=>null);if(d&&d.status==='Préparé')return openPartnerPalette(id);pcRecep(id)}
+async function pcExceptions(kind,id){
+ const ctx=ppContext('Exceptions');
+ try{
+  const d=await api('/palette-console/'+kind+'/'+id);if(!ctx.current())return;
+  const missing=d.lines.filter(l=>l.missing_at&&!l.received_at);
+  if(!missing.length){ctx.node.querySelector('.modal-body').innerHTML=`<p class="form-hint">Aucun colis non réceptionné dans cette palette. Actualisez la liste pour vérifier son état.</p><div class="form-actions"><button class="btn" onclick="closeModal()">Fermer</button></div>`;return}
+  const cards=missing.map(l=>{
+   const tel=String(l.phone||'').replace(/[^\d+*#]/g,'');
+   return `<article class="pc-exception-card"><div class="pc-exception-grid">
+    <section class="pc-exception-block"><span class="pc-exception-label">DESTINATION</span><h3>${esc(l.recipient||'Destinataire non renseigné')}</h3>
+     ${l.phone?`<a class="pc-exception-phone" href="tel:${esc(tel)}">${icon('phone')}${esc(l.phone)}</a>`:'<span class="sub">Téléphone non renseigné</span>'}
+     <p>${esc(l.address||'Adresse non renseignée')}</p><small>${esc(l.city||'Ville non renseignée')}</small></section>
+    <section class="pc-exception-block pc-exception-shipment"><span class="pc-exception-label">EN ROUTE</span><b class="pc-exception-tracking">${esc(l.tracking)}</b>
+     <div class="pc-exception-cod"><span>Montant à collecter</span><strong>${money(l.amount)} <small>MAD</small></strong></div>
+     ${l.product?`<small>Produit : ${esc(l.product)}</small>`:''}<div class="pc-exception-qr">${o24qrSvg(l.tracking,3)}</div></section>
+   </div><div class="pc-exception-origin"><span class="pc-exception-label">ORIGINE</span><strong>${esc(d.client_name||d.source_name||'—')}</strong><span>${esc(d.source_name||'')}${d.transport?' · '+esc(d.transport):''}</span></div>
+   <div class="pc-exception-foot"><span class="tag warn">Colis non reçu · ${esc(opsDate(l.missing_at))}</span>${kind==='partner'?`<button type="button" class="btn sm pc-exception-receive" data-tracking="${esc(l.tracking)}">Confirmer la réception</button>`:''}</div></article>`
+  }).join('');
+  const what=kind==='return'?'non remis au vendeur':'non réceptionnés au hub';
+  ctx.node.querySelector('.modal-body').innerHTML=`<div class="pc-exceptions-summary"><div><b>${esc(d.reference)}</b><p>${esc(d.source_name)} → ${esc(d.destination_name)}</p></div><span class="pc-chip late">${missing.length} colis</span></div><div class="pc-exceptions-title"><b>Colis non reçu</b><span>${missing.length} commande(s) ${what}</span></div><div class="pc-exceptions-list">${cards}</div><div class="form-actions"><button class="btn" onclick="closeModal()">Fermer</button></div>`;
+  ctx.node.querySelectorAll('.pc-exception-receive').forEach(b=>b.onclick=()=>pcConfirmRecovered(id,b.dataset.tracking));
+ }catch(e){ppError(ctx,e)}
+}
+async function pcConfirmRecovered(id,tracking){
+ const ctx=ppContext('Confirmer la réception');
+ try{
+  const d=await api('/palette-console/partner/'+id);if(!ctx.current())return;
+  const l=d.lines.find(x=>String(x.tracking).toLowerCase()===String(tracking).toLowerCase());
+  if(!l||l.received_at||!l.missing_at){await refresh();await renderView();return pcExceptions('partner',id)}
+  ctx.node.querySelector('.modal-body').innerHTML=`<div class="pc-recovered-confirm">
+   <div class="pc-exceptions-summary"><div><b>${esc(d.reference)}</b><p>${esc(d.destination_name)}</p></div><span class="pc-chip late">Non reçu</span></div>
+   <div class="pc-recovered-order"><span>Commande</span><b>${esc(l.tracking)}</b><small>${esc(l.recipient||'Destinataire non renseigné')} · ${esc(l.city||'')}</small></div>
+   <label class="pc-recovered-check"><input id="pc-recovered-confirm-check" type="checkbox"><span>Je confirme avoir physiquement réceptionné ce colis au hub.</span></label>
+   <p class="form-hint">Après confirmation, le colis quitte la liste des Exceptions. Son historique « non réceptionné » reste conservé.</p>
+   <div class="form-actions"><button type="button" class="btn teal solid" id="pc-recovered-confirm-btn" disabled>Confirmer la réception</button><button type="button" class="btn" id="pc-recovered-cancel">Retour aux Exceptions</button></div>
+  </div>`;
+  const check=ctx.node.querySelector('#pc-recovered-confirm-check'),go=ctx.node.querySelector('#pc-recovered-confirm-btn');
+  check.onchange=()=>{go.disabled=!check.checked};
+  ctx.node.querySelector('#pc-recovered-cancel').onclick=()=>pcExceptions('partner',id);
+  go.onclick=async()=>{
+   if(!check.checked)return;go.disabled=true;
+   try{
+    const r=await api('/palette-console/partner/'+id+'/receive-recovered','POST',{tracking:l.tracking,confirmed:true,expected_missing_at:l.missing_at,request_key:financeKey()});
+    if(!ctx.current())return;
+    await refresh();await renderView();
+    const latest=await api('/palette-console/partner/'+id);if(!ctx.current())return;
+    toast('Réception confirmée · '+l.tracking+(r.remaining_exceptions?' · '+r.remaining_exceptions+' exception(s) restante(s)':''));
+    if(latest.lines.some(x=>x.missing_at&&!x.received_at))await pcExceptions('partner',id);else closeModal();
+   }catch(e){if(ctx.current()){toast(e.message,true);go.disabled=false}}
+  };
+ }catch(e){ppError(ctx,e)}
+}
 /* ---------------------------------------------------- Activités (chevron) */
 async function pcMore(kind,id,el){const row=document.getElementById('pc-more-'+kind+'-'+id);if(!row)return;
  if(!row.hidden){row.hidden=true;if(el)el.textContent='›';return}
  if(el)el.textContent='⌄';row.hidden=false;
  try{const d=await api('/palette-console/'+kind+'/'+id);if(row.hidden)return;
-  const acts=d.activities.map(a=>`<div class="pc-act"><span class="pc-act-dot ${/annul|refus|non/i.test(a.action)?'red':'green'}">${/created|préparée|sent|ajout/i.test(a.action)?'+':'✓'}</span><div><b class="pc-act-badge">${esc(a.action)}</b><p>${esc(a.actor)} <small>· ${esc(opsDate(a.created_at))}</small></p>${a.details&&a.details.trackings&&a.details.trackings.length?`<small class="sub">${a.details.trackings.map(esc).join(' · ')}</small>`:''}</div></div>`).join('')||'<p class="sub">Aucune activité.</p>';
+  const acts=d.activities.map(a=>`<div class="pc-act"><span class="pc-act-dot ${/annul|refus|non/i.test(a.action)?'red':'green'}">${/created|préparée|sent|ajout/i.test(a.action)?'+':'✓'}</span><div><b class="pc-act-badge">${esc(a.action)}</b><p>${esc(a.actor)} <small>· ${esc(opsDate(a.created_at))}</small></p>${a.details&&(a.details.trackings&&a.details.trackings.length||a.details.tracking)?`<small class="sub">${(a.details.trackings&&a.details.trackings.length?a.details.trackings:[a.details.tracking]).map(esc).join(' · ')}</small>`:''}</div></div>`).join('')||'<p class="sub">Aucune activité.</p>';
   const atts=d.attachments.length?`<div class="pc-gallery">${d.attachments.map(a=>`<figure><img src="${pcAttSrc(a)}" alt="pièce jointe" title="Ouvrir en grand" onclick="pcAttOpen('${a.id}')"><figcaption>${esc(a.note||'Photo')} · ${esc(a.actor)} · ${esc(opsDate(a.created_at))}</figcaption></figure>`).join('')}</div>`:'';
   row.querySelector('.pc-morebox').innerHTML=`<h4>Activités</h4>${acts}${atts}`;
  }catch(e){if(!row.hidden)row.querySelector('.pc-morebox').textContent=e.message}}

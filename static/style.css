@@ -1936,7 +1936,8 @@ td strong {
   .top-profile .profile-text {
     display: none;
   }
-  .stats {
+  .stats,
+  .kpi-grid {
     grid-template-columns: 1fr 1fr;
   }
   .two-col {

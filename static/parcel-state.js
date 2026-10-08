@@ -1,5 +1,5 @@
 /* Status uses existing transition/attempt workflows. Follow-up Note only changes the reason. */
-function parcelStateEditable(p){return S.user.role!=='client'&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked&&!(S.user.role==='livreur'&&['Livré','Retourné'].includes(p.status))}
+function parcelStateEditable(p){return !['client','support'].includes(S.user.role)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked&&!(S.user.role==='livreur'&&['Livré','Retourné'].includes(p.status))}
 function parcelNoteControl(p){const label=p.reason_label||p.reason_code||'Aucun motif';return parcelStateEditable(p)?`<button class="parcel-note-button ${p.reason_code?'has-reason':''}" aria-label="Note de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelReason(${p.id},this)"><span>Note${p.reason_code?' · '+esc(label):''}</span>${icon('down')}</button>`:`<span class="parcel-note-readonly">${esc(label)}</span>`}
 function parcelStatusControl(p){return parcelStateEditable(p)?`<button class="parcel-status-button" aria-label="État de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">${esc(p.status)}${icon('down')}</button>`:''}
 function parcelStateControls(p){return `<div class="parcel-state-controls">${tag(p.status)}${parcelStatusControl(p)}${parcelNoteControl(p)}</div>`}

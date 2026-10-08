@@ -54,11 +54,14 @@ const paths = {
   link: "M10 13a5 5 0 0 0 7 0l4-4a5 5 0 0 0-7-7l-2 2 M14 11a5 5 0 0 0-7 0l-4 4a5 5 0 0 0 7 7l2-2",
   lock: "M5 10h14v12H5z M8 10V6a4 4 0 0 1 8 0v4",
   eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12 M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6",
+  info: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20 M12 11v5 M12 7h.01",
+  star: "M12 3l2.8 5.7 6.3.9-4.6 4.5 1.1 6.3-5.6-3-5.6 3 1.1-6.3-4.6-4.5 6.3-.9z",
   scan: "M3 11h8V3H3v8zm2-6h4v4H5V5zM3 21h8v-8H3v8zm2-6h4v4H5v-4zM13 3v8h8V3h-8zm6 6h-4V5h4v4zM13 13h2v2h-2v-2zM17 13h2v2h-2v-2zM13 17h2v2h-2v-2zM17 17h2v2h-2v-2zM19 15h2v2h-2v-2zM15 15h2v2h-2v-2zM19 19h2v2h-2v-2z",
   sliders: "M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z",
   chat: "M4 2h16a2 2 0 0 1 2 2v18l-4-4H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z",
   alert: "M12 2 1 21h22L12 2zm1 14h-2v-2h2v2zm0-4h-2V8h2v4z",
   smartphone: "M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm0 3v14h10V5H7z",
+  headset: "M3 13v-1a9 9 0 0 1 18 0v1 M3 13h4v7H5a2 2 0 0 1-2-2z M17 13h4v5a2 2 0 0 1-2 2h-2z M17 20a5 5 0 0 1-5 2h-2",
 };
 function icon(n, cls = "") {
   return `<svg class="ico ${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[n] || paths.box}"/></svg>`;
@@ -91,26 +94,20 @@ const roleName = (r) =>
     client: "Espace client",
     livreur: "Espace livreur",
     agent: "Agent réception",
+    support: "Support commandes",
   })[r] || r;
 function tag(s) {
-  const cls = [
-    "Livré",
-    "Réglée",
-    "Résolu",
-    "Réceptionnée",
-    "Acceptée",
-    "Ramassé",
-  ].includes(s)
-    ? "good"
-    : ["En livraison", "Au hub", "En cours", "Planifié", "En transit", "Transit", "Réceptionné", "Reçu par le livreur", "Intéressé", "Appel client", "WhatsApp client"].includes(
-          s,
-        )
-      ? "blue"
-      : ["Retourné", "Refusé", "Refusée", "Annulé"].includes(s)
-        ? "bad"
-        : ["Programmé", "Reporté", "À régler", "En attente", "Demandé"].includes(s)
-          ? "warn"
-          : "";
+  const cls = ["Invoice", "Invoice : Paid", "Facture créée", "Règlement facture", "Règlement facture annulé"].includes(s)
+    ? "invoice"
+    : ["Livré", "Réglée", "Résolu", "Réceptionnée", "Acceptée", "Ramassé"].includes(s)
+      ? "good"
+      : ["En livraison", "Au hub", "En cours", "Planifié", "En transit", "Transit", "Réceptionné", "Reçu par le livreur", "Intéressé", "Appel client", "WhatsApp client"].includes(s)
+        ? "blue"
+        : ["Retourné", "Refusé", "Refusée", "Annulé"].includes(s)
+          ? "bad"
+          : ["Programmé", "Reporté", "À régler", "En attente", "Demandé"].includes(s)
+            ? "warn"
+            : "";
   return `<span class="tag ${cls}">${esc(s)}</span>`;
 }
 let modalCleanup = null;
@@ -119,6 +116,9 @@ let S = null,
   settingsTab = "cities",
   listPage = 1,
   filters = { q: "", status: "", city: "", from: "", to: "" },
+  supportOrderFilter = { q: "", status: "", city: "" },
+  supportOrderPage = 1,
+  supportPollTimer = null,
   publicCities = [];
 async function api(url, method = "GET", data, background = false) {
   const r = await fetch("/api" + url, {
@@ -397,7 +397,7 @@ async function demoCreate(kind) {
 async function enterApp() {
   await refresh();
   history.replaceState(null, "", "/app");
-  view = S?.user?.role === "agent" ? "partner-palettes" : "dashboard";
+  view = S?.user?.role === "agent" ? "partner-palettes" : S?.user?.role === "support" ? "support-orders" : "dashboard";
   shell();
   await renderView();
 }
@@ -428,6 +428,8 @@ const menu = [
       ["driver-finance", "wallet", "Caisse livreurs", ["admin", "livreur"]],
       ["drivers", "users", "Livreurs", ["admin"]],
       ["clients", "user", "Clients", ["admin"]],
+      ["supports", "headset", "Supports", ["admin"]],
+      ["support-orders", "headset", "Suivre les commandes", ["support"]],
       ["audit-log", "shield", "Journal d’audit", ["admin"]],
       ["requests", "return", "Demandes"],
       ["tickets", "ticket", "Réclamations"],
@@ -452,6 +454,8 @@ const titles = {
   invoices: "Facturation",
   drivers: "Livreurs",
   clients: "Clients",
+  supports: "Comptes Support",
+  "support-orders": "Suivi des commandes",
   "audit-log": "Journal d’audit",
   requests: "Demandes de modification",
   tickets: "Réclamations",
@@ -465,19 +469,20 @@ function shell() {
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['partner-palettes','return-palettes','palette-hub','alerts','tickets','notifications','announcements','profile','security','tour'].includes(x[0])));
+        const vis = items.filter((x) => (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['partner-palettes','return-palettes','palette-hub','alerts','tickets','notifications','announcements','profile','security','tour'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
           ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${t}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
       })
       .join(
         "",
-      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon("help")}<b>Besoin d’un coup de main ?</b></div>Notre équipe vous accompagne.<button onclick="navigate('tickets')">Ouvrir les réclamations →</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : u.role}${icon("chevron")}<strong id="breadcrumb-title">${titles[view]}</strong></div></div><div class="top-actions"><button class="global-search" onclick="navigate('parcels').then(()=>$('#parcel-search')?.focus())">${icon("search")}Rechercher un colis… <kbd>⌘ K</kbd></button><span class="flex lang" style="font-size:10px;gap:5px">${icon("globe")}FR</span><button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button><button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${initials(u.name)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
+      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon(u.role==='support'?'headset':'help')}<b>${u.role==='support'?'Suivi des commandes':'Besoin d’un coup de main ?'}</b></div>${u.role==='support'?'Vous voyez uniquement les commandes affectées à vos villes.':'Notre équipe vous accompagne.'}<button onclick="${u.role==='support'?'refreshSupportOrders()':"navigate('tickets')"}">${u.role==='support'?'Actualiser le suivi →':'Ouvrir les réclamations →'}</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : u.role}${icon("chevron")}<strong id="breadcrumb-title">${titles[view]}</strong></div></div><div class="top-actions">${u.role==='support'?'':`<button class="global-search" onclick="navigate('parcels').then(()=>$('#parcel-search')?.focus())">${icon("search")}Rechercher un colis… <kbd>⌘ K</kbd></button>`}<span class="flex lang" style="font-size:10px;gap:5px">${icon("globe")}FR</span>${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${initials(u.name)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
 }
 async function navigate(v) {
   if (!S) return;
   // Agent de réception : espace limité à ses tâches, aucun contournement via l’URL.
   if (S.user.role==='agent'&&!['partner-palettes','return-palettes','palette-hub','alerts','tickets','profile','notifications','announcements','security','tour'].includes(v)) v='partner-palettes';
+  if (S.user.role==='support'&&!['support-orders','profile'].includes(v)) v='support-orders';
   if (S.user.role === "livreur" && ["parcels","dashboard","print"].includes(v)) { try { const owner=S.user.id,fresh=await api("/bootstrap"); if(S?.user?.id!==owner||fresh.user.id!==owner)return; S=fresh; } catch(e) {toast(e.message,true);return;} }
   view = v;
   listPage = 1;
@@ -531,6 +536,12 @@ async function renderView(background = false) {
         break;
       case "clients":
         html = usersView();
+        break;
+      case "supports":
+        html = supportsView();
+        break;
+      case "support-orders":
+        html = supportOrdersView();
         break;
       case "analytics":
         html = analyticsView();
@@ -608,14 +619,26 @@ async function renderView(background = false) {
           ])),
         );
         break;
-      case "requests":
-        html = requestsView(await api("/requests"));
+      case "requests": {
+        const [priceRequests, recipientRequests] = await Promise.all([
+          api("/requests"),
+          api("/recipient-change-requests"),
+        ]);
+        html = requestsView(priceRequests, recipientRequests);
         break;
+      }
     }
     const notices = current === "print" ? [] : await api("/announcements","GET",undefined,background);
     if (current !== view || S?.user?.id !== owner || !$("#content")) return;
     $("#content").innerHTML = (current === "print" ? "" : announcementMarkup(notices)) + html + footer();
     if (view === "parcels") drawParcelTable();
+    if (view === "support-orders") drawSupportOrders();
+    if (supportPollTimer) { clearTimeout(supportPollTimer); supportPollTimer = null; }
+    if (S.user.role === "support" && view === "support-orders") {
+      supportPollTimer = setTimeout(() => {
+        if (S?.user?.role === "support" && view === "support-orders" && document.visibilityState === "visible") refreshSupportOrders(false);
+      }, 45000);
+    }
     if (view === "drivers") drawDriverWorkspace();
     if (view === "profile") bindProfile();
     if (view === "settings" && settingsTab === "general") bindSettings();
@@ -831,7 +854,7 @@ function parcelTable(rows, selectable = true) {
       "Aucun colis trouvé",
       "Essayez d’autres filtres ou ajoutez un nouveau colis.",
     );
-  return `${S.user.role === "livreur" && view !== "print" ? driverCards(rows) : ""}<div class="table-wrap ${S.user.role === "livreur" && view !== "print" ? "driver-desktop-table" : ""}"><table><thead><tr>${selectable ? '<th style="width:30px"><input type="checkbox" style="width:13px" aria-label="Sélectionner tous" onchange="document.querySelectorAll(\'.parcel-select\').forEach(x=>x.checked=this.checked)"></th>' : ""}<th>Référence</th><th>Destinataire</th><th>Destination</th><th>Montant COD</th><th>Statut</th><th>${S.user.role === "client" ? "Livreur" : "Client / Boutique"}</th><th></th></tr></thead><tbody>${rows.map((p) => `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span></td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${S.user.role === "client" && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(S.user.role === "client" ? p.driver || "Non affecté" : p.company || p.client)}</td><td><div class="parcel-row-actions">${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`).join("")}</tbody></table></div>`;
+  return `${S.user.role === "livreur" && view !== "print" ? driverCards(rows) : ""}<div class="table-wrap ${S.user.role === "livreur" && view !== "print" ? "driver-desktop-table" : ""}"><table><thead><tr>${selectable ? '<th style="width:30px"><input type="checkbox" style="width:13px" aria-label="Sélectionner tous" onchange="document.querySelectorAll(\'.parcel-select\').forEach(x=>x.checked=this.checked)"></th>' : ""}<th>Référence</th><th>Destinataire</th><th>Destination</th><th>Montant COD</th><th>Statut</th><th>${S.user.role === "client" ? "Livreur" : "Client / Boutique"}</th><th></th></tr></thead><tbody>${rows.map((p) => `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span></td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${S.user.role === "client" && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(S.user.role === "client" ? p.driver || "Non affecté" : p.company || p.client)}${view==='print'||!p.city_support_name?'':`<span class="sub">Support : ${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}</span>`}</td><td><div class="parcel-row-actions">${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`).join("")}</tbody></table></div>`;
 }
 function parcelsView() {
   const create = S.user.role !== "livreur";
@@ -890,7 +913,7 @@ function newParcel() {
   bindClientTracking();
   bindForm(async (d) => {
     const r = await api("/parcels", "POST", d);
-    await saved("Colis " + r.tracking + " créé");
+    await saved("Colis " + r.tracking + " créé" + (r.city_support ? " · Support " + r.city_support.name : " · aucun support n’est affecté à cette ville"));
   });
 }
 async function parcelDetail(id) {
@@ -899,7 +922,7 @@ async function parcelDetail(id) {
       p = { ...S.parcels.find((p) => p.id === id), ...d.parcel };
     modal(
       p.tracking,
-      `<div class="detail-grid"><div><div class="detail-info"><div class="flex between"><h3>${esc(p.recipient)}</h3>${tag(p.status)}</div><p class="muted" style="font-size:12px">${esc(p.address)}<br>${esc(p.city)} · ${esc(p.phone)}</p><div class="detail-line"><span>À collecter</span><strong>${money(p.amount)} MAD</strong></div><div class="detail-line"><span>Frais de livraison</span><span>${money(p.fee)} MAD</span></div><div class="detail-line"><span>Produit</span><span>${esc(p.product || "—")}</span></div><div class="detail-line"><span>Livreur</span><span>${esc(p.driver || "Non affecté")}</span></div><div class="form-hint">${esc(p.note || "Aucune note pour ce colis.")}</div>${p.financial_locked ? `<div class="form-hint">${icon("lock")}Colis verrouillé dans un relevé livreur.</div>` : ""}</div><div class="flex" style="flex-wrap:wrap"><button class="btn sm" onclick="printLabels([${id}])">${icon("print")}Étiquette</button>${!p.invoice_id && !p.financial_locked && !p.operations_locked && S.user.role !== "client" ? `<button class="btn primary sm" onclick="changeStatus(${id})">${icon("edit")}Changer le statut</button>` : ""}${S.user.role === "admin" ? `<button class="btn sm" onclick="openParcelOtp(${id})">${icon("shield")}Code client</button>` : ""}${S.user.role === "admin" && !p.invoice_id && !p.financial_locked && !p.operations_locked ? `<button class="btn sm" onclick="assignDriver(${id})">${icon("user")}Affecter un livreur</button>` : ""}${!p.invoice_id && !p.financial_locked && !p.operations_locked && !["Livré", "Retourné", "Refusé"].includes(p.status) ? `<button class="btn sm" onclick="requestPrice(${id})">${icon("return")}Demande de prix</button>` : ""}</div>${((d.media || []).length || ["admin", "livreur"].includes(S.user.role)) ? `<div class="pod-media"><h3 style="font-size:13px;margin:10px 0 6px">${icon("shield")}Preuves de livraison</h3>${(d.media || []).length ? `<div class="flex" style="flex-wrap:wrap;gap:6px">${(d.media || []).map((m) => `<a class="btn sm" target="_blank" rel="noopener" href="${podHref(p, m)}">${m.kind === "signature" ? icon("edit") : icon("file")}${m.kind === "signature" ? "Signature" : "Photo"} · ${date(m.created_at)}</a>`).join("")}</div>` : `<p class="form-hint">Aucune preuve encore enregistrée.</p>`}${["admin", "livreur"].includes(S.user.role) ? `<div class="flex" style="flex-wrap:wrap;gap:6px;margin-top:6px"><label class="btn sm" style="margin:0">${icon("scan")}Ajouter une photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="podUpload(${id},'photo',this).then(()=>parcelDetail(${id})).catch((e)=>toast(e.message,true))"></label><button class="btn sm" onclick="closeModal();podSig(${id})">${icon("edit")}Signature</button></div>` : ""}</div>` : ""}</div><div><h3 style="font-size:14px">Chronologie d’activité</h3><div class="timeline">${d.events.map((e) => `<div class="timeline-item"><b>${esc(e.status)}</b><p>${esc(e.note)}</p><small>${esc(e.actor)} · ${date(e.created_at)} ${new Date(e.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</small></div>`).join("")}</div></div></div>`,
+      `<div class="detail-grid"><div><div class="detail-info"><div class="flex between"><h3>${esc(p.recipient)}</h3>${tag(p.status)}</div><p class="muted" style="font-size:12px">${esc(p.address)}<br>${esc(p.city)} · ${esc(p.phone)}</p><div class="detail-line"><span>À collecter</span><strong>${money(p.amount)} MAD</strong></div><div class="detail-line"><span>Frais de livraison</span><span>${money(p.fee)} MAD</span></div><div class="detail-line"><span>Produit</span><span>${esc(p.product || "—")}</span></div><div class="detail-line"><span>Livreur</span><span>${esc(p.driver || "Non affecté")}</span></div><div class="detail-line"><span>Support responsable</span><span>${p.city_support_name?`${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}`:'Non affecté'}</span></div><div class="form-hint">${esc(p.note || "Aucune note pour ce colis.")}</div>${p.financial_locked ? `<div class="form-hint">${icon("lock")}Colis verrouillé dans un relevé livreur.</div>` : ""}</div><div class="flex" style="flex-wrap:wrap">${S.user.role === "support" ? "" : `<button class="btn sm" onclick="printLabels([${id}])">${icon("print")}Étiquette</button>`}${!p.invoice_id && !p.financial_locked && !p.operations_locked && !["client", "support"].includes(S.user.role) ? `<button class="btn primary sm" onclick="changeStatus(${id})">${icon("edit")}Changer le statut</button>` : ""}${S.user.role === "admin" ? `<button class="btn sm" onclick="openParcelOtp(${id})">${icon("shield")}Code client</button>` : ""}${S.user.role === "admin" && !p.invoice_id && !p.financial_locked && !p.operations_locked ? `<button class="btn sm" onclick="assignDriver(${id})">${icon("user")}Affecter un livreur</button>` : ""}${S.user.role !== "support" && !p.invoice_id && !p.financial_locked && !p.operations_locked && !["Livré", "Retourné", "Refusé"].includes(p.status) ? `<button class="btn sm" onclick="requestPrice(${id})">${icon("return")}Demande de prix</button>` : ""}</div>${((d.media || []).length || ["admin", "livreur"].includes(S.user.role)) ? `<div class="pod-media"><h3 style="font-size:13px;margin:10px 0 6px">${icon("shield")}Preuves de livraison</h3>${(d.media || []).length ? `<div class="flex" style="flex-wrap:wrap;gap:6px">${(d.media || []).map((m) => `<a class="btn sm" target="_blank" rel="noopener" href="${podHref(p, m)}">${m.kind === "signature" ? icon("edit") : icon("file")}${m.kind === "signature" ? "Signature" : "Photo"} · ${date(m.created_at)}</a>`).join("")}</div>` : `<p class="form-hint">Aucune preuve encore enregistrée.</p>`}${["admin", "livreur"].includes(S.user.role) ? `<div class="flex" style="flex-wrap:wrap;gap:6px;margin-top:6px"><label class="btn sm" style="margin:0">${icon("scan")}Ajouter une photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="podUpload(${id},'photo',this).then(()=>parcelDetail(${id})).catch((e)=>toast(e.message,true))"></label><button class="btn sm" onclick="closeModal();podSig(${id})">${icon("edit")}Signature</button></div>` : ""}</div>` : ""}</div><div><h3 style="font-size:14px">Chronologie d’activité</h3><div class="timeline">${d.events.map((e) => `<div class="timeline-item"><b>${esc(e.status)}</b><p>${esc(e.note)}</p><small>${esc(e.actor)} · ${date(e.created_at)} ${new Date(e.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</small></div>`).join("")}</div></div></div>`,
       true,
     );
   } catch (e) {
@@ -1184,6 +1207,67 @@ async function logout() {
     toast(e.message, true);
   }
 }
+function supportCityNames(u) {
+  const byId = new Map((S.cities || []).map((c) => [Number(c.id), c.name]));
+  return (u.city_ids || []).map((id) => byId.get(Number(id))).filter(Boolean);
+}
+function supportsView() {
+  const rows = (S.users || []).filter((u) => u.role === "support");
+  return heading(
+    "Comptes Support",
+    "Affectez les villes à chaque support pour que les nouvelles commandes lui soient attribuées automatiquement.",
+    `<button class="btn primary" onclick="userForm(null,'support')">${icon("plus")}Ajouter un support</button>`,
+  ) +
+    `<div class="support-routing-note">${icon("headset")}<div><b>Une ville = un compte Support responsable.</b><p>Les nouvelles commandes sont attribuées selon leur ville. Les commandes déjà créées gardent leur affectation actuelle.</p></div></div>` +
+    `<section class="card"><div class="card-head"><h3>${rows.length} compte(s) Support</h3><span class="tag good">${rows.filter((u) => u.active).length} actif(s)</span></div><div class="table-wrap"><table><thead><tr><th>Support</th><th>Coordonnées</th><th>Villes suivies</th><th>Commandes</th><th>État</th><th></th></tr></thead><tbody>${rows.map((u) => {
+      const cities = supportCityNames(u);
+      const count = (S.parcels || []).filter((p) => Number(p.support_id) === Number(u.id)).length;
+      const tel = String(u.phone || "").replace(/[^+\d]/g, "");
+      return `<tr><td><div class="recipient"><span class="avatar orange">${initials(u.name)}</span><strong>${esc(u.name)}</strong></div></td><td>${esc(u.email)}<span class="sub">${u.phone ? `<a href="tel:${esc(tel)}">${esc(u.phone)}</a>` : "Téléphone non renseigné"}</span></td><td>${cities.length ? cities.map((name) => `<span class="support-city-chip">${icon("pin")}${esc(name)}</span>`).join(" ") : `<span class="sub">Aucune ville</span>`}</td><td><b>${count}</b><span class="sub">commande(s) affectée(s)</span></td><td><span class="tag ${u.active ? "good" : "bad"}">${u.active ? "Actif" : "Désactivé"}</span></td><td><button class="icon-btn" onclick="userForm(${u.id},'support')" title="Modifier le compte Support">${icon("edit")}</button></td></tr>`;
+    }).join("")}</tbody></table></div>${!rows.length ? empty("Aucun compte Support", "Ajoutez un support, puis choisissez les villes qu’il doit suivre.", `<button class="btn primary" onclick="userForm(null,'support')">${icon("plus")}Ajouter un support</button>`) : ""}</section>`;
+}
+function supportOrdersView() {
+  const rows = S.parcels || [];
+  const active = rows.filter((p) => !["Livré", "Retourné", "Refusé", "Annulé"].includes(p.status)).length;
+  const delivered = rows.filter((p) => p.status === "Livré").length;
+  return heading(
+    "Suivi de mes commandes",
+    `Commandes affectées automatiquement aux villes dont vous êtes responsable. ${supportCityNames(S.user).join(" · ")}`,
+    `<button class="btn" onclick="refreshSupportOrders()">${icon("refresh")}Actualiser</button>`,
+  ) +
+    `<section class="stats">${stat("Commandes affectées", int(rows.length), "", "box", "", "Dans vos villes")}${stat("À suivre", int(active), "", "clock", "blue", "Commandes non clôturées")}${stat("Livrées", int(delivered), "", "checkcircle", "green", "Suivi terminé")}</section>` +
+    `<section class="card"><div class="card-head"><div><h3>Mes commandes</h3><p>Le suivi est en lecture seule. Ouvrez une commande pour consulter son historique.</p></div><span class="tag">${rows.length}</span></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="support-order-search" placeholder="Référence, destinataire, téléphone…" value="${esc(supportOrderFilter.q)}" oninput="supportOrderFilter.q=this.value;supportOrderPage=1;drawSupportOrders()"></div><select aria-label="Filtrer par statut" onchange="supportOrderFilter.status=this.value;supportOrderPage=1;drawSupportOrders()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option ${s === supportOrderFilter.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select aria-label="Filtrer par ville" onchange="supportOrderFilter.city=this.value;supportOrderPage=1;drawSupportOrders()"><option value="">Toutes mes villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === supportOrderFilter.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div><span class="form-hint">Actualisation automatique toutes les 45 secondes</span></div><div id="support-order-table"></div></section>`;
+}
+function drawSupportOrders() {
+  const root = $("#support-order-table");
+  if (!root || S?.user?.role !== "support") return;
+  const q = String(supportOrderFilter.q || "").toLowerCase();
+  const rows = (S.parcels || []).filter((p) =>
+    (!q || [p.tracking, p.recipient, p.phone, p.city, p.status].some((x) => String(x || "").toLowerCase().includes(q))) &&
+    (!supportOrderFilter.status || p.status === supportOrderFilter.status) &&
+    (!supportOrderFilter.city || String(p.city_id) === supportOrderFilter.city),
+  );
+  const pages = Math.max(1, Math.ceil(rows.length / 10));
+  supportOrderPage = Math.min(supportOrderPage, pages);
+  const shown = rows.slice((supportOrderPage - 1) * 10, supportOrderPage * 10);
+  root.innerHTML = shown.length ? `<div class="table-wrap"><table><thead><tr><th>Commande</th><th>Destinataire</th><th>Ville</th><th>COD</th><th>Statut</th><th>Contact Support</th><th>Mise à jour</th><th></th></tr></thead><tbody>${shown.map((p) => {
+    const phone = String(p.city_support_phone || "").replace(/[^+\d]/g, "");
+    return `<tr><td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span></td><td><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span></td><td>${icon("pin")} ${esc(p.city)}</td><td>${money(p.amount)} MAD</td><td>${tag(p.status)}</td><td>${p.city_support_name ? `<b>${esc(p.city_support_name)}</b><span class="sub">${p.city_support_phone ? `<a href="tel:${esc(phone)}">${esc(p.city_support_phone)}</a>` : "Téléphone non renseigné"}</span>` : `<span class="sub">Non affecté</span>`}</td><td>${date(p.updated_at)}</td><td><button class="icon-btn" title="Ouvrir l’historique" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></td></tr>`;
+  }).join("")}</tbody></table></div><div class="table-footer"><span>${rows.length ? (supportOrderPage - 1) * 10 + 1 : 0}–${Math.min(rows.length, supportOrderPage * 10)} sur ${rows.length} commandes</span><div class="pagination"><button onclick="supportOrderPage=Math.max(1,supportOrderPage-1);drawSupportOrders()" aria-label="Page précédente" ${supportOrderPage <= 1 ? "disabled" : ""}>‹</button><span>${supportOrderPage} / ${pages}</span><button onclick="supportOrderPage=Math.min(${pages},supportOrderPage+1);drawSupportOrders()" aria-label="Page suivante" ${supportOrderPage >= pages ? "disabled" : ""}>›</button></div></div>` : empty("Aucune commande pour le moment", "Les commandes créées dans vos villes apparaîtront automatiquement ici.");
+}
+async function refreshSupportOrders(showToast = true) {
+  if (!S || S.user.role !== "support") return;
+  const owner = S.user.id;
+  try {
+    const fresh = await api("/bootstrap", "GET", undefined, !showToast);
+    if (S?.user?.id !== owner || S.user.role !== "support") return;
+    S = fresh;
+    await renderView(!showToast);
+    if (showToast) toast("Liste des commandes actualisée.");
+  } catch (e) {
+    if (showToast) toast(e.message, true);
+  }
+}
 function usersView() {
   const role = view === "drivers" ? "livreur" : "client",
     us = S.users.filter((u) => u.role === role);
@@ -1198,6 +1282,16 @@ function usersView() {
     `<div class="card"><div class="card-head"><h3>${us.length} ${role === "livreur" ? "livreurs" : "clients"} enregistrés</h3><span class="tag good">${us.filter((u) => u.active).length} actifs</span></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>Coordonnées</th><th>${role === "client" ? "Entreprise / Type" : "Colis assignés"}</th><th>Statut</th><th></th></tr></thead><tbody>${us.map((u) => `<tr><td><div class="recipient"><span class="avatar">${initials(u.name)}</span><strong>${esc(u.name)}</strong></div></td><td>${esc(u.email)}<span class="sub">${esc(u.phone)}</span></td><td>${role === "client" ? `${esc(u.company)}<span class="sub">${clientTypeLabel(u)}</span>` : S.parcels.filter((p) => p.driver_id === u.id).length}</td><td><span class="tag ${u.active ? "good" : "bad"}">${u.active ? "Actif" : "Désactivé"}</span></td><td>${role === "client" ? `<button class="icon-btn" onclick="tariffForm(${u.id})" title="Tarifs par ville">${icon("wallet")}</button>${u.client_type === "societe_livraison" ? `<button class="icon-btn" onclick="apiKeysForm(${u.id},'${esc(u.company || u.name)}')" title="Clé API partenaire">${icon("scan")}</button>` : ""}` : ""}<button class="icon-btn" onclick="userForm(${u.id},'${role}')" title="Modifier le compte">${icon("edit")}</button></td></tr>`).join("")}</tbody></table></div>${!us.length ? empty("Votre réseau commence ici", "Créez votre premier compte.") : ""}</div>`
   );
 }
+function supportCityPicker(u, id) {
+  const selected = new Set((u.city_ids || []).map(Number));
+  const cities = (S.cities || []).filter((c) => c.delivery);
+  return `<div class="full support-city-picker"><div class="support-city-heading"><b>Villes que ce support doit suivre <span>*</span></b><small>Les nouvelles commandes de ces villes lui seront affectées automatiquement.</small></div><div class="support-city-grid">${cities.map((city) => {
+    const owner = (S.users || []).find((x) => x.role === "support" && (x.city_ids || []).map(Number).includes(Number(city.id)));
+    const occupied = owner && Number(owner.id) !== Number(id);
+    const checked = selected.has(Number(city.id));
+    return `<label class="support-city-option ${occupied ? "locked" : ""}"><input type="checkbox" name="city_ids" value="${city.id}" ${checked ? "checked" : ""} ${occupied ? "disabled" : ""}><span><b>${icon("pin")}${esc(city.name)}</b><small>${occupied ? `Déjà suivie par ${esc(owner.name)}` : checked ? "Affectée à ce compte" : "Disponible"}</small></span></label>`;
+  }).join("") || `<p class="form-hint">Aucune ville ouverte à la livraison.</p>`}</div><p class="form-hint">Une ville ne peut appartenir qu’à un seul support. Pour la déplacer, retirez-la d’abord de l’ancien compte puis enregistrez.</p><p class="form-hint">Les commandes déjà créées gardent leur support actuel ; le changement concerne les nouvelles commandes.</p></div>`;
+}
 function userForm(id, role) {
   const u = S.users.find((u) => u.id === id) || {
     name: "",
@@ -1211,15 +1305,18 @@ function userForm(id, role) {
       ? "Modifier le compte"
       : role === "livreur"
         ? "Nouveau livreur"
-        : "Nouveau client",
+        : role === "support"
+          ? "Nouveau compte Support"
+          : "Nouveau client",
     form(
-      `${role === "client" ? select("client_type", "Type de client", clientTypeOptions, u.client_type || "vendeur") + `<div class="form-hint"><b>Vendeur</b> : tracking ORIENTAL24 automatique.<br><b>Société de livraison</b> : tracking saisi par la société et conservé.${id?"<br>Le type est verrouillé après le premier colis ou la première préparation.":""}</div>` : ""}${input("name", "Nom complet", u.name)}${!id ? input("email", "Adresse e-mail", "", "email") : `<div class="form-hint">${esc(u.email)}<br>L’identifiant du compte est conservé.</div>`}${input("phone", "Téléphone", u.phone, "tel")}${input("company", "Entreprise / Boutique", u.company, "text", false)}${role === "livreur" ? select("team_lead_id", "Chef d’équipe (optionnel) — le chef voit et réaffecte les colis de son équipe", [["", "Sans chef d’équipe (compte autonome)"]].concat(S.users.filter((x) => x.role === "livreur" && x.active && x.id !== id && !x.team_lead_id).map((x) => [x.id, x.name])), u.team_lead_id || "", false) : ""}${input("password", id ? "Nouveau mot de passe (facultatif)" : "Mot de passe initial", "", "password", !id, 'minlength="10" autocomplete="new-password"')}${id ? `<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active ? "checked" : ""}><label for="user-active">Compte actif</label></div>` : ""}<div class="full form-hint">Minimum 10 caractères pour le mot de passe. ${id ? "Un compte désactivé ne peut plus accéder à la plateforme." : "Transmettez les identifiants au titulaire par un canal sûr."}</div>`,
+      `${role === "client" ? select("client_type", "Type de client", clientTypeOptions, u.client_type || "vendeur") + `<div class="form-hint"><b>Vendeur</b> : tracking ORIENTAL24 automatique.<br><b>Société de livraison</b> : tracking saisi par la société et conservé.${id?"<br>Le type est verrouillé après le premier colis ou la première préparation.":""}</div>` : ""}${input("name", "Nom complet", u.name)}${!id ? input("email", "Adresse e-mail", "", "email") : `<div class="form-hint">${esc(u.email)}<br>L’identifiant du compte est conservé.</div>`}${input("phone", "Téléphone", u.phone, "tel")}${role === "support" ? supportCityPicker(u,id) : input("company", "Entreprise / Boutique", u.company, "text", false)}${role === "livreur" ? select("team_lead_id", "Chef d’équipe (optionnel) — le chef voit et réaffecte les colis de son équipe", [["", "Sans chef d’équipe (compte autonome)"]].concat(S.users.filter((x) => x.role === "livreur" && x.active && x.id !== id && !x.team_lead_id).map((x) => [x.id, x.name])), u.team_lead_id || "", false) : ""}${input("password", id ? "Nouveau mot de passe (facultatif)" : "Mot de passe initial", "", "password", !id, 'minlength="10" autocomplete="new-password"')}${id ? `<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active ? "checked" : ""}><label for="user-active">Compte actif</label></div>` : ""}<div class="full form-hint">Minimum 10 caractères pour le mot de passe. ${id ? "Un compte désactivé ne peut plus accéder à la plateforme." : "Transmettez les identifiants au titulaire par un canal sûr."}</div>`,
     ),
   );
   bindForm(async (d) => {
     await api("/users" + (id ? "/" + id : ""), id ? "PATCH" : "POST", {
       ...d,
       ...(d.team_lead_id !== undefined ? { team_lead_id: d.team_lead_id ? Number(d.team_lead_id) : null } : {}),
+      ...(role === "support" ? { city_ids: [...document.querySelectorAll('#modal-form input[name="city_ids"]:checked')].map((x) => Number(x.value)) } : {}),
       role,
     });
     await saved("Compte enregistré");
@@ -1482,7 +1579,7 @@ function newInvoice() {
   modal(
     "Générer un relevé client",
     form(
-      `${select("client_id", "Client", clientOptions())}<div class="full form-hint">Regroupe tous les colis livrés, retournés ou refusés non encore facturés pour ce client. Le net est égal au COD des colis livrés moins les frais de livraison et de retour.</div><div class="full form-hint orange">Les colis inclus seront verrouillés pour éviter de modifier un montant déjà facturé.</div>`,
+      `${select("client_id", "Client", clientOptions())}<div class="full form-hint">Regroupe les colis livrés, retournés ou refusés non facturés. Un colis réservé dans une palette retour reste exclu jusqu’à la confirmation de sa remise physique au vendeur ; il entre alors dans la facture suivante en statut Retourné.</div><div class="full form-hint orange">Les colis inclus seront verrouillés. Le COD et les frais suivent les règles existantes ; générer la facture ne déclare aucun paiement. Paid n’apparaît qu’après enregistrement d’un règlement réel.</div>`,
       "Générer la facture",
     ),
   );
@@ -1567,36 +1664,60 @@ async function productDetail(id) {
     toast(e.message, true);
   }
 }
-function requestsView(rows) {
-  return (
-    heading(
-      "Demandes de modification",
-      "Les changements de prix passent par une validation.",
-      `<button class="btn" onclick="navigate('parcels')">${icon("box")}Ouvrir un colis</button>`,
-    ) +
-    `<section class="card"><div class="card-head"><h3>Demandes de changement de prix</h3><span class="tag">${rows.length} demandes</span></div>${simpleTable(
-      [
-        "Demande",
-        "Colis",
-        "Demandeur",
-        "Montant demandé",
-        "Motif",
-        "Statut",
-        "",
-      ],
-      rows.map((r) => [
-        `<span class="tracking">DEM-${String(r.id).padStart(4, "0")}</span>`,
-        esc(r.tracking),
-        esc(r.author),
-        `<strong>${money(r.amount)} MAD</strong>`,
-        esc(r.reason),
-        tag(r.status),
-        S.user.role === "admin" && r.status === "En attente"
-          ? `<div class="flex"><button class="btn sm" onclick="decideRequest(${r.id},true)">${icon("check")}Accepter</button><button class="btn sm danger" onclick="decideRequest(${r.id},false)">Refuser</button></div>`
-          : "—",
-      ]),
-    )}</section><p class="sub" style="margin-top:18px">Pour créer une demande, ouvrez un colis non clôturé puis choisissez « Demande de prix ».</p>`
+let recipientRequestRows = [];
+function recipientRequestSnapshot(r,after=false){
+  const name=after?r.requested_recipient:(r.old_recipient||r.current_recipient);
+  const phone=after?(r.requested_phone_display||r.requested_phone||r.current_phone):(r.old_phone_display||r.old_phone||r.current_phone);
+  const city=after?(r.requested_city_display||r.requested_city_name||r.current_city):(r.old_city_display||r.old_city_name||r.current_city);
+  const address=after?(r.requested_address_display||r.requested_address||r.current_address):(r.old_address_display||r.old_address||r.current_address);
+  return `<div class="recipient-request-contact"><strong>${esc(name||'—')}</strong><span class="sub">☎ ${esc(phone||'—')} · ${esc(city||'—')}</span><span class="sub">${esc(address||'Adresse non renseignée')}</span></div>`;
+}
+function requestsView(rows, recipientRows = []) {
+  recipientRequestRows=recipientRows;
+  const priceTable = `<section class="card"><div class="card-head"><h3>Demandes de changement de prix</h3><span class="tag">${rows.length} demandes</span></div>${simpleTable(
+    ["Demande", "Colis", "Demandeur", "Montant demandé", "Motif", "Statut", ""],
+    rows.map((r) => [
+      `<span class="tracking">DEM-${String(r.id).padStart(4, "0")}</span>`,
+      esc(r.tracking), esc(r.author), `<strong>${money(r.amount)} MAD</strong>`, esc(r.reason), tag(r.status),
+      S.user.role === "admin" && r.status === "En attente"
+        ? `<div class="flex"><button class="btn sm" onclick="decideRequest(${r.id},true)">${icon("check")}Accepter</button><button class="btn sm danger" onclick="decideRequest(${r.id},false)">Refuser</button></div>`
+        : "—",
+    ]),
+  )}</section>`;
+  const recipientTable = `<section class="card recipient-requests-card"><div class="card-head"><div><h3>Demandes de changement de destinataire</h3><p>Les coordonnées avant et après restent consultables dans la demande et la Chronologie.</p></div><span class="tag">${recipientRows.filter(r => r.status === "En attente").length} en attente</span></div>${recipientRows.length ? simpleTable(
+    ["Demande", "Colis", "Client", "Coordonnées avant", "Nouvelles coordonnées", "Motif", "Date", "Statut", ""],
+    recipientRows.map((r) => [
+      `<span class="tracking">DEST-${String(r.id).padStart(4, "0")}</span>`,
+      `<button class="tracking" onclick="parcelDetail(${Number(r.parcel_id)})">${esc(r.tracking)}</button><span class="sub">Statut colis : ${esc(r.parcel_status||'—')}</span>`,
+      `${esc(r.company || r.author)}<span class="sub">${esc(r.author)}</span>`,
+      recipientRequestSnapshot(r,false),recipientRequestSnapshot(r,true),
+      esc(r.reason || "—"), `<span>${date(r.created_at)}</span>`, tag(r.status),
+      S.user.role === "admin" && r.status === "En attente"
+        ? `<div class="flex">${['Livré','Retourné'].includes(r.parcel_status)?`<span class="sub recipient-change-accept-locked">Acceptation impossible · ${esc(r.parcel_status)}</span>`:`<button class="btn sm" onclick="decideRecipientChange(${r.id},true)">${icon("check")}Accepter</button>`}<button class="btn sm danger" onclick="decideRecipientChange(${r.id},false)">Refuser</button></div>`
+        : (r.admin_note ? esc(r.admin_note) : "—"),
+    ]),
+  ) : empty("Aucune demande de changement", "Les prochaines demandes des clients apparaîtront ici.")}</section>`;
+  return heading(
+    "Demandes de modification",
+    "Demandes de prix et changements de destinataire, traités par l’administration.",
+    `<button class="btn" onclick="navigate('parcels')">${icon("box")}Ouvrir un colis</button>`,
+  ) + priceTable + recipientTable + `<p class="sub" style="margin-top:18px">Pour créer une demande de prix, ouvrez un colis non clôturé. Le changement de destinataire se demande depuis la ligne du colis client, uniquement avant les statuts Livré ou Retourné.</p>`;
+}
+function decideRecipientChange(id, accept) {
+  const r=recipientRequestRows.find(x=>Number(x.id)===Number(id));
+  if(accept&&r&&['Livré','Retourné'].includes(r.parcel_status)){toast('Impossible d’accepter : la commande est déjà Livrée ou Retournée.',true);return}
+  const detail=r?`<div class="full recipient-change-review"><div class="recipient-change-review-tracking"><span>Numéro de suivi · non modifiable</span><strong class="mono" dir="ltr">${esc(r.tracking)}</strong></div><div class="recipient-change-review-pair"><section><span>Coordonnées avant</span>${recipientRequestSnapshot(r,false)}</section><section><span>Nouvelles coordonnées demandées</span>${recipientRequestSnapshot(r,true)}</section></div></div>`:`<div class="full form-hint">La demande sera traitée sans modifier le numéro de suivi.</div>`;
+  modal(
+    accept ? "Accepter le changement de destinataire ?" : "Refuser la demande ?",
+    form(`${detail}${textarea("admin_note", "Note Admin (facultatif)", "", false)}<div class="full form-hint">${accept ? "Le nom, le téléphone, la ville et l’adresse seront mis à jour. Le tracking, le COD, les frais, le statut et la facture ne changent pas. Les anciennes coordonnées restent dans la Chronologie." : "Les coordonnées actuelles resteront inchangées. La demande, les coordonnées proposées et le refus seront conservés dans la Chronologie."}</div>`, accept ? "Accepter" : "Refuser"),
   );
+  bindForm(async (d) => {
+    await api("/recipient-change-requests/" + id, "PATCH", {
+      status: accept ? "Acceptée" : "Refusée",
+      admin_note: d.admin_note || "",
+    });
+    await saved("Demande de destinataire traitée");
+  });
 }
 function decideRequest(id, accept) {
   modal(

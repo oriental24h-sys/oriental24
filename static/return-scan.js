@@ -335,8 +335,7 @@ window.rpRefuseAsk=function(id,reference,revision){
 };
 function o24RpScanOfflineRefuse(id,reason,revision){
  opcInit();
- const doc=(localDemo.return_palettes||[]).find(x=>x.id===Number(id));
- if(!doc)throw Error('Palette retour introuvable.');
+ const doc=o24RpOfflineDetail(id);
  if(!['Préparé','En transit','Partiellement remis'].includes(doc.status))throw Error('Cette palette est déjà clôturée : elle ne peut plus être refusée.');
  if(Number(revision)!==Number(doc.revision||1))throw Error('Palette modifiée. Actualisez avant de confirmer.');
  const pending=(doc.lines||[]).filter(l=>l.active&&!l.received_at&&!l.missing_at);
@@ -348,25 +347,69 @@ function o24RpScanOfflineRefuse(id,reason,revision){
  for(const l of pending){const p=localDemo.parcels.find(x=>x.id===l.parcel_id);if(p)oevent(p,doc.reference+' · retour refusé — colis de nouveau disponible')}
  return {ok:true,id:doc.id,released:pending.length,status:'Annulé'};
 }
-/* Vue « Palettes retour » hors serveur (démo) : la liste locale des retours + le scan qui marche. */
+/* Réception réelle de la palette retour dans le HTML autonome. Le statut ne bouge
+   qu'après une confirmation explicite de la remise physique au vendeur. */
+function o24RpOfflineDetail(id){
+ opcInit();
+ const doc=(localDemo.return_palettes||[]).find(x=>Number(x.id)===Number(id));
+ if(!doc)throw Error('Palette retour introuvable.');
+ if(localUser.role==='client'&&Number(doc.client_id)!==Number(localUser.id))throw Error('Palette retour introuvable.');
+ if(localUser.role==='agent'&&Number(doc.destination_hub_id)!==Number(localUser.agent_hub_id))throw Error('Palette retour hors de votre hub.');
+ if(!['admin','agent','client'].includes(localUser.role))throw Error('Accès réservé.');
+ const lines=(doc.lines||[]).map(l=>{const p=localDemo.parcels.find(x=>Number(x.id)===Number(l.parcel_id))||{};return {...l,current_status:p.status||l.initial_status,phone:p.phone||''}});
+ const received=lines.filter(l=>l.received_at).length,missing=lines.filter(l=>l.missing_at&&!l.received_at).length;
+ return {...doc,lines,count:lines.length,received,missing,remaining:lines.length-received-missing,audit:(doc.audit||[]).map(a=>({...a,details:a.details||{}}))};
+}
+function o24RpOfflineReceive(id,action,d){
+ const doc=o24RpOfflineDetail(id);
+ if(!['receive','receive-all'].includes(action))throw Error('Action de réception invalide.');
+ if(d.confirmed!==true)throw Error('Confirmez avoir physiquement remis/reçu ce colis.');
+ if(!Number.isInteger(d.revision)||d.revision!==Number(doc.revision||1))throw Error('Palette modifiée. Actualisez avant de confirmer.');
+ if(action==='receive'){
+  const tracking=String(d.tracking||'').trim();if(!tracking||tracking.length>160)throw Error('Saisissez le tracking du colis remis.');
+  const line=doc.lines.find(l=>l.tracking===tracking);if(!line)throw Error('Ce tracking ne figure pas dans cette palette.');
+  if(line.received_at)return {ok:true,id:doc.id,reference:doc.reference,status:doc.status,revision:doc.revision,already_received:true,received:0};
+ }
+ if(!['En transit','Partiellement remis'].includes(doc.status))throw Error('Confirmez l’envoi avant de réceptionner la palette.');
+ const pending=doc.lines.filter(l=>!l.received_at&&!l.missing_at);
+ if(action==='receive-all'&&(!Number.isInteger(d.expected_remaining)||d.expected_remaining!==pending.length))throw Error('Le nombre de colis restants a changé.');
+ const received=action==='receive'?[doc.lines.find(l=>l.tracking===String(d.tracking||'').trim())]:pending;
+ for(const l of received){const p=localDemo.parcels.find(x=>Number(x.id)===Number(l.parcel_id));if(!p||!['Refusé','Retourné'].includes(p.status))throw Error('L’état du colis '+l.tracking+' a changé.');}
+ const at=onow(),changes=[];
+ for(const l of received){const p=localDemo.parcels.find(x=>Number(x.id)===Number(l.parcel_id)),old=p.status;Object.assign(l,{active:0,received_at:at,received_by:localUser.id});Object.assign(p,{status:'Retourné',current_hub_id:null,ops_revision:(p.ops_revision||0)+1,updated_at:at});oevent(p,doc.reference+' · retour physiquement remis au vendeur · statut '+old+' → Retourné','Retourné');changes.push({tracking:l.tracking,from:old,to:'Retourné'});}
+ const complete=received.length===pending.length;doc.status=complete?'Remis':'Partiellement remis';doc.completed_at=complete?at:null;doc.revision=Number(doc.revision||1)+1;doc.audit=doc.audit||[];doc.audit.unshift({id:(doc.audit[0]?.id||0)+1,actor:localUser.name,actor_id:localUser.id,action:complete?'Retour remis au vendeur (complet)':'Colis retour remis au vendeur',details:{trackings:received.map(l=>l.tracking),count:received.length,status:'Retourné',status_changes:changes},created_at:at});
+ return {ok:true,id:doc.id,reference:doc.reference,status:doc.status,revision:doc.revision,received:received.length,already_received:false};
+}
+function o24RpOfflineOpen(id){
+ let d;try{d=o24RpOfflineDetail(id)}catch(e){toast(e.message,true);return}
+ const remise=['En transit','Partiellement remis'].includes(d.status),cl=localUser.role==='client';
+ modal('Palette retour · '+d.reference,`<div class="pp-document-head"><div><span class="eyebrow orange">RETOUR · HUB → VENDEUR</span><h3>${esc(d.client_name||'Vendeur')}</h3><p>Départ : ${esc(d.source_name||'Hub')} · ${esc(d.transport||'Transport non renseigné')}</p><p>${d.tracking_code?'Code suivi : '+esc(d.tracking_code)+' · ':''}${d.lots?d.lots+' lot(s) · ':''}${opsDate(d.created_at)}</p></div>${tag(d.status)}</div><div class="pp-progress"><strong>${d.received}<small> / ${d.count}</small></strong><div><b>colis physiquement remis au vendeur</b><span>${d.remaining?d.remaining+' restant(s) à remettre':'Aucun colis restant'}</span></div></div>${remise?`<form id="o24-rp-offline-receive" class="pp-scan"><div class="form-error" role="alert"></div>${input('tracking','Scanner le tracking du colis remis au vendeur','','text',true,'maxlength="160" autocomplete="off" placeholder="Tracking ORIENTAL24 · lecteur USB ou saisie"')}<label class="pp-consent"><input type="checkbox" name="confirmed" required> ${cl?'Je confirme avoir physiquement reçu ce colis en retour.':'Je confirme que ce colis a physiquement été remis au vendeur '+esc(d.client_name||'')+'.'}</label><button class="btn primary" type="submit">${icon('check')}Confirmer la remise de ce colis</button></form>`:`<p class="form-hint">À la remise confirmée, le statut passe à Retourné. Les colis non facturés seront éligibles à la prochaine facture ; aucun paiement n’est créé automatiquement.</p>`}${simpleTable(['Tracking','Destinataire','Remise','Statut actuel'],d.lines.map(l=>[`<b>${esc(l.tracking)}</b>`,`${esc(l.recipient)}<span class="sub">${esc(l.city||'')}</span>`,l.received_at?`<span class="tag good">Remis</span><span class="sub">${opsDate(l.received_at)}</span>`:'À remettre',tag(l.current_status)]))}<h3 class="ops-subtitle">Historique de la palette</h3><div class="timeline">${d.audit.map(a=>`<div class="timeline-item"><b>${esc(a.action)}</b><small>${esc(a.actor||'—')} · ${opsDate(a.created_at)}</small>${a.details.trackings?`<p>${a.details.trackings.map(esc).join(' · ')}</p>`:''}</div>`).join('')}</div><p class="sub">La remise physique fait passer chaque colis reçu à Retourné. COD et frais restent inchangés ; Paid exige un règlement réel enregistré.</p>`,true);
+ const f=document.querySelector('#modal-root #o24-rp-offline-receive');if(!f)return;
+ f.addEventListener('submit',async e=>{e.preventDefault();const b=f.querySelector('[type=submit]'),err=f.querySelector('.form-error');if(b.disabled)return;b.disabled=true;err.style.display='none';try{const r=await api('/return-palettes/'+id+'/receive','POST',{tracking:String(f.elements.tracking.value||'').trim(),confirmed:!!f.elements.confirmed.checked,revision:d.revision,request_key:rpScKey()});await refresh();await renderView();if(r.already_received)toast('Ce colis est déjà marqué remis.');else toast('Remise confirmée · statut mis à jour : Retourné');o24RpOfflineOpen(id)}catch(e){err.textContent=e.message||'Réception impossible.';err.style.display='block'}finally{b.disabled=false}}, {once:true});
+}
+/* Vue « Palettes retour » hors serveur (démo) : expédition, suivi et confirmation vendeur. */
 function rpOfflineView(){
  localDemo.return_palettes=localDemo.return_palettes||[];
- const rows=localDemo.return_palettes.slice().reverse();
- const cta=`<button class="btn primary" onclick="rpScanStart()">${icon('scan')}Envoyer retour au scan</button>`;
- return heading('Palettes retour','Envoyez les retours du hub vers les vendeurs.',cta)
-  +`<div class="demo-notice">Démo autonome : le scan de préparation fonctionne en local — mêmes sons, mêmes contrôles (vendeur, semaine, réservation) — et les palettes créées restent dans ce navigateur.</div>`
-  +`<section class="card">${rows.length?simpleTable(['Palette / Vendeur','Hub départ / Transport','Colis','État','Actions'],rows.map(d=>[
-     `<b>${esc(d.reference)}</b><span class="sub">${esc(d.client_name||'')}</span>`,
+ const rows=localDemo.return_palettes.filter(d=>localUser.role==='admin'||(localUser.role==='client'&&Number(d.client_id)===Number(localUser.id))||(localUser.role==='agent'&&Number(d.destination_hub_id)===Number(localUser.agent_hub_id))).slice().reverse();
+ const creator=['admin','agent'].includes(localUser.role),cl=localUser.role==='client';
+ const cta=creator?`<button class="btn primary" onclick="rpScanStart()">${icon('scan')}Envoyer retour au scan</button>`:'';
+ const intro=cl?'Scannez chaque colis réellement reçu puis confirmez la remise. Le statut passe à Retourné au moment de cette confirmation.':'Expédiez les colis au vendeur ; le statut ne passe à Retourné qu’après confirmation de leur remise physique.';
+ return heading('Palettes retour',intro,cta)
+  +`<div class="demo-notice">Démo autonome : scan de préparation et confirmation de réception vendeur simulés localement. Les colis en transit restent réservés et hors de la prochaine facture jusqu’à leur réception.</div>`
+  +`<section class="card">${rows.length?simpleTable(['Palette / Vendeur','Hub départ / Transport','Colis remis','État','Actions'],rows.map(d=>[
+     `<button class="tracking" onclick="o24RpOfflineOpen(${d.id})">${esc(d.reference)}</button><span class="sub">${esc(d.client_name||'')}</span>`,
      `${esc(d.source_name||'')}<span class="sub">${esc(d.transport||'Transport non renseigné')}${d.lots?' · '+d.lots+' lot(s)':''}</span>`,
-     `${(d.lines||[]).length}`,
-     (typeof rpBadge==='function'?rpBadge(d.status):`<span class="tag">${esc(d.status)}</span>`),
-     (['Préparé','En transit','Partiellement remis'].includes(d.status)?`<button class="btn sm danger" onclick="rpRefuseAsk(${d.id},'${esc(d.reference)}',${d.revision||1})">Refuser</button>`:'<span class="sub">—</span>')])):empty('Aucune palette retour','Scannez des colis pour créer le premier retour.')}</section>`
-  +`<p class="form-hint">Sons : validé (aigu), refusé (grave), doublon, fin de lot — exactement les mêmes que la réception palette.</p>`;
+     `${(d.lines||[]).filter(l=>l.received_at).length} / ${(d.lines||[]).length}`,
+     tag(d.status),
+     `<button class="btn sm ${d.status==='Remis'?'':'primary'}" onclick="o24RpOfflineOpen(${d.id})">${['En transit','Partiellement remis'].includes(d.status)?(cl?'Confirmer la réception':'Ouvrir / remise'):'Consulter'} ${icon('arrow')}</button>${creator&&['Préparé','En transit','Partiellement remis'].includes(d.status)?` <button class="btn sm danger" onclick="rpRefuseAsk(${d.id},'${esc(d.reference)}',${d.revision||1})">Refuser</button>`:''}`])):empty('Aucune palette retour',creator?'Scannez des colis pour créer le premier retour.':'Aucun retour en attente.')}</section>`
+  +`<p class="form-hint">À la réception physique confirmée, le colis passe à Retourné. Le COD et les frais restent inchangés ; aucun règlement Paid n’est créé automatiquement.</p>`;
 }
 window.o24RpScanRoute=function(url,method,d){
  const u=new URL(url,'https://local.test'),parts=u.pathname.split('/').filter(Boolean),g=u.searchParams;
- if(parts[1]==='scan-lookup')return o24RpScanOfflineLookup(g.get('client_id'),g.get('hub_id'),g.get('tracking'));
+ if(parts[1]==='scan-lookup'&&method==='GET')return o24RpScanOfflineLookup(g.get('client_id'),g.get('hub_id'),g.get('tracking'));
  if(parts[1]==='scan-send'&&method==='POST')return o24RpScanOfflineSend(d||{});
+ if(parts.length===2&&/^\d+$/.test(parts[1])&&method==='GET')return o24RpOfflineDetail(parts[1]);
+ if(['receive','receive-all'].includes(parts[2])&&method==='POST')return o24RpOfflineReceive(parts[1],parts[2],d||{});
  if(parts[2]==='refuse'&&method==='POST')return o24RpScanOfflineRefuse(parts[1],(d||{}).reason,(d||{}).revision);
  return null;
 };
