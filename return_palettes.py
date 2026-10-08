@@ -1,6 +1,7 @@
 """Return palettes: hub -> vendor flows (« Envoyer retour »), reusing operational document locks.
-Physical return of Refusé/Retourné parcels back to their vendor. No invoice, payment or COD side effect:
-parcels keep their closing status, only their physical location is released from the hub.
+A parcel becomes « Retourné » only when its physical handover to the vendor is confirmed.
+Unbilled parcels then enter the next client invoice with the existing return fee; an existing
+invoice is never duplicated and no payment, COD, fee or invoice status is changed automatically.
 """
 import csv,io,json,hashlib,re
 from flask import request,jsonify,Response
@@ -194,6 +195,8 @@ def register_return_palettes(app,s):
             c.execute('BEGIN IMMEDIATE');d=body();fp,prior=replay(c,u,d,did,action)
             if prior:return jsonify(prior)
             doc=get(c,did,u);revision(d,doc);ls=lines(c,did);at=now()
+            if action in ('receive','receive-all') and d.get('confirmed') is not True:
+                raise Error('Confirmez la remise physique du colis au vendeur.')
             def line(trk):
                 t=text({'tracking':trk},'tracking',160,True)
                 l=next((x for x in ls if x['tracking']==t),None)
@@ -219,12 +222,17 @@ def register_return_palettes(app,s):
             received=[line(d.get('tracking'))] if action=='receive' else pending
             for l in received:
                 p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
-                if p['status'] not in ('Refusé','Retourné'):raise Error('L’état du colis '+l['tracking']+' a changé : '+p['status']+'.',409)
+                if not p or p['status']=='Livré':raise Error('Colis '+l['tracking']+' : un colis « Livré » ne peut pas être confirmé comme retour.',409)
+            status_changes=[]
             for l in received:
+                p=c.execute('SELECT status FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
+                old_status=p['status']
                 c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
-                c.execute('UPDATE parcels SET current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?',(at,l['parcel_id']))
-                event(c,l['parcel_id'],l['initial_status'],doc['reference']+' · retour physiquement remis au vendeur',u)
+                c.execute("UPDATE parcels SET status='Retourné',current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(at,l['parcel_id']))
+                note=doc['reference']+' · retour physiquement remis au vendeur · statut '+old_status+' → Retourné'
+                event(c,l['parcel_id'],'Retourné',note,u)
+                status_changes.append({'parcel_id':l['parcel_id'],'tracking':l['tracking'],'from':old_status,'to':'Retourné'})
             complete=len(received)==len(pending)
             c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Remis' if complete else 'Partiellement remis',at if complete else None,did))
-            audit(c,did,u,'Retour remis au vendeur (complet)' if action=='receive-all' else 'Colis retour remis au vendeur',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received)})
+            audit(c,did,u,'Retour remis au vendeur (complet)' if action=='receive-all' else 'Colis retour remis au vendeur',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'status':'Retourné','status_changes':status_changes})
             return result(c,u,d,fp,get(c,did,u),received=len(received),already_received=False)

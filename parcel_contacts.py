@@ -14,6 +14,11 @@ def register_parcel_contacts(app,services):
         row=c.execute('''SELECT ci.name city,cl.name client,cl.company company,
             dr.name driver,dr.phone driver_phone,dr.active driver_active,
             (SELECT label FROM ops_reasons WHERE code=p.reason_code) reason_label,
+            (SELECT status FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_status,
+            (SELECT requested_recipient FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_name,
+            (SELECT COALESCE(NULLIF(rc.requested_phone,''),p.phone) FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_phone,
+            (SELECT COALESCE(NULLIF(rc.requested_address,''),p.address) FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_address,
+            (SELECT COALESCE(ci.name,(SELECT name FROM cities WHERE id=p.city_id)) FROM recipient_change_requests rc LEFT JOIN cities ci ON ci.id=rc.requested_city_id WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_city,
             sp.contact_id support_contact_id,COALESCE(sp.revision,0) support_revision,
             sc.name support_name,sc.phone support_phone,sc.active support_active
             FROM parcels p JOIN cities ci ON ci.id=p.city_id JOIN users cl ON cl.id=p.client_id

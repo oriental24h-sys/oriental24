@@ -22,6 +22,11 @@ def register_client_finance(app,services):
         CREATE TABLE IF NOT EXISTS client_payment_audit(id INTEGER PRIMARY KEY,invoice_id INTEGER NOT NULL REFERENCES invoices(id),receipt_id INTEGER REFERENCES client_receipts(id),action TEXT NOT NULL,details TEXT NOT NULL,actor_id INTEGER REFERENCES users(id),created_at TEXT NOT NULL);
         ''')
     def audit(c,iid,rid,action,details,uid):c.execute('INSERT INTO client_payment_audit(invoice_id,receipt_id,action,details,actor_id,created_at) VALUES(?,?,?,?,?,?)',(iid,rid,action,json.dumps(details,ensure_ascii=False),uid,now()))
+    def invoice_event(c,iid,u,status,note):
+        parcels=c.execute('SELECT id FROM parcels WHERE invoice_id=? ORDER BY id',(iid,)).fetchall()
+        for p in parcels:
+            # Invoice history belongs in the parcel timeline without generating a push per parcel.
+            c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(p['id'],u['id'],status,note,now()))
     def ensure(c,i):
         if c.execute('SELECT 1 FROM client_invoice_totals WHERE invoice_id=?',(i['id'],)).fetchone():return
         total=cent(i['total']);c.execute('INSERT INTO client_invoice_totals(invoice_id,total_cents,created_at) VALUES(?,?,?)',(i['id'],total,now()))
@@ -33,12 +38,35 @@ def register_client_finance(app,services):
         total=c.execute('SELECT total_cents FROM client_invoice_totals WHERE invoice_id=?',(i['id'],)).fetchone()[0]
         paid=c.execute('SELECT COALESCE(sum(amount_cents),0) FROM client_receipts WHERE invoice_id=? AND voided_at IS NULL',(i['id'],)).fetchone()[0]
         return {**i,'total_cents':total,'paid_cents':paid,'remaining_cents':abs(total)-paid,'direction':'Vers le client' if total>0 else 'Dû par le client' if total<0 else 'Sans flux'}
+    def invoice_history_backfill(c,i):
+        i=dict(i);reference=f'FAC-{i["id"]:04d}'
+        actor=c.execute("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
+        if not actor:return
+        parcels=c.execute('SELECT id FROM parcels WHERE invoice_id=? ORDER BY id',(i['id'],)).fetchall()
+        created_note=f'Invoice Created N° : {reference}'
+        paid_note=f'N° : {reference} · Invoice : Paid'
+        for p in parcels:
+            created=c.execute('''SELECT 1 FROM events WHERE parcel_id=? AND
+                (note LIKE ? OR note LIKE ?) LIMIT 1''',
+                (p['id'],f'%{reference}%générée%',f'%{created_note}%')).fetchone()
+            if not created:
+                c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',
+                          (p['id'],actor['id'],'Invoice',created_note+' · Historique de facturation',i.get('created_at') or now()))
+            if i.get('status')=='Réglée':
+                paid=c.execute("SELECT 1 FROM events WHERE parcel_id=? AND status='Invoice : Paid' AND note LIKE ? LIMIT 1",
+                               (p['id'],f'%{paid_note}%')).fetchone()
+                if not paid:
+                    c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',
+                              (p['id'],actor['id'],'Invoice : Paid',paid_note+' · ancien statut réglé importé, justificatif bancaire non disponible',i.get('paid_at') or now()))
     with conn() as c:
-        for row in c.execute('SELECT * FROM invoices').fetchall():ensure(c,row)
+        for row in c.execute('SELECT * FROM invoices').fetchall():
+            ensure(c,row)
+            invoice_history_backfill(c,row)
     def sync(c,iid):
         i=info(c,c.execute('SELECT * FROM invoices WHERE id=?',(iid,)).fetchone())
         status='Réglée' if not i['remaining_cents'] else 'Partiellement réglée' if i['paid_cents'] else 'À régler'
         c.execute('UPDATE invoices SET status=?,paid_at=? WHERE id=?',(status,now() if status=='Réglée' else None,iid))
+        return status,i
     def history(c,iid):
         return {'receipts':[dict(r) for r in c.execute('SELECT r.*,u.name actor FROM client_receipts r LEFT JOIN users u ON u.id=r.actor_id WHERE invoice_id=? ORDER BY r.id DESC',(iid,))], 'payment_audit':[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM client_payment_audit a LEFT JOIN users u ON u.id=a.actor_id WHERE invoice_id=? ORDER BY a.id DESC',(iid,))]}
     def add(c,i,u,d):
@@ -59,7 +87,13 @@ def register_client_finance(app,services):
             if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',day) or date.fromisoformat(day)>datetime.now(ZoneInfo('Africa/Casablanca')).date():raise ValueError()
         except ValueError:raise Error('Date effective invalide ou future.')
         rid=c.execute('INSERT INTO client_receipts(invoice_id,amount_cents,method,reference,payment_date,created_at,actor_id,request_key,payload_hash) VALUES(?,?,?,?,?,?,?,?,?)',(i['id'],amount,method,ref,day,now(),u['id'],key,h)).lastrowid
-        audit(c,i['id'],rid,'règlement déclaré',{'amount_cents':amount,'direction':state['direction']},u['id']);sync(c,i['id'])
+        audit(c,i['id'],rid,'règlement déclaré',{'amount_cents':amount,'direction':state['direction']},u['id'])
+        status,_=sync(c,i['id'])
+        amount_label=f'{amount/100:.2f}'.replace('.',',')
+        tag='Invoice : Paid' if status=='Réglée' else 'Invoice'
+        note=f'N° : FAC-{i["id"]:04d} · {tag} · règlement {amount_label} MAD via {method} · référence {ref}'
+        if status=='Réglée':note+=' · facture entièrement réglée'
+        invoice_event(c,i['id'],u,tag,note)
         return {'ok':True,'id':rid,'already_recorded':False}
     def legacy_settle(c,i,u):
         s=info(c,i)
@@ -82,7 +116,11 @@ def register_client_finance(app,services):
         if not r:raise Error('Règlement introuvable.',404)
         if r['voided_at']:return dict(ok=True,already_voided=True)
         c.execute('UPDATE client_receipts SET voided_at=?,voided_by=?,void_reason=? WHERE id=?',(now(),u['id'],reason,rid))
-        audit(c,r['invoice_id'],rid,'déclaration annulée',{'reason':reason},u['id']);sync(c,r['invoice_id'])
+        audit(c,r['invoice_id'],rid,'déclaration annulée',{'reason':reason},u['id'])
+        sync(c,r['invoice_id'])
+        i=c.execute('SELECT id FROM invoices WHERE id=?',(r['invoice_id'],)).fetchone()
+        note=f'Règlement annulé sur la facture FAC-{i["id"]:04d} · {reason}'
+        invoice_event(c,r['invoice_id'],u,'Invoice',note)
         return dict(ok=True,already_voided=False)
 
     services['void_client_receipt']=void_client_receipt
