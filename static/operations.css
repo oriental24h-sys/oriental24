@@ -1175,3 +1175,10 @@
     letter-spacing: 1px;
   }
 }
+
+.shipping-label .parcel-policy-badges{margin:5px 0 3px;gap:4px}
+.shipping-label .parcel-policy-tag{font-size:7px;line-height:1.2;padding:3px 6px;border-radius:999px;white-space:normal}
+@media print{
+  #print-root .shipping-label .parcel-policy-badges{margin:1mm 0}
+  #print-root .shipping-label .parcel-policy-tag{font-size:6pt;padding:.5mm 1.2mm}
+}

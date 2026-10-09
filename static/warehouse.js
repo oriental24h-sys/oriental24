@@ -20,7 +20,7 @@ window.warehousePanel=async()=>{
     <td>${m.state!=='finie'?`<button class="btn sm primary" type="button" onclick="whMissionFinish(${m.id})">✓ Terminée</button>`:''}</td></tr>`).join('');
   const rRows=(recs.rows||[]).slice(0,8).map(r=>`<tr><td class="mono">${esc(r.tracking)}</td>
     <td><span class="tag">${esc(r.condition)}</span></td><td>${r.score}/100</td>
-    <td class="muted" style="font-size:11px">${esc(r.note||'')}</td><td class="muted" style="font-size:11px">${esc(r.photo_ref||'')}</td></tr>`).join('');
+    <td class="muted" style="font-size:11px" data-no-translate>${esc(r.note||'')}</td><td class="muted" style="font-size:11px">${esc(r.photo_ref||'')}</td></tr>`).join('');
   const lRows=(log.rows||[]).slice(0,6).map(r=>`<tr><td><span class="tag">${esc(r.direction)}</span></td>
     <td class="mono" style="font-size:10px">${esc(String(r.checksum).slice(0,16))}…</td><td>${r.items}</td><td>${r.merged}</td>
     <td class="muted" style="font-size:11px">${esc(String(r.created_at).slice(0,16))}</td></tr>`).join('');

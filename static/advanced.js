@@ -8,7 +8,7 @@ window.techPanel=async()=>{
   catch(e){toast(e.message||'Technologies indisponibles',true);return}
   const m=ins.model||{},fc=(ins.forecasts&&ins.forecasts.rows)||[],risk=ins.risk||[],co2=ins.co2||{},cnt=ins.counters||{};
   const obRows=(ob.rows||[]).slice(0,8).map(r=>`<tr><td class="mono">${esc(r.tracking)}</td><td><span class="tag">${esc(r.channel)}</span></td>
-    <td style="font-size:11px;max-width:220px">${esc(r.text)}</td><td style="white-space:nowrap">
+    <td style="font-size:11px;max-width:220px" data-no-translate>${esc(r.text)}</td><td style="white-space:nowrap">
     ${r.links&&r.links.whatsapp?`<a class="btn sm" target="_blank" rel="noopener" href="${r.links.whatsapp}">WhatsApp</a> <a class="btn sm" target="_blank" rel="noopener" href="${r.links.sms}">SMS</a>`:''}
     ${r.status==='pending'?`<button class="btn sm" type="button" onclick="techOutboxSent(${r.id})">✓ Envoyé</button>`:'<span class="tag">envoyé</span>'}</td></tr>`).join('');
   const fcBars=fc.map(r=>`<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin:2px 0"><span class="muted" style="width:90px">${esc(r.date)}</span>
@@ -239,7 +239,7 @@ window.smartPaySend=async(id)=>{
   const method=document.getElementById('pay-method').value;
   try{const r=await api('/parcels/'+id+'/payment','POST',{amount,method});
     closeModal();
-    modal('Demande '+r.reference,`<p style="margin:6px 0">${esc(r.text)}</p>
+    modal('Demande '+r.reference,`<p style="margin:6px 0" data-no-translate>${esc(r.text)}</p>
      <div class="flex" style="gap:6px"><a class="btn primary sm" target="_blank" rel="noopener" href="${r.links.whatsapp}">Envoyer WhatsApp</a>
      <a class="btn sm" target="_blank" rel="noopener" href="${r.links.sms}">Envoyer SMS</a></div>`,true);}
   catch(e){toast(e.message,true)}

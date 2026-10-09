@@ -35,7 +35,7 @@ function paletteConsoleView(d){
   const fusel=r.kind==='partner'&&['En transit','Partiellement reçu'].includes(r.status)&&f.tab!=='retours';
   return `<tr><td>${fusel?`<input type="checkbox" class="pc-fus" value="${r.id}" ${pcSel.has(r.id)?'checked':''} onchange="pcCount()">`:''}</td>
   <td><b class="pc-src">${esc(r.source_name)}</b><span class="sub mono">${esc(r.reference)}</span>${r.kind==='partner'&&r.client_name&&r.client_name!==r.source_name?`<span class="sub">${esc(r.client_name)}</span>`:''}${fusel?`<span class="sub pc-fusok">éligible Fusionner</span>`:''}</td>
-  <td>${esc(r.destination_name)}${r.note?`<span class="sub">${esc(r.note)}</span>`:''}</td>
+  <td>${esc(r.destination_name)}${r.note?`<span class="sub" data-no-translate>${esc(r.note)}</span>`:''}</td>
   <td>${esc(r.transport||'—')}</td>
   <td>${pcChip(r)}</td>
   <td>${r.track_ref?`<span class="mono">${esc(r.track_ref)}</span>`:'<span class="sub">—</span>'}</td>

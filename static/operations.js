@@ -246,7 +246,7 @@ function stockOperationsView(products, requests, movements) {
                 date(m.created_at),
                 `<strong>${esc(m.product)}</strong><span class="sub">${esc(m.company)}</span>`,
                 `<span class="tag ${m.delta > 0 ? "good" : "warn"}">${m.delta > 0 ? "+" : ""}${m.delta}</span>`,
-                `<span class="wrap-cell">${esc(m.note)}</span>`,
+                `<span class="wrap-cell" data-no-translate>${esc(m.note)}</span>`,
                 esc(m.actor),
               ]),
             )}`
@@ -362,7 +362,7 @@ function cancelStockRequest(id) {
 }
 
 function labelMarkup(p) {
-  return `<article class="shipping-label"><header><img src="/static/wordmark.png" alt="ORIENTAL24"><span>LIVRAISON À DOMICILE</span></header><div class="label-destination"><div><span>DESTINATION</span><h2>${esc(p.city)}</h2><p>${esc(p.tracking)}</p></div><img src="${p.qr}" alt="QR de suivi ${esc(p.tracking)}"></div><div class="label-address"><span>DESTINATAIRE</span><h3>${esc(p.recipient)}</h3><strong>${esc(p.phone)}</strong><p>${esc(p.address)}</p></div><div class="label-cod"><span>MONTANT À COLLECTER</span><strong>${money(p.amount)} <small>MAD</small></strong></div><div class="label-sender"><span>EXPÉDITEUR</span><b>${esc(p.company || p.client)}</b><p>${esc(p.product || "Colis")}</p>${p.note ? `<p class="label-note">${esc(p.note)}</p>` : ""}</div><div class="label-barcode"><img src="${p.barcode}" alt="Code 128 ${esc(p.tracking)}"></div><footer><span>${date(p.created_at)}</span><span>QR & Code 128 · Référence de suivi</span></footer></article>`;
+  return `<article class="shipping-label"><header><img src="/static/wordmark.png" alt="ORIENTAL24"><span>LIVRAISON À DOMICILE</span></header><div class="label-destination"><div><span>DESTINATION</span><h2>${esc(p.city)}</h2><p>${esc(p.tracking)}</p></div><img src="${p.qr}" alt="QR de suivi ${esc(p.tracking)}"></div><div class="label-address"><span>DESTINATAIRE</span><h3>${esc(p.recipient)}</h3><strong>${esc(p.phone)}</strong><p>${esc(p.address)}</p></div><div class="label-cod"><span>MONTANT À COLLECTER</span><strong>${money(p.amount)} <small>MAD</small></strong></div><div class="label-sender"><span>EXPÉDITEUR</span><b>${esc(p.company || p.client)}</b>${parcelPolicyBadges(p)}<p>${esc(p.product || "Colis")}</p>${p.note ? `<p class="label-note">${esc(p.note)}</p>` : ""}</div><div class="label-barcode"><img src="${p.barcode}" alt="Code 128 ${esc(p.tracking)}"></div><footer><span>${date(p.created_at)}</span><span>QR & Code 128 · Référence de suivi</span></footer></article>`;
 }
 async function previewLabels(ids) {
   if (!ids.length || ids.length > 50) {

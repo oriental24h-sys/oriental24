@@ -2390,3 +2390,17 @@ td strong {
     display: none;
   }
 }
+
+/* Commande : règles d'ouverture et d'échange, visibles dans les fiches et les listes. */
+.parcel-policy-badges{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px}
+.parcel-policy-badges .parcel-policy-tag{font-size:9px;line-height:1.25;padding:3px 7px;border-radius:999px;white-space:normal}
+.table-wrap .parcel-policy-badges{max-width:190px}
+.parcel-create-flags{display:grid;gap:8px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#fafbfd}
+.parcel-create-flag{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:4px 0}
+.parcel-create-flag+.parcel-create-flag{border-top:1px solid var(--line);padding-top:12px}
+.parcel-create-flag strong{display:block;color:var(--navy);font-size:12px;line-height:1.4}
+.parcel-create-flag small{display:block;margin-top:4px;color:var(--muted);font-size:10px;line-height:1.5}
+.parcel-create-flag .switch{flex:0 0 auto}
+.global-refresh-button.is-refreshing .ico,.da-app-refresh.is-refreshing .ico{animation:o24-refresh-spin .8s linear infinite}
+@keyframes o24-refresh-spin{to{transform:rotate(360deg)}}
+@media(max-width:520px){.parcel-create-flag{align-items:flex-start}.parcel-create-flag .switch{margin-top:2px}}

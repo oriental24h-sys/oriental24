@@ -28,7 +28,7 @@ async function ppRenderIncidents(ctx,id,d){
  const isCompany=S.user.role==='client';
  const item=i=>{const own=i.kind!=='missing';
   return `<article class="pp-incident"><div class="pp-incident-head">${rxKindTag(i.kind)}<b>${esc(i.tracking)}</b><span class="tag ${i.status==='Traité'?'good':i.status==='Réponse société'?'blue':'warn'}">${esc(i.status)}</span></div>
-  <p>${esc(i.note)}</p><small>Déclaré par ${esc(i.creator)} · ${esc(opsDate(i.created_at))}</small>
+  <p data-no-translate>${esc(i.note)}</p><small>Déclaré par <span data-no-translate>${esc(i.creator)}</span> · ${esc(opsDate(i.created_at))}</small>
   ${i.has_photo?`<button class="btn sm" onclick="rxIncidentPhoto(${i.id})">${icon('download')}Photo</button>`:''}
   ${i.company_response?`<div class="pp-thread"><b>Réponse société</b><small>${esc(opsDate(i.responded_at))}</small><p>${esc(i.company_response)}</p></div>`:''}
   ${i.resolution?`<div class="pp-thread"><b>Décision : ${i.kind==='damaged'?(i.resolution==='release'?'colis débloqué pour livraison':'blocage conservé'):'dossier clôturé'}</b>${i.resolution_note?`<p>${esc(i.resolution_note)}</p>`:''}<small>${esc(opsDate(i.resolved_at))}</small></div>`:''}

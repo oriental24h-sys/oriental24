@@ -66,20 +66,29 @@ const paths = {
 function icon(n, cls = "") {
   return `<svg class="ico ${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[n] || paths.box}"/></svg>`;
 }
+const uiLocale = () => ({ en: "en-GB", ar: "ar-MA" }[window.o24CurrentLanguage?.()] || "fr-MA");
 const money = (v) =>
-  Number(v || 0).toLocaleString("fr-MA", {
+  Number(v || 0).toLocaleString(uiLocale(), {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-const int = (v) => Number(v || 0).toLocaleString("fr-FR");
+const int = (v) => Number(v || 0).toLocaleString(uiLocale());
 const date = (v) =>
   v
-    ? new Date(v).toLocaleDateString("fr-FR", {
+    ? new Date(v).toLocaleDateString(uiLocale(), {
         day: "2-digit",
         month: "short",
         year: "numeric",
       })
     : "—";
+const localDayKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+function isParcelTreatedToday(p) {
+  return ["Livré", "Refusé", "Annulé"].includes(p?.status) ||
+    String(p?.status_updated_at || "").slice(0, 10) === localDayKey();
+}
 const initials = (n) =>
   (n || "")
     .split(" ")
@@ -110,15 +119,29 @@ function tag(s) {
             : "";
   return `<span class="tag ${cls}">${esc(s)}</span>`;
 }
+function parcelPolicyBadges(p, compact = false) {
+  if (!p) return "";
+  const notAllowed = p.open_allowed !== undefined && p.open_allowed !== null
+    ? Number(p.open_allowed) === 0
+    : Boolean(p.not_allowed_to_open);
+  const exchange = p.is_exchange !== undefined && p.is_exchange !== null
+    ? Number(p.is_exchange) === 1
+    : Boolean(p.exchange);
+  const badges = [];
+  if (notAllowed) badges.push(`<span class="tag bad parcel-policy-tag" title="Le destinataire ne doit pas ouvrir le colis avant le paiement.">${compact ? "Ne pas ouvrir" : "Non autorisé à ouvrir"}</span>`);
+  if (exchange) badges.push(`<span class="tag blue parcel-policy-tag" title="Commande avec échange">${compact ? "Échange" : "Échange prévu"}</span>`);
+  return badges.length ? `<div class="parcel-policy-badges">${badges.join("")}</div>` : "";
+}
 let modalCleanup = null;
 let S = null,
   view = "dashboard",
   settingsTab = "cities",
   listPage = 1,
-  filters = { q: "", status: "", city: "", from: "", to: "" },
+  filters = { q: "", status: "", city: "", from: "", to: "", treatment: "" },
   supportOrderFilter = { q: "", status: "", city: "" },
   supportOrderPage = 1,
   supportPollTimer = null,
+  refreshBusy = false,
   publicCities = [];
 async function api(url, method = "GET", data, background = false) {
   const r = await fetch("/api" + url, {
@@ -476,7 +499,7 @@ function shell() {
       })
       .join(
         "",
-      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon(u.role==='support'?'headset':'help')}<b>${u.role==='support'?'Suivi des commandes':'Besoin d’un coup de main ?'}</b></div>${u.role==='support'?'Vous voyez uniquement les commandes affectées à vos villes.':'Notre équipe vous accompagne.'}<button onclick="${u.role==='support'?'refreshSupportOrders()':"navigate('tickets')"}">${u.role==='support'?'Actualiser le suivi →':'Ouvrir les réclamations →'}</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : u.role}${icon("chevron")}<strong id="breadcrumb-title">${titles[view]}</strong></div></div><div class="top-actions">${u.role==='support'?'':`<button class="global-search" onclick="navigate('parcels').then(()=>$('#parcel-search')?.focus())">${icon("search")}Rechercher un colis… <kbd>⌘ K</kbd></button>`}<span class="flex lang" style="font-size:10px;gap:5px">${icon("globe")}FR</span>${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${initials(u.name)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
+      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon(u.role==='support'?'headset':'help')}<b>${u.role==='support'?'Suivi des commandes':'Besoin d’un coup de main ?'}</b></div>${u.role==='support'?'Vous voyez uniquement les commandes affectées à vos villes.':'Notre équipe vous accompagne.'}<button onclick="${u.role==='support'?'refreshSupportOrders()':"navigate('tickets')"}">${u.role==='support'?'Actualiser le suivi →':'Ouvrir les réclamations →'}</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : u.role}${icon("chevron")}<strong id="breadcrumb-title">${titles[view]}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':`<button class="global-search" onclick="navigate('parcels').then(()=>$('#parcel-search')?.focus())">${icon("search")}Rechercher un colis… <kbd>⌘ K</kbd></button>`}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${initials(u.name)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
 }
 async function navigate(v) {
   if (!S) return;
@@ -501,7 +524,8 @@ function footer() {
   return `<footer class="footer"><span>© ${new Date().getFullYear()} ORIENTAL24. Tous droits réservés.</span><span><i class="status-dot"></i>${RUNTIME.demo?"Version de démonstration · Données fictives":"Session sécurisée côté serveur · ORIENTAL24"}</span></footer>`;
 }
 async function renderView(background = false) {
-  document.title = (titles[view] || "Mon espace") + " — ORIENTAL24";
+  const pageTitle = titles[view] || "Mon espace";
+  document.title = `${window.o24Translate ? window.o24Translate(pageTitle) : pageTitle} — ORIENTAL24`;
   const current = view, owner = S?.user?.id;
   try {
     let html = "";
@@ -653,6 +677,10 @@ async function renderView(background = false) {
       ) + footer();
   }
 }
+window.addEventListener("o24:languagechange", () => {
+  if (!S || !["dashboard", "parcels", "driver-app"].includes(view)) return;
+  renderView(true);
+});
 function showAnnouncement() {
   modal(
     "Actualités ORIENTAL24",
@@ -672,7 +700,7 @@ function lineChart() {
       String(d.getDate()).padStart(2, "0"),
     ].join("-");
     return {
-      label: d.toLocaleDateString("fr-FR", { weekday: "short" }),
+      label: d.toLocaleDateString(uiLocale(), { weekday: "short" }),
       all: S.parcels.filter((p) => p.created_at.startsWith(key)).length,
       del: S.parcels.filter(
         (p) => p.created_at.startsWith(key) && p.status === "Livré",
@@ -834,18 +862,34 @@ function dashboard() {
       isDriver
         ? "Votre tournée, vos colis et vos encaissements en un coup d’œil."
         : "Voici ce qui se passe chez ORIENTAL24 aujourd’hui.",
-      `<span class="date-pill">${icon("calendar")}${new Date().toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}</span>${!isDriver ? `<button class="btn primary" onclick="newParcel()">${icon("plus")}Nouveau colis</button>` : `<button class="btn primary" onclick="navigate('parcels')">${icon("truck")}Ma tournée</button>`}`,
+      `<span class="date-pill">${icon("calendar")}${new Date().toLocaleDateString(uiLocale(), { day: "numeric", month: "long", year: "numeric" })}</span>${!isDriver ? `<button class="btn primary" onclick="newParcel()">${icon("plus")}Nouveau colis</button>` : `<button class="btn primary" onclick="navigate('parcels')">${icon("truck")}Ma tournée</button>`}`,
     ) +
     `<section class="hero-banner"><div><div class="eyebrow">Votre partenaire de proximité</div><h2>L’Oriental, plus proche à chaque livraison.</h2><p>${esc(S.settings.announcement || "Suivez vos expéditions et accompagnez votre activité, au même endroit.")}</p></div>${routeArt()}</section><section class="stats">${stat("Total des colis", int(ps.length), "", "box", "", `${icon("box")}Dans votre périmètre`)}${stat("Colis en cours", int(active.length), "", "truck", "blue", `${icon("clock")}Colis non clôturés`)}${stat("Colis livrés", int(del.length), "", "checkcircle", "green", `<span class="green">${icon("up")} ${rate}%</span> du total des colis`)}${stat("Montant collecté", money(cod), "MAD", "wallet", "purple", `${icon("wallet")}COD des colis livrés`)}</section>${(() => { const tried = ps.filter((p) => ["Livré", "Retourné", "Refusé"].includes(p.status)); const tauxL = tried.length ? Math.round((del.length / tried.length) * 100) : null; const avgH = del.length ? Math.round(del.reduce((n, p) => n + (new Date(p.updated_at) - new Date(p.created_at)) / 3600000, 0) / del.length) : null; const attente = active.reduce((n, p) => n + (+p.amount || 0), 0); return `<section class="kpi-grid">${stat("Taux de livraison", tauxL === null ? "—" : tauxL + "%", "", "check", tauxL !== null && tauxL >= 80 ? "green" : "", `${icon("box")}Sur les colis au résultat définitif`)}${stat("Délai moyen de livraison", avgH === null ? "—" : avgH >= 24 ? Math.round(avgH / 24) + " j" : avgH + " h", "", "clock", "blue", `${icon("clock")}De la création au « Livré »`)}${stat("COD encaissé", money(cod), "MAD", "wallet", "", `${icon("checkcircle")}Somme des montants livrés`)}${stat("COD en attente", money(attente), "MAD", "truck", "", `${icon("clock")}Sur les colis encore ouverts`)}</section>`; })()}<section class="two-col"><article class="card"><div class="card-head"><div><h3>Activité des expéditions</h3><p>Par date de création · 7 derniers jours</p></div><div class="chart-legend"><span><i class="dot"></i>Créés</span><span><i class="dot navy"></i>Livrés</span></div></div><div class="chart-wrap">${lineChart()}</div></article><article class="card"><div class="card-head"><div><h3>Vos principales destinations</h3><p>Répartition des colis par ville</p></div>${icon("pin")}</div><div class="city-bars">${cities.map((c) => `<div class="city-row"><div class="flex between"><span>${esc(c.name)}</span><span class="muted">${c.count} colis <b style="color:#53667e;margin-left:10px;font-weight:500">${Math.round((c.count / ps.length) * 100)}%</b></span></div><div class="bar"><span style="width:${(c.count / Math.max(...cities.map((c) => c.count))) * 100}%"></span></div></div>`).join("") || empty("Pas encore de destination", "Ajoutez votre premier colis.")}</div></article></section><section class="card"><div class="card-head"><div><h3>${isDriver ? "Mes derniers colis" : "Derniers colis"}</h3><p>Les dernières expéditions de votre activité</p></div><button class="section-link" onclick="navigate('parcels')">Voir tous les colis ${icon("arrow")}</button></div>${parcelTable(ps.slice(0, 5), false)}<div class="table-footer"><span>${Math.min(ps.length, 5)} colis sur ${ps.length}</span><span>Mise à jour à l’ouverture de la page <button class="icon-btn" onclick="reloadView()" aria-label="Actualiser">${icon("refresh")}</button></span></div></section>`
   );
 }
 async function reloadView() {
+  if (!S || refreshBusy) return;
+  refreshBusy = true;
+  const setBusy = (busy) => document.querySelectorAll(".global-refresh-button,.da-app-refresh").forEach((button) => {
+    button.disabled = busy;
+    button.setAttribute("aria-busy", String(busy));
+    button.classList.toggle("is-refreshing", busy);
+  });
+  setBusy(true);
   try {
-    await refresh();
-    await renderView();
+    if (view === "driver-app" && S.user.role === "livreur") {
+      // The driver-app renderer refreshes bootstrap itself.
+      await renderView();
+    } else {
+      await refresh();
+      await renderView();
+    }
     toast("Données actualisées");
   } catch (e) {
     toast(e.message, true);
+  } finally {
+    refreshBusy = false;
+    setBusy(false);
   }
 }
 function parcelTable(rows, selectable = true) {
@@ -854,7 +898,14 @@ function parcelTable(rows, selectable = true) {
       "Aucun colis trouvé",
       "Essayez d’autres filtres ou ajoutez un nouveau colis.",
     );
-  return `${S.user.role === "livreur" && view !== "print" ? driverCards(rows) : ""}<div class="table-wrap ${S.user.role === "livreur" && view !== "print" ? "driver-desktop-table" : ""}"><table><thead><tr>${selectable ? '<th style="width:30px"><input type="checkbox" style="width:13px" aria-label="Sélectionner tous" onchange="document.querySelectorAll(\'.parcel-select\').forEach(x=>x.checked=this.checked)"></th>' : ""}<th>Référence</th><th>Destinataire</th><th>Destination</th><th>Montant COD</th><th>Statut</th><th>${S.user.role === "client" ? "Livreur" : "Client / Boutique"}</th><th></th></tr></thead><tbody>${rows.map((p) => `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span></td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${S.user.role === "client" && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(S.user.role === "client" ? p.driver || "Non affecté" : p.company || p.client)}${view==='print'||!p.city_support_name?'':`<span class="sub">Support : ${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}</span>`}</td><td><div class="parcel-row-actions">${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`).join("")}</tbody></table></div>`;
+  const isAdmin = S.user.role === "admin";
+  const isClient = S.user.role === "client";
+  return `${S.user.role === "livreur" && view !== "print" ? driverCards(rows) : ""}<div class="table-wrap ${S.user.role === "livreur" && view !== "print" ? "driver-desktop-table" : ""}"><table><thead><tr>${selectable ? '<th style="width:30px"><input type="checkbox" style="width:13px" aria-label="Sélectionner tous" onchange="document.querySelectorAll(\'.parcel-select\').forEach(x=>x.checked=this.checked)"></th>' : ""}<th>Référence</th><th>Destinataire</th><th>Destination</th><th>Montant COD</th><th>Statut</th><th>${isClient ? "Livreur" : "Client / Boutique"}</th>${isAdmin ? "<th>Livreur / Agence</th>" : ""}<th></th></tr></thead><tbody>${rows.map((p) => {
+    const driverCell = p.driver
+      ? `<strong>${esc(p.driver)}</strong>`
+      : `<span class="tag ${p.driver_returned ? "warn" : "info"}">${p.driver_returned ? "Retourné au hub" : "À l’agence"}</span>`;
+    return `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span>${parcelPolicyBadges(p, true)}</td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${isClient && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(isClient ? p.driver || "Non affecté" : p.company || p.client)}${view==='print'||!p.city_support_name?'':`<span class="sub">Support : ${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}</span>`}</td>${isAdmin ? `<td>${driverCell}</td>` : ""}<td><div class="parcel-row-actions">${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`;
+  }).join("")}</tbody></table></div>`;
 }
 function parcelsView() {
   const create = S.user.role !== "livreur";
@@ -864,7 +915,7 @@ function parcelsView() {
       "Chaque colis a son histoire. Retrouvez-la ici.",
       `<a class="btn export-btn" href="/api/export">${icon("download")}Exporter CSV</a>${create ? `<button class="btn import-trigger" onclick="openImports()">${icon("upload")}Importer</button>` : ""}${create ? `<button class="btn primary" onclick="newParcel()">${icon("plus")}Nouveau colis</button>` : ""}`,
     ) +
-    `<section class="card"><div class="tabs"><button class="active">${S.user.role === "livreur" ? "Mes colis assignés" : "Tous les colis"} <span class="tag" style="margin-left:6px">${S.parcels.length}</span></button><button onclick="filters.status='En livraison';$('#status-filter').value=filters.status;drawParcelTable()">En livraison</button><button onclick="filters.status='Livré';$('#status-filter').value=filters.status;drawParcelTable()">Livrés</button></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="parcel-search" placeholder="Référence, nom, téléphone…" value="${esc(filters.q)}" oninput="filters.q=this.value;listPage=1;drawParcelTable()"></div><select id="status-filter" aria-label="Filtrer par statut" onchange="filters.status=this.value;listPage=1;drawParcelTable()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option ${s === filters.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select aria-label="Filtrer par ville" onchange="filters.city=this.value;listPage=1;drawParcelTable()"><option value="">Toutes les villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === filters.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div><button class="btn sm" onclick="openScanner()">${icon("scan")}Scanner</button><button class="btn sm" onclick="printSelected()">${icon("print")}Étiquettes</button>${S.user.role === "admin" || (S.user.role === "livreur" && S.users.some((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active)) ? `<button class="btn sm" onclick="bulkAssign()" title="Affectation en masse des colis cochés">${icon("user")}Affecter</button>` : ""}<button class="icon-btn" onclick="filters={q:'',city:'',status:'',from:'',to:''};listPage=1;renderView()" title="Réinitialiser les filtres">${icon("refresh")}</button></div><div id="parcel-table"></div></section>`
+    `<section class="card"><div class="tabs"><button class="active">${S.user.role === "livreur" ? "Mes colis assignés" : "Tous les colis"} <span class="tag" style="margin-left:6px">${S.parcels.length}</span></button><button onclick="filters.status='En livraison';$('#status-filter').value=filters.status;drawParcelTable()">En livraison</button><button onclick="filters.status='Livré';$('#status-filter').value=filters.status;drawParcelTable()">Livrés</button></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="parcel-search" placeholder="Référence, nom, téléphone…" value="${esc(filters.q)}" oninput="filters.q=this.value;listPage=1;drawParcelTable()"></div><select id="status-filter" aria-label="Filtrer par statut" onchange="filters.status=this.value;listPage=1;drawParcelTable()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option value="${esc(s)}" ${s === filters.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select id="treatment-filter" aria-label="Statut de traitement" onchange="filters.treatment=this.value;listPage=1;drawParcelTable()"><option value="">Statut de traitement</option><option value="treated" ${filters.treatment === "treated" ? "selected" : ""}>Traité</option><option value="untreated" ${filters.treatment === "untreated" ? "selected" : ""}>Non traité</option></select><select aria-label="Filtrer par ville" onchange="filters.city=this.value;listPage=1;drawParcelTable()"><option value="">Toutes les villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === filters.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div><button class="btn sm" onclick="openScanner()">${icon("scan")}Scanner</button><button class="btn sm" onclick="printSelected()">${icon("print")}Étiquettes</button>${S.user.role === "admin" || (S.user.role === "livreur" && S.users.some((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active)) ? `<button class="btn sm" onclick="bulkAssign()" title="Affectation en masse des colis cochés">${icon("user")}Affecter</button>` : ""}<button class="icon-btn" onclick="filters={q:'',city:'',status:'',from:'',to:'',treatment:''};listPage=1;renderView()" title="Réinitialiser les filtres">${icon("refresh")}</button></div><div id="parcel-table"></div></section>`
   );
 }
 function drawParcelTable() {
@@ -877,7 +928,8 @@ function drawParcelTable() {
           String(x).toLowerCase().includes(q),
         )) &&
       (!filters.status || p.status === filters.status) &&
-      (!filters.city || String(p.city_id) === filters.city),
+      (!filters.city || String(p.city_id) === filters.city) &&
+      (!filters.treatment || (filters.treatment === "treated" ? isParcelTreatedToday(p) : !isParcelTreatedToday(p))),
   );
   const pages = Math.max(1, Math.ceil(rows.length / 10));
   listPage = Math.min(listPage, pages);
@@ -906,7 +958,7 @@ function newParcel() {
   modal(
     "Nouveau colis",
     form(
-      `${S.user.role === "admin" ? select("client_id", "Client / Société", clientOptions()) : ""}${clientTrackingSlot()}${input("recipient", "Nom du destinataire")}${input("phone", "Téléphone", "", "tel", true, 'placeholder="06…"')}${select("city_id", "Ville de livraison", [["", "Choisir une ville"], ...cities.map((c) => [c.id, c.name + " — " + money(c.fee) + " MAD"])])}${input("amount", "Montant à collecter (MAD)", "", "number", true, 'min="0" max="1000000" step="0.01"')}${input("product", "Nature du produit", "", "text", false)}${textarea("address", "Adresse complète", "", true)}${textarea("note", "Note de livraison")}<div class="full form-hint">Seules les villes ouvertes à la livraison sont disponibles. Le tarif en vigueur est conservé sur le colis lors de sa création.</div>`,
+      `${S.user.role === "admin" ? select("client_id", "Client / Société", clientOptions()) : ""}${clientTrackingSlot()}${input("recipient", "Nom du destinataire")}${input("phone", "Téléphone", "", "tel", true, 'placeholder="06…"')}${select("city_id", "Ville de livraison", [["", "Choisir une ville"], ...cities.map((c) => [c.id, c.name + " — " + money(c.fee) + " MAD"])])}${input("amount", "Montant à collecter (MAD)", "", "number", true, 'min="0" max="1000000" step="0.01"')}${input("product", "Nature du produit", "", "text", false)}${textarea("address", "Adresse complète", "", true)}${textarea("note", "Note de livraison")}<div class="full parcel-create-flags"><div class="parcel-create-flag"><div><strong>Ne pas autoriser à ouvrir le colis</strong><small>Le destinataire ne peut pas ouvrir le colis avant le paiement.</small></div><label class="switch"><input type="checkbox" name="not_allowed_to_open" aria-label="Ne pas autoriser à ouvrir le colis"></label></div><div class="parcel-create-flag"><div><strong>Commande avec échange</strong><small>Signaler qu’un échange est prévu avec le destinataire.</small></div><label class="switch"><input type="checkbox" name="is_exchange" aria-label="Commande avec échange"></label></div></div><div class="full form-hint">Seules les villes ouvertes à la livraison sont disponibles. Le tarif en vigueur est conservé sur le colis lors de sa création.</div>`,
       "Créer le colis",
     ),
   );
@@ -922,7 +974,7 @@ async function parcelDetail(id) {
       p = { ...S.parcels.find((p) => p.id === id), ...d.parcel };
     modal(
       p.tracking,
-      `<div class="detail-grid"><div><div class="detail-info"><div class="flex between"><h3>${esc(p.recipient)}</h3>${tag(p.status)}</div><p class="muted" style="font-size:12px">${esc(p.address)}<br>${esc(p.city)} · ${esc(p.phone)}</p><div class="detail-line"><span>À collecter</span><strong>${money(p.amount)} MAD</strong></div><div class="detail-line"><span>Frais de livraison</span><span>${money(p.fee)} MAD</span></div><div class="detail-line"><span>Produit</span><span>${esc(p.product || "—")}</span></div><div class="detail-line"><span>Livreur</span><span>${esc(p.driver || "Non affecté")}</span></div><div class="detail-line"><span>Support responsable</span><span>${p.city_support_name?`${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}`:'Non affecté'}</span></div><div class="form-hint">${esc(p.note || "Aucune note pour ce colis.")}</div>${p.financial_locked ? `<div class="form-hint">${icon("lock")}Colis verrouillé dans un relevé livreur.</div>` : ""}</div><div class="flex" style="flex-wrap:wrap">${S.user.role === "support" ? "" : `<button class="btn sm" onclick="printLabels([${id}])">${icon("print")}Étiquette</button>`}${!p.invoice_id && !p.financial_locked && !p.operations_locked && !["client", "support"].includes(S.user.role) ? `<button class="btn primary sm" onclick="changeStatus(${id})">${icon("edit")}Changer le statut</button>` : ""}${S.user.role === "admin" ? `<button class="btn sm" onclick="openParcelOtp(${id})">${icon("shield")}Code client</button>` : ""}${S.user.role === "admin" && !p.invoice_id && !p.financial_locked && !p.operations_locked ? `<button class="btn sm" onclick="assignDriver(${id})">${icon("user")}Affecter un livreur</button>` : ""}${S.user.role !== "support" && !p.invoice_id && !p.financial_locked && !p.operations_locked && !["Livré", "Retourné", "Refusé"].includes(p.status) ? `<button class="btn sm" onclick="requestPrice(${id})">${icon("return")}Demande de prix</button>` : ""}</div>${((d.media || []).length || ["admin", "livreur"].includes(S.user.role)) ? `<div class="pod-media"><h3 style="font-size:13px;margin:10px 0 6px">${icon("shield")}Preuves de livraison</h3>${(d.media || []).length ? `<div class="flex" style="flex-wrap:wrap;gap:6px">${(d.media || []).map((m) => `<a class="btn sm" target="_blank" rel="noopener" href="${podHref(p, m)}">${m.kind === "signature" ? icon("edit") : icon("file")}${m.kind === "signature" ? "Signature" : "Photo"} · ${date(m.created_at)}</a>`).join("")}</div>` : `<p class="form-hint">Aucune preuve encore enregistrée.</p>`}${["admin", "livreur"].includes(S.user.role) ? `<div class="flex" style="flex-wrap:wrap;gap:6px;margin-top:6px"><label class="btn sm" style="margin:0">${icon("scan")}Ajouter une photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="podUpload(${id},'photo',this).then(()=>parcelDetail(${id})).catch((e)=>toast(e.message,true))"></label><button class="btn sm" onclick="closeModal();podSig(${id})">${icon("edit")}Signature</button></div>` : ""}</div>` : ""}</div><div><h3 style="font-size:14px">Chronologie d’activité</h3><div class="timeline">${d.events.map((e) => `<div class="timeline-item"><b>${esc(e.status)}</b><p>${esc(e.note)}</p><small>${esc(e.actor)} · ${date(e.created_at)} ${new Date(e.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</small></div>`).join("")}</div></div></div>`,
+      `<div class="detail-grid"><div><div class="detail-info"><div class="flex between"><h3 data-no-translate>${esc(p.recipient)}</h3>${tag(p.status)}</div><p class="muted" style="font-size:12px" data-no-translate>${esc(p.address)}<br>${esc(p.city)} · ${esc(p.phone)}</p><div class="detail-line"><span>À collecter</span><strong>${money(p.amount)} MAD</strong></div><div class="detail-line"><span>Frais de livraison</span><span>${money(p.fee)} MAD</span></div><div class="detail-line"><span>Produit</span><span data-no-translate>${esc(p.product || "—")}</span></div>${parcelPolicyBadges(p)}<div class="detail-line"><span>Livreur</span><span>${esc(p.driver || "Non affecté")}</span></div><div class="detail-line"><span>Support responsable</span><span>${p.city_support_name?`${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}`:'Non affecté'}</span></div><div class="form-hint">${p.note ? `<span data-no-translate>${esc(p.note)}</span>` : "Aucune note pour ce colis."}</div>${p.financial_locked ? `<div class="form-hint">${icon("lock")}Colis verrouillé dans un relevé livreur.</div>` : ""}</div><div class="flex" style="flex-wrap:wrap">${S.user.role === "support" ? "" : `<button class="btn sm" onclick="printLabels([${id}])">${icon("print")}Étiquette</button>`}${!p.invoice_id && !p.financial_locked && !p.operations_locked && !["client", "support"].includes(S.user.role) ? `<button class="btn primary sm" onclick="changeStatus(${id})">${icon("edit")}Changer le statut</button>` : ""}${S.user.role === "admin" ? `<button class="btn sm" onclick="openParcelOtp(${id})">${icon("shield")}Code client</button>` : ""}${S.user.role === "admin" && !p.invoice_id && !p.financial_locked && !p.operations_locked ? `<button class="btn sm" onclick="assignDriver(${id})">${icon("user")}Affecter un livreur</button>` : ""}${S.user.role !== "support" && !p.invoice_id && !p.financial_locked && !p.operations_locked && !["Livré", "Retourné", "Refusé"].includes(p.status) ? `<button class="btn sm" onclick="requestPrice(${id})">${icon("return")}Demande de prix</button>` : ""}</div>${((d.media || []).length || ["admin", "livreur"].includes(S.user.role)) ? `<div class="pod-media"><h3 style="font-size:13px;margin:10px 0 6px">${icon("shield")}Preuves de livraison</h3>${(d.media || []).length ? `<div class="flex" style="flex-wrap:wrap;gap:6px">${(d.media || []).map((m) => `<a class="btn sm" target="_blank" rel="noopener" href="${podHref(p, m)}">${m.kind === "signature" ? icon("edit") : icon("file")}${m.kind === "signature" ? "Signature" : "Photo"} · ${date(m.created_at)}</a>`).join("")}</div>` : `<p class="form-hint">Aucune preuve encore enregistrée.</p>`}${["admin", "livreur"].includes(S.user.role) ? `<div class="flex" style="flex-wrap:wrap;gap:6px;margin-top:6px"><label class="btn sm" style="margin:0">${icon("scan")}Ajouter une photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="podUpload(${id},'photo',this).then(()=>parcelDetail(${id})).catch((e)=>toast(e.message,true))"></label><button class="btn sm" onclick="closeModal();podSig(${id})">${icon("edit")}Signature</button></div>` : ""}</div>` : ""}</div><div><h3 style="font-size:14px">Chronologie d’activité</h3><div class="timeline">${d.events.map((e) => `<div class="timeline-item"><b>${esc(e.status)}</b><p data-no-translate>${esc(e.note)}</p><small data-no-translate>${esc(e.actor)} · ${date(e.created_at)} ${new Date(e.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</small></div>`).join("")}</div></div></div>`,
       true,
     );
   } catch (e) {
@@ -1236,7 +1288,7 @@ function supportOrdersView() {
     `<button class="btn" onclick="refreshSupportOrders()">${icon("refresh")}Actualiser</button>`,
   ) +
     `<section class="stats">${stat("Commandes affectées", int(rows.length), "", "box", "", "Dans vos villes")}${stat("À suivre", int(active), "", "clock", "blue", "Commandes non clôturées")}${stat("Livrées", int(delivered), "", "checkcircle", "green", "Suivi terminé")}</section>` +
-    `<section class="card"><div class="card-head"><div><h3>Mes commandes</h3><p>Le suivi est en lecture seule. Ouvrez une commande pour consulter son historique.</p></div><span class="tag">${rows.length}</span></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="support-order-search" placeholder="Référence, destinataire, téléphone…" value="${esc(supportOrderFilter.q)}" oninput="supportOrderFilter.q=this.value;supportOrderPage=1;drawSupportOrders()"></div><select aria-label="Filtrer par statut" onchange="supportOrderFilter.status=this.value;supportOrderPage=1;drawSupportOrders()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option ${s === supportOrderFilter.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select aria-label="Filtrer par ville" onchange="supportOrderFilter.city=this.value;supportOrderPage=1;drawSupportOrders()"><option value="">Toutes mes villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === supportOrderFilter.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div><span class="form-hint">Actualisation automatique toutes les 45 secondes</span></div><div id="support-order-table"></div></section>`;
+    `<section class="card"><div class="card-head"><div><h3>Mes commandes</h3><p>Le suivi est en lecture seule. Ouvrez une commande pour consulter son historique.</p></div><span class="tag">${rows.length}</span></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="support-order-search" placeholder="Référence, destinataire, téléphone…" value="${esc(supportOrderFilter.q)}" oninput="supportOrderFilter.q=this.value;supportOrderPage=1;drawSupportOrders()"></div><select aria-label="Filtrer par statut" onchange="supportOrderFilter.status=this.value;supportOrderPage=1;drawSupportOrders()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option value="${esc(s)}" ${s === supportOrderFilter.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select aria-label="Filtrer par ville" onchange="supportOrderFilter.city=this.value;supportOrderPage=1;drawSupportOrders()"><option value="">Toutes mes villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === supportOrderFilter.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div><span class="form-hint">Actualisation automatique toutes les 45 secondes</span></div><div id="support-order-table"></div></section>`;
 }
 function drawSupportOrders() {
   const root = $("#support-order-table");
@@ -1396,7 +1448,7 @@ async function ticketDetail(id) {
     if(S?.user?.id!==owner)return;
     modal(
       "TKT-" + String(id).padStart(4, "0") + " · " + d.ticket.subject,
-      `<div class="flex between">${tag(d.ticket.status)}${S.user.role === "admin" ? `<select style="width:160px;font-size:12px" aria-label="Statut du ticket" onchange="setTicketStatus(${id},this.value)">${["Ouvert", "En cours", "Résolu"].map((s) => `<option ${s === d.ticket.status ? "selected" : ""}>${s}</option>`).join("")}</select>` : ""}</div>${d.ticket.parcel_id?`<div class="ops-ticket-context">Colis : ${esc(d.ticket.tracking)} · Priorité : ${esc(d.ticket.priority)}<br>Responsable : ${esc(S.users.find(u=>u.id===d.ticket.assigned_to)?.name|| (d.ticket.assigned_to?"Administration":"Non affecté"))}<br>Première réponse admin : ${opsDate(d.ticket.first_response_at)}${S.user.role==="admin"?`<button class="btn sm" onclick="opsTicketOwner(${id},'${d.ticket.priority}')">Affecter / Priorité</button>`:""}</div>`:""}${claimAttachmentsMarkup(d.attachments||[])}${d.messages.map((m) => `<div class="message ${m.role === "admin" ? "admin" : ""}"><b>${esc(m.author)}</b><small>${date(m.created_at)}</small><p>${esc(m.body)}</p></div>`).join("")}<form id="reply-form" style="margin-top:20px"><div class="form-error"></div>${textarea("body", "Votre réponse", "", true)}<div class="form-actions"><button class="btn primary" type="submit">Envoyer ${icon("arrow")}</button></div></form>`,
+      `<div class="flex between">${tag(d.ticket.status)}${S.user.role === "admin" ? `<select style="width:160px;font-size:12px" aria-label="Statut du ticket" onchange="setTicketStatus(${id},this.value)">${["Ouvert", "En cours", "Résolu"].map((s) => `<option ${s === d.ticket.status ? "selected" : ""}>${s}</option>`).join("")}</select>` : ""}</div>${d.ticket.parcel_id?`<div class="ops-ticket-context">Colis : ${esc(d.ticket.tracking)} · Priorité : ${esc(d.ticket.priority)}<br>Responsable : ${esc(S.users.find(u=>u.id===d.ticket.assigned_to)?.name|| (d.ticket.assigned_to?"Administration":"Non affecté"))}<br>Première réponse admin : ${opsDate(d.ticket.first_response_at)}${S.user.role==="admin"?`<button class="btn sm" onclick="opsTicketOwner(${id},'${d.ticket.priority}')">Affecter / Priorité</button>`:""}</div>`:""}${claimAttachmentsMarkup(d.attachments||[])}${d.messages.map((m) => `<div class="message ${m.role === "admin" ? "admin" : ""}"><b>${esc(m.author)}</b><small>${date(m.created_at)}</small><p data-no-translate>${esc(m.body)}</p></div>`).join("")}<form id="reply-form" style="margin-top:20px"><div class="form-error"></div>${textarea("body", "Votre réponse", "", true)}<div class="form-actions"><button class="btn primary" type="submit">Envoyer ${icon("arrow")}</button></div></form>`,
     );
     bindForm(async (f) => {
       await api("/tickets/" + id, "POST", f);
@@ -1650,7 +1702,7 @@ async function productDetail(id) {
         rows.map((m) => [
           date(m.created_at),
           `<strong class="${m.delta > 0 ? "green" : "orange"}">${m.delta > 0 ? "+" : ""}${m.delta}</strong>`,
-          esc(m.note),
+          `<span data-no-translate>${esc(m.note)}</span>`,
           esc(m.actor),
         ]),
       )}<div class="form-actions"><button class="btn" onclick="newStockRequest(${id})">${icon("return")}Demander une entrée / sortie</button></div>${S.user.role === "admin" ? `<form id="movement-form" style="margin-top:24px"><div class="form-error"></div><div class="form-grid">${input("delta", "Quantité (+ entrée / − sortie)", "", "number", true, 'step="1"')}${input("note", "Motif du mouvement")}</div><div class="form-actions"><button class="btn primary" type="submit">Enregistrer le mouvement</button></div></form>` : ""}`,
@@ -1670,7 +1722,7 @@ function recipientRequestSnapshot(r,after=false){
   const phone=after?(r.requested_phone_display||r.requested_phone||r.current_phone):(r.old_phone_display||r.old_phone||r.current_phone);
   const city=after?(r.requested_city_display||r.requested_city_name||r.current_city):(r.old_city_display||r.old_city_name||r.current_city);
   const address=after?(r.requested_address_display||r.requested_address||r.current_address):(r.old_address_display||r.old_address||r.current_address);
-  return `<div class="recipient-request-contact"><strong>${esc(name||'—')}</strong><span class="sub">☎ ${esc(phone||'—')} · ${esc(city||'—')}</span><span class="sub">${esc(address||'Adresse non renseignée')}</span></div>`;
+  return `<div class="recipient-request-contact" data-no-translate><strong>${esc(name||'—')}</strong><span class="sub">☎ ${esc(phone||'—')} · ${esc(city||'—')}</span><span class="sub">${esc(address||'Adresse non renseignée')}</span></div>`;
 }
 function requestsView(rows, recipientRows = []) {
   recipientRequestRows=recipientRows;
@@ -1678,7 +1730,7 @@ function requestsView(rows, recipientRows = []) {
     ["Demande", "Colis", "Demandeur", "Montant demandé", "Motif", "Statut", ""],
     rows.map((r) => [
       `<span class="tracking">DEM-${String(r.id).padStart(4, "0")}</span>`,
-      esc(r.tracking), esc(r.author), `<strong>${money(r.amount)} MAD</strong>`, esc(r.reason), tag(r.status),
+      esc(r.tracking), esc(r.author), `<strong>${money(r.amount)} MAD</strong>`, `<span data-no-translate>${esc(r.reason)}</span>`, tag(r.status),
       S.user.role === "admin" && r.status === "En attente"
         ? `<div class="flex"><button class="btn sm" onclick="decideRequest(${r.id},true)">${icon("check")}Accepter</button><button class="btn sm danger" onclick="decideRequest(${r.id},false)">Refuser</button></div>`
         : "—",
@@ -1691,10 +1743,10 @@ function requestsView(rows, recipientRows = []) {
       `<button class="tracking" onclick="parcelDetail(${Number(r.parcel_id)})">${esc(r.tracking)}</button><span class="sub">Statut colis : ${esc(r.parcel_status||'—')}</span>`,
       `${esc(r.company || r.author)}<span class="sub">${esc(r.author)}</span>`,
       recipientRequestSnapshot(r,false),recipientRequestSnapshot(r,true),
-      esc(r.reason || "—"), `<span>${date(r.created_at)}</span>`, tag(r.status),
+      `<span data-no-translate>${esc(r.reason || "—")}</span>`, `<span>${date(r.created_at)}</span>`, tag(r.status),
       S.user.role === "admin" && r.status === "En attente"
         ? `<div class="flex">${['Livré','Retourné'].includes(r.parcel_status)?`<span class="sub recipient-change-accept-locked">Acceptation impossible · ${esc(r.parcel_status)}</span>`:`<button class="btn sm" onclick="decideRecipientChange(${r.id},true)">${icon("check")}Accepter</button>`}<button class="btn sm danger" onclick="decideRecipientChange(${r.id},false)">Refuser</button></div>`
-        : (r.admin_note ? esc(r.admin_note) : "—"),
+        : (r.admin_note ? `<span data-no-translate>${esc(r.admin_note)}</span>` : "—"),
     ]),
   ) : empty("Aucune demande de changement", "Les prochaines demandes des clients apparaîtront ici.")}</section>`;
   return heading(
@@ -1831,5 +1883,5 @@ async function boot() {
   }
 }
 function driverCards(rows) {
-  return `<div class="driver-mobile-list">${rows.map((p) => `<article class="delivery-card"><div class="flex between"><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button>${tag(p.status)}</div><div class="parcel-copy-recipient">${parcelCopyButton(p)}<h3>${esc(p.recipient)}</h3></div><p>${esc(p.address)} · ${esc(p.city)}</p>${rdvTag(p)}${riskChip(p.phone)}<div class="flex between"><span class="amount">${money(p.amount)} <small>MAD</small></span><a class="btn sm" style="width:auto;margin:0" href="tel:${esc(p.phone.replace(/[^+\d]/g, ""))}" data-cl-id="${p.id}" data-cl-phone="${esc(p.phone)}" data-cl-name="${esc(p.recipient)}" onclick="return o24ClCall(this)">${icon("phone")}Appeler</a></div><button class="btn ${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "" : "primary"}" onclick="${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "parcelDetail" : "changeStatus"}(${p.id})">${icon("box")}${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "Voir le colis" : "Mettre à jour le colis"}</button><div class="driver-note-row">${parcelStatusControl(p)}${parcelNoteControl(p)}</div>${parcelClaimButton(p,true)}</article>`).join("")}</div>`;
+  return `<div class="driver-mobile-list">${rows.map((p) => `<article class="delivery-card"><div class="flex between"><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button>${tag(p.status)}</div><div class="parcel-copy-recipient">${parcelCopyButton(p)}<h3>${esc(p.recipient)}</h3></div><p>${esc(p.address)} · ${esc(p.city)}</p>${rdvTag(p)}${parcelPolicyBadges(p,true)}${riskChip(p.phone)}<div class="flex between"><span class="amount">${money(p.amount)} <small>MAD</small></span><a class="btn sm" style="width:auto;margin:0" href="tel:${esc(p.phone.replace(/[^+\d]/g, ""))}" data-cl-id="${p.id}" data-cl-phone="${esc(p.phone)}" data-cl-name="${esc(p.recipient)}" onclick="return o24ClCall(this)">${icon("phone")}Appeler</a></div><button class="btn ${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "" : "primary"}" onclick="${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "parcelDetail" : "changeStatus"}(${p.id})">${icon("box")}${p.invoice_id || p.financial_locked || p.operations_locked || ["Livré", "Retourné"].includes(p.status) ? "Voir le colis" : "Mettre à jour le colis"}</button><div class="driver-note-row">${parcelStatusControl(p)}${parcelNoteControl(p)}</div>${parcelClaimButton(p,true)}</article>`).join("")}</div>`;
 }

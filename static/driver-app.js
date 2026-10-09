@@ -21,11 +21,12 @@
     (typeof location !== 'undefined' && /(^|[?&])app=1(&|$)/.test(location.search || ''));
   const setAppShell = (on) => { if (typeof document !== 'undefined' && document.body) document.body.classList.toggle('o24-app', !!on); };
   const iso = (d) => d.toISOString().slice(0, 10);
-  const frDay = (s) => new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(s + 'T12:00:00'));
+  const daLocale = () => ({ en: 'en-GB', ar: 'ar-MA' }[window.o24CurrentLanguage?.()] || 'fr-FR');
+  const frDay = (s) => new Intl.DateTimeFormat(daLocale(), { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(s + 'T12:00:00'));
 
   if (typeof titles !== 'undefined') titles[VIEW] = 'Mon app livreur';
 
-  const state = { q: '', from: '', to: '', status: '', quick: '', driver: '' };
+  const state = { q: '', from: '', to: '', status: '', treatment: '', quick: '', driver: '' };
   /* v1.5.0 : membres de l'équipe (visibles dans le bootstrap quand l'utilisateur est chef). */
   const members = () => (S.users || []).filter((u) => u.role === 'livreur' && u.team_lead_id === S.user.id && u.active);
   function resetRange() { const t = new Date(), f = new Date(Date.now() - 59 * 86400000); state.from = iso(f); state.to = iso(t); }
@@ -55,6 +56,7 @@
       if (state.from && d < state.from) return false;
       if (state.to && d > state.to) return false;
       if (state.status && p.status !== state.status) return false;
+      if (state.treatment && (state.treatment === 'treated' ? !isParcelTreatedToday(p) : isParcelTreatedToday(p))) return false;
       return true;
     }).sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
   }
@@ -91,6 +93,7 @@
     return `<button class="da-card" onclick="daOpen(${p.id})">
       <div class="da-card-top"><span class="tracking">${esc(p.tracking)}</span><span class="tag ${TAG(p.status)}">${esc(p.status)}</span></div>
       <div class="da-card-main"><b>${esc(p.recipient)}</b><span class="sub">${icon('phone')} ${esc(p.phone)} · ${esc(p.city)}</span></div>
+      ${parcelPolicyBadges(p, true)}
       <div class="da-card-foot"><strong>${money(p.amount)} <small>MAD</small></strong><span class="sub">${esc(p.product || 'Colis')}</span></div>
     </button>`;
   }
@@ -125,11 +128,14 @@
       <header class="da-top">
         <button class="icon-btn" onclick="openDaDrawer()" aria-label="Menu">${icon('menu')}</button>
         <span class="da-version">v ${esc((typeof RUNTIME !== 'undefined' && RUNTIME.version) || '')}</span>
+        <button class="icon-btn da-app-refresh" onclick="reloadView()" aria-label="Actualiser les données" title="Actualiser toutes les données" ${refreshBusy ? 'disabled' : ''}>${icon('refresh')}</button>
         <span class="spacer"></span>
         <button class="icon-btn" onclick="daPos()" aria-label="Transmettre ma position">${icon('search')}</button>
         <button class="icon-btn" onclick="daVehicle()" aria-label="Mon véhicule connecté">${icon('truck')}</button>
         <button class="icon-btn" onclick="daItin()" aria-label="Itinéraire">${icon('pin')}</button>
         <button class="icon-btn" onclick="openScanner()" aria-label="Scanner un colis">${icon('scan')}</button>
+        ${window.o24LanguageButton('da-app-control')}
+        ${window.o24HelpButton('da-app-control')}
       </header>
       <button class="da-update" id="da-update" hidden>${icon('alert')} Une nouvelle version est prête — touchez pour mettre à jour</button>
       ${(st.plan || st.retards) ? `<div class="da-banner" role="alert">
@@ -153,8 +159,9 @@
       <div class="da-chips">
         <button class="da-chip active" onclick="daRangeModal()">${icon('calendar')} ${esc(rangeLabel())}</button>
         <button class="da-chip" onclick="daStatusSheet()">${icon('chevron','down')} ${esc(state.status || 'Tous les colis')}</button>
+        <button class="da-chip ${state.treatment ? 'sel' : ''}" onclick="daTreatmentSheet()">${icon('sliders')} ${state.treatment === 'treated' ? 'Traité' : state.treatment === 'untreated' ? 'Non traité' : 'Statut de traitement'}</button>
         ${state.driver ? `<button class="da-chip ghost sel" onclick="daDriver('')" title="Tout l'équipe">${icon('users')} ${esc(memberName(state.driver))} ${icon('close')}</button>` : ''}
-        ${(state.q || state.status) ? `<button class="da-chip ghost" onclick="daReset()" title="Effacer les filtres">${icon('close')} Effacer</button>` : ''}
+        ${(state.q || state.status || state.treatment) ? `<button class="da-chip ghost" onclick="daReset()" title="Effacer les filtres">${icon('close')} Effacer</button>` : ''}
       </div>
       <div class="da-list">${rows.length ? rows.map(card).join('') : `<p class="da-empty">Aucun colis sur cette période.<br><small>Changez la plage de dates, le statut ou le filtre rapide pour voir plus.</small></p>`}</div>
     </div>
@@ -212,7 +219,7 @@
     let rows;
     try { rows = await api('/driver-days/me'); } catch (e) { toast(e.message, true); return; }
     const chip = (r) => !r.close ? '<span class="tag">Ouverte</span>' : (r.close.status === 'Rouvert' ? '<span class="tag purple">Rouverte</span>' : (r.variance_cents ? `<span class="tag bad">Écart ${centMoney(Math.abs(r.variance_cents))} MAD</span>` : '<span class="tag good">Clôturée</span>'));
-    modal('Fin de journée · ' + new Date().toLocaleDateString('fr-FR'), `
+    modal('Fin de journée · ' + new Date().toLocaleDateString(daLocale()), `
       <p class="form-hint" style="margin-bottom:8px">Caisse du jour <b>calculée à l’instant</b> : l’Admin clôture et constate la remise de fin de tournée. Ce récapitulatif ne déclenche aucun paiement.</p>
       <div class="da-sheet">${rows.map((r) => `<div class="da-sheet-row da-status-row" style="cursor:default">
         <span class="da-status-ic">${icon('user')}</span>
@@ -230,7 +237,7 @@
     render();
   };
   window.daFilter = (k, v) => { state[k] = v; render(); };
-  window.daReset = () => { state.q = ''; state.status = ''; state.quick = ''; state.driver = ''; resetRange(); render(); };
+  window.daReset = () => { state.q = ''; state.status = ''; state.treatment = ''; state.quick = ''; state.driver = ''; resetRange(); render(); };
   window.daQuick = (q) => {
     if (q === 'plan') { state.status = 'Programmé'; state.quick = 'today'; state.from = ''; state.to = ''; }
     else state.quick = q;
@@ -243,7 +250,7 @@
     const w = window.open('', '_blank');
     if (!w) { toast('Autorisez les fenêtres surgissantes pour imprimer le manifest.', true); return; }
     const cod = rows.reduce((n, p) => n + (+p.amount || 0), 0);
-    const today = new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date());
+    const today = new Intl.DateTimeFormat(daLocale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date());
     w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Manifest de tournée — ORIENTAL24</title><style>
       body{font-family:Arial,sans-serif;color:#111827;margin:24px;font-size:12px}
       h1{font-size:18px;margin:0} h2{font-size:11px;color:#6b7280;font-weight:400;margin:2px 0 16px}
@@ -279,6 +286,15 @@
     }).join('')}</div>`, true);
   };
   window.daSetStatus = (s) => { state.status = s; closeModal(); render(); };
+  window.daTreatmentSheet = () => {
+    const options = [
+      { value: '', label: 'Tous', count: S.parcels.length },
+      { value: 'treated', label: 'Traité', count: S.parcels.filter(isParcelTreatedToday).length },
+      { value: 'untreated', label: 'Non traité', count: S.parcels.filter((p) => !isParcelTreatedToday(p)).length },
+    ];
+    modal('Statut de traitement', `<div class="da-sheet">${options.map((x) => `<button class="da-sheet-row ${state.treatment === x.value ? 'sel' : ''}" onclick="daSetTreatment('${x.value}')"><span>${x.label}</span><b>${x.count}</b></button>`).join('')}</div>`, true);
+  };
+  window.daSetTreatment = (value) => { state.treatment = value; closeModal(); render(); };
   /* v1.4.26 : feuille « Changer le statut » — liste métier du livreur demandée (dates pour Reporté/Programmé,
      motif pour Refusé/Annulé, « Pas de réponse » = Reporté + motif standard), le tout sur l'endpoint existant ;
      les cibles impossibles pour un livreur depuis l'état actuel restent visibles mais grisées. */
@@ -323,7 +339,7 @@
     const p = S.parcels.find((x) => x.id === id);
     const o = DA_STATUS_OPTS.find((x) => x.key === key);
     if (!p || !o) return;
-    const frDay = (v) => v ? new Intl.DateTimeFormat('fr-FR').format(new Date(v + 'T12:00:00')) : '';
+    const frDay = (v) => v ? new Intl.DateTimeFormat(daLocale()).format(new Date(v + 'T12:00:00')) : '';
     modal('Confirmer : ' + o.label, form(
       `<input type="hidden" name="status" value="${esc(o.status)}">${o.reason ? `<input type="hidden" name="reason_code" value="${o.reason}">` : ''}
        <div class="full form-hint">${esc(p.tracking)} · ${esc(p.status)} → <b>${esc(o.label)}</b></div>
