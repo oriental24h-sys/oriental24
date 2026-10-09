@@ -35,7 +35,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,password TEXT NOT NULL,role TEXT NOT NULL,phone TEXT DEFAULT '',company TEXT DEFAULT '',active INTEGER DEFAULT 1,team_lead_id INTEGER REFERENCES users(id),portal_token TEXT,created_at TEXT);
         CREATE TABLE IF NOT EXISTS cities(id INTEGER PRIMARY KEY,name TEXT UNIQUE NOT NULL,region TEXT NOT NULL,delivery INTEGER DEFAULT 1,pickup INTEGER DEFAULT 1,fee REAL NOT NULL,return_fee REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS support_cities(city_id INTEGER PRIMARY KEY REFERENCES cities(id) ON DELETE CASCADE,support_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,assigned_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS parcels(id INTEGER PRIMARY KEY,tracking TEXT,client_id INTEGER REFERENCES users(id),driver_id INTEGER REFERENCES users(id),recipient TEXT,phone TEXT,address TEXT,city_id INTEGER REFERENCES cities(id),amount REAL,fee REAL,return_fee REAL,status TEXT DEFAULT 'Créé',product TEXT DEFAULT '',note TEXT DEFAULT '',created_at TEXT,updated_at TEXT,invoice_id INTEGER,time_window TEXT DEFAULT '',cod_ack_at TEXT,support_id INTEGER REFERENCES users(id));
+        CREATE TABLE IF NOT EXISTS parcels(id INTEGER PRIMARY KEY,tracking TEXT,client_id INTEGER REFERENCES users(id),driver_id INTEGER REFERENCES users(id),recipient TEXT,phone TEXT,address TEXT,city_id INTEGER REFERENCES cities(id),amount REAL,fee REAL,return_fee REAL,status TEXT DEFAULT 'Créé',product TEXT DEFAULT '',note TEXT DEFAULT '',created_at TEXT,updated_at TEXT,status_updated_at TEXT,invoice_id INTEGER,time_window TEXT DEFAULT '',cod_ack_at TEXT,open_allowed INTEGER NOT NULL DEFAULT 1,is_exchange INTEGER NOT NULL DEFAULT 0,support_id INTEGER REFERENCES users(id));
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,parcel_id INTEGER REFERENCES parcels(id),actor_id INTEGER REFERENCES users(id),status TEXT,note TEXT,created_at TEXT);
         CREATE TABLE IF NOT EXISTS tickets(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),subject TEXT,category TEXT,status TEXT DEFAULT 'Ouvert',created_at TEXT);
         CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,ticket_id INTEGER REFERENCES tickets(id),user_id INTEGER REFERENCES users(id),body TEXT,created_at TEXT);
@@ -52,6 +52,10 @@ def init_db():
         if 'portal_token' not in {r['name'] for r in c.execute('PRAGMA table_info(users)')}:c.execute('ALTER TABLE users ADD COLUMN portal_token TEXT')
         if 'time_window' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute("ALTER TABLE parcels ADD COLUMN time_window TEXT DEFAULT ''")
         if 'cod_ack_at' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN cod_ack_at TEXT')
+        parcel_columns={r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
+        if 'status_updated_at' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN status_updated_at TEXT')
+        if 'open_allowed' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN open_allowed INTEGER NOT NULL DEFAULT 1')
+        if 'is_exchange' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN is_exchange INTEGER NOT NULL DEFAULT 0')
         client_types.migrate(c)
         if 'support_id' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN support_id INTEGER REFERENCES users(id)')
         # Every new command (web, import, partner API, fulfillment) is routed by its city.
@@ -69,6 +73,11 @@ def init_db():
         BEGIN
           UPDATE parcels SET support_id=(SELECT sc.support_id FROM support_cities sc JOIN users su ON su.id=sc.support_id
             WHERE sc.city_id=NEW.city_id AND su.role='support' AND su.active=1) WHERE id=NEW.id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS parcels_status_updated_at AFTER UPDATE OF status ON parcels
+        WHEN NEW.status IS NOT OLD.status
+        BEGIN
+          UPDATE parcels SET status_updated_at=COALESCE(NULLIF(NEW.updated_at,''),strftime('%Y-%m-%dT%H:%M:%S','now')) WHERE id=NEW.id;
         END;
         ''')
         c.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',('dataset_kind','demo' if app.config['DEMO_MODE'] else 'production'))
@@ -312,7 +321,12 @@ def detail(pid):
 @app.post('/api/parcels')
 @auth('admin','client')
 def create_parcel():
-    d=request.get_json() or {};u=user()
+    d=request.get_json(silent=True);u=user()
+    if not isinstance(d,dict):raise APIError('Données de colis invalides.')
+    for flag in ('not_allowed_to_open','is_exchange'):
+        if flag in d and type(d[flag]) is not bool:raise APIError('Les options d’ouverture et d’échange doivent être cochées ou décochées.')
+    open_allowed=0 if d.get('not_allowed_to_open',False) else 1
+    is_exchange=int(d.get('is_exchange',False))
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         city=c.execute('SELECT * FROM cities WHERE id=? AND delivery=1',(d.get('city_id'),)).fetchone()
@@ -323,8 +337,12 @@ def create_parcel():
         if not re.fullmatch(r'\+?[\d\s-]{9,18}',phone): raise APIError('Numéro de téléphone invalide.')
         track=client_types.tracking_for(c,cid,d.get('tracking'),APIError);t=now()
         fee,ret=globals()['tariff_fees_for'](c,int(cid),dict(city)) if 'tariff_fees_for' in globals() else (city['fee'],city['return_fee'])
-        cur=c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(track,cid,text(d,'recipient'),phone,text(d,'address'),city['id'],number(d,'amount'),fee,ret,text(d,'product',False),text(d,'note',False),t,t))
-        event(c,cur.lastrowid,'Créé','Colis enregistré',u)
+        cur=c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,open_allowed,is_exchange,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(track,cid,text(d,'recipient'),phone,text(d,'address'),city['id'],number(d,'amount'),fee,ret,text(d,'product',False),text(d,'note',False),open_allowed,is_exchange,t,t))
+        flags=[]
+        if not open_allowed:flags.append('ouverture du colis interdite')
+        if is_exchange:flags.append('échange demandé')
+        event_note='Colis enregistré'+(' · '+' · '.join(flags) if flags else '')
+        event(c,cur.lastrowid,'Créé',event_note,u)
         assigned=c.execute('SELECT su.id,su.name,su.phone FROM parcels p LEFT JOIN users su ON su.id=p.support_id WHERE p.id=?',(cur.lastrowid,)).fetchone()
         city_support=dict(assigned) if assigned and assigned['id'] else None
     return jsonify(ok=True,tracking=track,city_support=city_support)
@@ -482,11 +500,14 @@ def update_parcel_city(pid):
         if not city:raise APIError('Choisissez une ville ouverte à la livraison.')
         if cid==p['city_id']:return jsonify(ok=True,changed=False)
         previous=c.execute('SELECT name FROM cities WHERE id=?',(p['city_id'],)).fetchone()['name']
+        fee,return_fee=globals()['tariff_fees_for'](c,p['client_id'],dict(city)) if 'tariff_fees_for' in globals() else (city['fee'],city['return_fee'])
+        old_fee,old_return_fee=p['fee'],p['return_fee']
         ops_change(c,p,{'revision':d['revision']},u)
-        # Existing parcel fees are frozen amounts, not the destination city's current tariff.
-        c.execute('UPDATE parcels SET city_id=?,updated_at=? WHERE id=?',(cid,now(),pid))
-        event(c,pid,p['status'],'Ville de livraison modifiée : '+previous+' → '+city['name']+' · montant et frais du colis conservés',u)
-        return jsonify(ok=True,changed=True)
+        # A destination correction recalculates the parcel's delivery and return fees
+        # from the customer's active city tariff; locked parcels are refused above.
+        c.execute('UPDATE parcels SET city_id=?,fee=?,return_fee=?,updated_at=? WHERE id=?',(cid,fee,return_fee,now(),pid))
+        event(c,pid,p['status'],f'Ville de livraison modifiée : {previous} → {city["name"]} · frais recalculés : livraison {old_fee:.2f} → {fee:.2f} MAD, retour {old_return_fee:.2f} → {return_fee:.2f} MAD',u)
+        return jsonify(ok=True,changed=True,city=city['name'],fee=fee,return_fee=return_fee)
 
 @app.get('/api/export')
 @auth()

@@ -1,5 +1,6 @@
-"""Tarifs par client et par ville. Appliqués une seule fois, à la création du colis.
-Aucune rétroactivité : les colis et factures existants conservent leurs montants figés.
+"""Tarifs par client et par ville.
+Appliqués à la création d'un colis et recalculés si l'admin corrige sa destination
+sur un colis encore modifiable. Les colis clôturés ou verrouillés restent inchangés.
 """
 from flask import request, jsonify
 
