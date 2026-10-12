@@ -347,12 +347,23 @@ def create_parcel():
         city_support=dict(assigned) if assigned and assigned['id'] else None
     return jsonify(ok=True,tracking=track,city_support=city_support)
 @app.patch('/api/parcels/<int:pid>')
-@auth('admin','livreur')
+@auth('admin','livreur','client')
 def update_parcel(pid):
     d=request.get_json() or {};u=user()
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         p=parcel(c,pid,u)
+        if u['role']=='client':
+            # Clients may only flag their own still-open, non-invoiced parcel as interested.
+            # Delivery, returns, refusals, cancellations and all financial/operations locks stay immutable.
+            if not isinstance(d,dict) or set(d)-{'status','revision'} or d.get('status')!='Intéressé' or type(d.get('revision')) is not int:
+                raise APIError('Le client peut uniquement marquer la commande comme « Intéressé ».',403)
+            if p['status'] in ('Intéressé','Livré','Retourné','Refusé','Annulé') or p['invoice_id'] or p['financial_locked'] or p['operations_locked'] or p['invoice_status'] in ('Réglée','Soldé','Paid'):
+                raise APIError('Seules les commandes encore ouvertes et non clôturées peuvent être marquées « Intéressé ».',409)
+            ops_change(c,p,d,u)
+            c.execute('UPDATE parcels SET status=?,updated_at=? WHERE id=?',('Intéressé',now(),pid))
+            event(c,pid,'Intéressé','Le client a marqué la commande comme intéressée.',u)
+            return jsonify(ok=True)
         if c.execute('SELECT 1 FROM driver_statement_lines WHERE parcel_id=? AND active=1',(pid,)).fetchone():
             raise APIError('Ce colis est figé dans un relevé livreur. Annulez le relevé avant toute correction.',409)
         if p['invoice_id']: raise APIError('Ce colis est facturé et ne peut plus être modifié.')

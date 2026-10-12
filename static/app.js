@@ -492,7 +492,7 @@ function shell() {
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['partner-palettes','return-palettes','palette-hub','alerts','tickets','notifications','announcements','profile','security','tour'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['partner-palettes','alerts','tickets','notifications','announcements','profile','security','tour'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
           ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${t}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
@@ -504,7 +504,7 @@ function shell() {
 async function navigate(v) {
   if (!S) return;
   // Agent de réception : espace limité à ses tâches, aucun contournement via l’URL.
-  if (S.user.role==='agent'&&!['partner-palettes','return-palettes','palette-hub','alerts','tickets','profile','notifications','announcements','security','tour'].includes(v)) v='partner-palettes';
+  if (S.user.role==='agent'&&!['partner-palettes','alerts','tickets','profile','notifications','announcements','security','tour'].includes(v)) v='partner-palettes';
   if (S.user.role==='support'&&!['support-orders','profile'].includes(v)) v='support-orders';
   if (S.user.role === "livreur" && ["parcels","dashboard","print"].includes(v)) { try { const owner=S.user.id,fresh=await api("/bootstrap"); if(S?.user?.id!==owner||fresh.user.id!==owner)return; S=fresh; } catch(e) {toast(e.message,true);return;} }
   view = v;
@@ -580,13 +580,14 @@ async function renderView(background = false) {
         html = pickupsView(await api("/pickups"));
         break;
       case "partner-palettes":
-        html = partnerPalettesView(await api("/partner-palettes?"+ppQuery()));
+        if (['admin','agent'].includes(S.user.role)) html = await partnerAdminWorkspace();
+        else html = partnerPalettesView(await api("/partner-palettes?"+ppQuery()));
         break;
       case "return-palettes":
-        html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Palettes retour","La fiche retour du vendeur nécessite la version serveur ; l’envoi depuis le hub se teste dans « Palettes ».") : returnPalettesView(await api("/return-palettes?"+rpQuery()));
+        html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Retours vendeurs","La gestion des retours vendeurs nécessite la version serveur.") : returnPalettesView(await api("/return-palettes?"+rpQuery()));
         break;
       case "palette-hub":
-        html = paletteConsoleView(await api("/palette-console?"+pcQuery()));
+        html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Palettes","Les palettes inter-hubs nécessitent la version serveur.") : hubPalletsView(await api("/logistics/documents"));
         break;
       case "alerts":
         html = alertsView(await api("/alerts"));
@@ -904,7 +905,7 @@ function parcelTable(rows, selectable = true) {
     const driverCell = p.driver
       ? `<strong>${esc(p.driver)}</strong>`
       : `<span class="tag ${p.driver_returned ? "warn" : "info"}">${p.driver_returned ? "Retourné au hub" : "À l’agence"}</span>`;
-    return `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span>${parcelPolicyBadges(p, true)}</td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${isClient && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(isClient ? p.driver || "Non affecté" : p.company || p.client)}${view==='print'||!p.city_support_name?'':`<span class="sub">Support : ${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}</span>`}</td>${isAdmin ? `<td>${driverCell}</td>` : ""}<td><div class="parcel-row-actions">${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`;
+    return `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span>${parcelPolicyBadges(p, true)}</td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${isClient && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(isClient ? p.driver || "Non affecté" : p.company || p.client)}${view==='print'||!p.city_support_name?'':`<span class="sub">Support : ${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}</span>`}</td>${isAdmin ? `<td>${driverCell}</td>` : ""}<td><div class="parcel-row-actions">${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}${view!=='print'&&isAdmin&&p.invoice_status==='Réglée'?`<span class="client-paid-pill" title="Facture ${esc(p.invoice_reference||'')} réglée">Paid</span>`:''}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`;
   }).join("")}</tbody></table></div>`;
 }
 function parcelsView() {

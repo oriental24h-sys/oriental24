@@ -22,6 +22,15 @@ from barcode import Code128
 from barcode.writer import SVGWriter
 
 COLUMNS = ['reference_externe', 'destinataire', 'telephone', 'adresse', 'ville', 'montant', 'produit', 'note']
+SOCIETY_TEMPLATE_COLUMNS = ['tracking', *COLUMNS[1:]]
+HEADER_ALIASES = {
+    'tracking': 'reference_externe',
+    'tracking_number': 'reference_externe',
+    'tracking_id': 'reference_externe',
+    'numero_tracking': 'reference_externe',
+    'numero_de_tracking': 'reference_externe',
+    'numero_de_suivi': 'reference_externe',
+}
 MAX_ROWS = 500
 MAX_FILE = 2 * 1024 * 1024
 
@@ -49,7 +58,7 @@ def codes_for(tracking):
             'barcode': 'data:image/svg+xml;base64,' + base64.b64encode(svg).decode()}
 
 
-def read_import(raw, filename, Error):
+def read_import(raw, filename, Error, client_type='vendeur'):
     """Read a bounded sheet. Formulas and numerical telephone cells are rejected later."""
     if not raw or len(raw) > MAX_FILE:
         raise Error('Fichier vide ou supérieur à 2 Mo.')
@@ -105,7 +114,10 @@ def read_import(raw, filename, Error):
         raise Error('Formats acceptés : .xlsx et .csv uniquement.')
     if not values:
         raise Error('Le fichier ne contient aucune ligne.')
-    header = [normalize(x).replace(' ', '_') for x in values[0]]
+    header = []
+    for value in values[0]:
+        key = normalize(value).replace(' ', '_')
+        header.append(HEADER_ALIASES.get(key, key) if client_type == 'societe_livraison' else key)
     while header and not header[-1]:
         header.pop()
     if len(header) != len(set(header)) or any(not x for x in header):
@@ -217,26 +229,40 @@ def register_operations(app, services):
     @app.get('/api/imports/template.<fmt>')
     @auth('admin', 'client')
     def import_template(fmt):
+        u = user()
+        client_type = 'vendeur'
         with conn() as c:
+            if u['role'] == 'client':
+                client_row = c.execute("SELECT client_type FROM users WHERE id=? AND role='client' AND active=1", (u['id'],)).fetchone()
+                if not client_row:
+                    raise Error('Client actif requis.')
+                client_type = client_row['client_type']
+            elif request.args.get('client_id'):
+                client_type = client_for(c, u, {'client_id': request.args.get('client_id')})['client_type']
             cities = [dict(r) for r in c.execute('SELECT * FROM cities WHERE delivery=1 ORDER BY name')]
+        if client_type not in ('vendeur', 'societe_livraison'):
+            raise Error('Type de client invalide.', 409)
+        columns = SOCIETY_TEMPLATE_COLUMNS if client_type == 'societe_livraison' else COLUMNS
+        template_kind = 'societe-livraison' if client_type == 'societe_livraison' else 'vendeur'
+        filename = f'ORIENTAL24-modele-{template_kind}.{fmt}'
         example = ['EXEMPLE-001', 'Destinataire exemple', '0600000000', 'Adresse exemple à remplacer', cities[0]['name'] if cities else '', 199, 'Produit exemple', 'Ligne de démonstration à remplacer']
         if fmt == 'csv':
-            b = io.StringIO(); w = csv.writer(b, delimiter=';'); w.writerow(COLUMNS); w.writerow([csv_safe(v) for v in example])
-            return Response('\ufeff'+b.getvalue(), mimetype='text/csv', headers={'Content-Disposition': 'attachment; filename="ORIENTAL24-modele-colis.csv"'})
+            b = io.StringIO(); w = csv.writer(b, delimiter=';'); w.writerow(columns); w.writerow([csv_safe(v) for v in example])
+            return Response('\ufeff'+b.getvalue(), mimetype='text/csv', headers={'Content-Disposition': f'attachment; filename="{filename}"'})
         if fmt != 'xlsx':
             raise Error('Format inconnu.', 404)
         wb = Workbook(); ws = wb.active; ws.title = 'Colis'
-        ws.append(COLUMNS); ws.append(example); ws.freeze_panes = 'A2'
+        ws.append(columns); ws.append(example); ws.freeze_panes = 'A2'
         for cell in ws[2]:
             if isinstance(cell.value, str): cell.data_type = 's'
-        ws.auto_filter.ref = 'A1:H2'
+        ws.auto_filter.ref = f'A1:{get_column_letter(len(columns))}2'
         for i, width in enumerate([24, 26, 22, 40, 24, 16, 26, 45], 1):
             ws.column_dimensions[get_column_letter(i)].width = width
+        for row in ws.iter_rows(min_row=2, max_row=MAX_ROWS+1):
+            row[0].number_format = '@'; row[2].number_format = '@'; row[5].number_format = '0.00'
         for cell in ws[1]:
             cell.font = Font(color='FFFFFF', bold=True)
             cell.fill = PatternFill('solid', fgColor='091F3F')
-        for row in ws.iter_rows(min_row=2, max_row=MAX_ROWS+1):
-            row[0].number_format = '@'; row[2].number_format = '@'; row[5].number_format = '0.00'
         cities_ws = wb.create_sheet('Villes'); cities_ws.append(['Ville de livraison ouverte', 'Région', 'Frais livraison MAD', 'Frais retour MAD'])
         for city in cities:
             # Explicit text cell types prevent a city name from becoming an Excel formula.
@@ -248,26 +274,36 @@ def register_operations(app, services):
             dv.error = 'Choisissez une ville de la feuille Villes.'; dv.showErrorMessage = True
             ws.add_data_validation(dv); dv.add(f'E2:E{MAX_ROWS+1}')
         guide = wb.create_sheet('Guide')
-        for value in [
+        guide_lines = [
             'ORIENTAL24 — Modèle d’import des colis',
             'Remplacez la ligne EXEMPLE-001 par vos propres données. Elle sera importée si vous la conservez.',
             'Maximum 500 lignes, fichier .xlsx ou CSV UTF-8, taille inférieure à 2 Mo.',
-            'Vendeur : reference_externe reste votre référence de commande ; ORIENTAL24 génère le tracking.',
-            'Société de livraison : reference_externe est votre tracking, conservé tel quel, y compris sa casse et ses zéros. Cellule texte obligatoire.',
-            'Tracking société : 1 à 80 caractères A–Z/a–z, chiffres, point, tiret, underscore, / ; début alphanumérique. Unique sur la plateforme, sans distinction de casse.',
+        ]
+        if client_type == 'societe_livraison':
+            guide_lines.extend([
+                'Société de livraison : la colonne tracking contient votre numéro de suivi. Il est conservé tel quel, y compris sa casse et ses zéros. Cellule texte obligatoire.',
+                'Tracking : 1 à 80 caractères A–Z/a–z, chiffres, point, tiret, underscore, / ; début alphanumérique. Unique pour votre société, sans distinction de casse.',
+            ])
+        else:
+            guide_lines.extend([
+                'Vendeur : reference_externe est votre référence de commande, pas un tracking. ORIENTAL24 génère automatiquement le numéro de suivi.',
+            ])
+        guide_lines.extend([
             'telephone : cellule texte, format 06/07… ou +212…, conservez le zéro initial.',
             'montant : somme à collecter, sans MAD. Les décimales avec point ou virgule sont acceptées.',
             'ville : nom exact d’une ville active. Les accents et la casse sont tolérés.',
             'Les tarifs sont contrôlés à la confirmation. Aucun colis n’est créé au stade de prévisualisation.',
             'Si une ligne contient une erreur, corrigez votre fichier et recommencez : aucun import partiel.',
             'La prévisualisation expire après 30 minutes. Aucune formule Excel ni macro n’est exécutée.'
-        ]: guide.append([value])
+        ])
+        for value in guide_lines:
+            guide.append([value])
         guide.column_dimensions['A'].width = 115
         for row in guide:
             row[0].alignment = Alignment(wrap_text=True, vertical='top')
             guide.row_dimensions[row[0].row].height = 32
         b = io.BytesIO(); wb.save(b); wb.close()
-        return Response(b.getvalue(), mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers={'Content-Disposition': 'attachment; filename="ORIENTAL24-modele-colis.xlsx"'})
+        return Response(b.getvalue(), mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
     @app.post('/api/imports/preview')
     @auth('admin', 'client')
@@ -278,9 +314,9 @@ def register_operations(app, services):
             raise Error('Sélectionnez un fichier Excel ou CSV.')
         filename = upload.filename.replace('\\', '/').split('/')[-1][:180]
         raw = upload.read(MAX_FILE+1)
-        parsed = read_import(raw, filename, Error)
         with conn() as c:
             client = client_for(c, u, request.form)
+            parsed = read_import(raw, filename, Error, client['client_type'])
             cities = {normalize(r['name']): dict(r) for r in c.execute('SELECT * FROM cities WHERE delivery=1')}
             seen = set()
             rows = [validate_record(c, n, r, cities, client['id'], seen, client['client_type']) for n, r in parsed]

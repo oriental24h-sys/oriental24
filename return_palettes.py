@@ -44,7 +44,7 @@ def register_return_palettes(app,s):
         if not r or(u['role']=='agent' and r['destination_hub_id']!=u['agent_hub_id']) or(u['role']=='client' and r['client_id']!=u['id']):raise Error('Palette retour introuvable.',404)
         return dict(r)
     def lines(c,did):
-        return [dict(r) for r in c.execute('SELECT l.*,p.phone,p.status current_status,p.current_hub_id FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=? ORDER BY l.id',(did,))]
+        return [dict(r) for r in c.execute('SELECT l.*,p.phone,p.amount,p.status current_status,p.current_hub_id FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=? ORDER BY l.id',(did,))]
     def detail(c,d):
         ls=lines(c,d['id']);received=sum(bool(l['received_at']) for l in ls);missing=sum(bool(l['missing_at']) for l in ls)
         return {**d,'lines':ls,'count':len(ls),'received':received,'missing':missing,'remaining':len(ls)-received-missing,'audit':[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE a.document_id=? ORDER BY a.id DESC',(d['id'],))]}

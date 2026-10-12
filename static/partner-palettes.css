@@ -143,6 +143,14 @@
 .pp-rxbox.dup{border-color:#eab308;background:#fffbea}
 .pp-rx-cam video{width:100%;max-height:300px;border-radius:12px;background:#0a1e3c;display:block}
 .pp-rx-tools{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center;margin-top:4px}
+.pp-rx-entry{display:flex;gap:7px;align-items:center;flex-wrap:wrap;width:100%}
+.pp-rx-entry>input{flex:1 1 255px;min-width:220px;width:auto;min-height:42px;font:600 14px ui-monospace,Menlo,monospace;padding:10px 12px;border:1px solid #d9e2ed;border-radius:9px;background:#fff}
+.pp-rx-entry>.btn,.pp-rx-entry #pp-rx-cam-slot{flex:0 0 auto;white-space:nowrap}
+.pp-rx-entry #pp-rx-cam-slot{display:flex;align-items:center;gap:7px}
+.pp-rx-camera-note,.pp-rx-camera-state{font-size:11px;line-height:1.5}
+.pp-rx-camera-state:empty{display:none}
+.pp-rx-cam[hidden]{display:none}
+.pp-rx-cam{overflow:hidden;border:1px solid #e2e8f4;border-radius:10px;background:#0a1e3c}
 .pp-rx-msg{margin:12px 0 0;font-size:13px;font-weight:600;color:#65738a;min-height:20px;line-height:1.7}
 .pp-rx-msg.ok{color:#0a7a5c}
 .pp-rx-msg.err{color:#dc2626}
@@ -162,7 +170,8 @@
 .pp-validate .btn[disabled]{opacity:.45;cursor:not-allowed;filter:grayscale(.4)}
 .pp-validate .btn.pulse{animation:ppPulse 1.3s ease-in-out infinite}
 @keyframes ppPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,121,24,.55)}50%{box-shadow:0 0 0 12px rgba(255,121,24,0)}}
-@media(max-width:720px){.pp-rxbox{padding:12px}.pp-rx-tools{flex-direction:column}.pp-rx-tools .btn{width:100%}.pp-rx-cam video{max-height:230px}}
+@media(max-width:720px){.pp-rxbox{padding:12px}.pp-rx-tools{flex-direction:column}.pp-rx-tools .btn{width:100%}.pp-rx-entry{display:grid;grid-template-columns:1fr 1fr}.pp-rx-entry>input{grid-column:1/-1;min-width:0}.pp-rx-entry>.btn{width:100%}.pp-rx-entry #pp-rx-cam-slot{display:contents}.pp-rx-entry #pp-rx-cam-slot>.btn{width:100%}.pp-rx-entry .pp-rx-camera-note{grid-column:1/-1}.pp-rx-cam video{max-height:230px}}
+@media(max-width:400px){.pp-rx-entry{grid-template-columns:1fr}.pp-rx-entry>input{grid-column:auto}.pp-rx-entry .pp-rx-camera-note{grid-column:auto}}
 /* === ORIENTAL24 · palette-scan CSS (fin) === */
 /* Palettes — indicateur et détail des commandes non réceptionnées */
 .pc-ibtn.pc-exception{width:auto;min-width:34px;padding:0 7px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;gap:3px;border-color:#efcf8d;background:#fffaf0;color:#9a5b07;white-space:nowrap}
