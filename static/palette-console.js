@@ -22,7 +22,7 @@ function pcActs(r){
   +btn(icon('file'),'pcColisCSV(\''+r.kind+'\','+r.id+')','','Colis CSV')
   +(closable?btn(icon('close'),'pcClose(\''+r.kind+'\','+r.id+','+r.remaining+')','danger',r.kind==='return'?'Close return pallet':'Clôturer : les non scannés seront déclarés non réceptionnés'):'')
   +btn(icon('link'),'pcAttachOpen(\''+r.kind+'\','+r.id+')','','Attachement')
-  +btn(icon('print'),'pcBonPrint(\''+r.kind+'\','+r.id+')','','Bon de reception')
+  +btn(icon('print'),'pcBonPrint(\''+r.kind+'\','+r.id+')','','Bon de réception')
   +btn(icon('chevron'),`pcMore('${r.kind}',${r.id},this)`,'','Activités');
 }
 function paletteConsoleView(d){
@@ -241,19 +241,29 @@ async function pcSticker(kind,id){const owner=ppIdentity();try{const d=await api
  await doPrint('<style>@page{size:A5;margin:6mm}body{font:11px Arial;color:#111;margin:0}.pc-stk{padding:8px 10px 30mm;display:flex;flex-direction:column;gap:6px;box-sizing:border-box;break-after:page}.pc-stk:last-child{break-after:auto}.pc-stk header{display:flex;align-items:center;gap:8px;border-bottom:1.5px solid #111;padding-bottom:6px}.pc-stk header img{height:24px}.pc-stk .co b{font-size:12.5px}.pc-stk .mid{display:flex;align-items:center;gap:14px;margin:8px 0}.pc-stk .zone{font-size:40px;font-weight:800;line-height:1;min-width:34px;text-align:center}.pc-stk .qr svg{display:block}.pc-stk .seq{writing-mode:vertical-rl;font-size:10.5px;letter-spacing:.6px;margin-left:auto;font-weight:600}.pc-stk .trk{font-size:9px;color:#555;letter-spacing:.4px}.pc-stk .city{font-size:19px;font-weight:800;line-height:1.1}.pc-stk .hub{font-size:15px;font-weight:700;font-style:italic}.pc-stk .dt{font-size:12px;font-weight:700;font-style:italic}</style>'+pcStickerHtml(d,kind),root=>{if(owner!==ppIdentity()){root.innerHTML='';throw Error('Session modifiée.')}})}catch(e){if(owner===ppIdentity())toast(e.message,true)}}
 function pcBonDate(v){const x=new Date(v);return isNaN(x)?String(v||''):x.getDate()+'/'+(x.getMonth()+1)+'/'+x.getFullYear()}
 function pcBonAmt(a){const n=Number(a);return isFinite(n)?String(+n.toFixed(2)):(a==null?'':String(a))}
-function pcBonHtml(d,kind){const st=(typeof S!=='undefined'&&S.settings)||{};
- const who=kind==='partner'?(d.source_name+' → '+d.destination_name):(d.source_name+' → '+d.client_name);
- const place=kind==='partner'?d.destination_name:d.source_name;
- const rows=d.lines.map(l=>`<tr><td>${esc(l.tracking)}</td><td>${esc(l.city||'')}</td><td>${esc(l.recipient||'')}</td><td>${esc(l.phone||'')}</td><td>${pcBonAmt(l.amount)}</td></tr>`).join('');
- return `<article class="bon"><header><div class="co"><b>${esc((typeof S!=='undefined'&&S.settings&&S.settings.company)||'ORIENTAL24 .S.A.R.L')}</b><br>${esc(st.public_address||'Oujda — Maroc')}${st.public_phone?`<br>${esc(st.public_phone)}`:''}${st.public_email?`<br>${esc(st.public_email)}`:''}</div></header>
- <h1>${kind==='partner'?'Bon de réception':'Bon de retour'}</h1>
- <div class="meta"><div><span>Date : <b>${pcBonDate(d.dispatched_at||d.created_at)}</b></span></div><div class="c2"><b>${esc(place||'')}</b>${d.hub_phone?`<span>Tel: ${esc(d.hub_phone)}</span>`:''}${d.hub_city?`<span>${esc(d.hub_city)}, Morocco</span>`:''}</div><div class="r"><b>${esc(d.reference)}</b><br>${esc(who||'')}</div></div>
- <p class="nb">Nombre de colis : <b>${d.count}</b>${d.received?' · reçus '+d.received:''}${d.missing?' · non réceptionnés '+d.missing:''}</p>
- <table><thead><tr><th>ID de suivi</th><th>Ville</th><th>Nom</th><th>Téléphone</th><th>COD</th></tr></thead><tbody>${rows}</tbody></table>
- <div class="sign"><div>Signature du ${kind==='partner'?'hub':'vendeur'}</div><div>Signature ${esc(kind==='partner'?(d.client_name||'société'):place)}</div></div>
- <p class="foot">Document interne ORIENTAL24 · ni facture ni preuve de règlement · ${esc(d.reference)}</p></article>`}
-async function pcBonPrint(kind,id){const owner=ppIdentity();try{const d=await api('/palette-console/'+kind+'/'+id);if(owner!==ppIdentity())return
- await doPrint('<style>@page{size:A4;margin:14mm}.bon{font:12px Arial;color:#142b49}.bon header{display:flex;justify-content:flex-end;border-bottom:2px solid #142b49;padding-bottom:10px}.bon header .co{text-align:right}.bon h1{font-size:19px;margin:14px 0 6px;font-weight:700}.bon .meta{display:flex;justify-content:space-between;gap:24px;font-size:11px;border-top:1px solid #142b49;border-bottom:1px solid #142b49;padding:6px 0;margin:0 0 8px}.bon .meta .c2{text-align:center}.bon .meta .r{text-align:right}.bon .meta span{display:block}.bon .nb{text-align:right;font-size:12px;margin:10px 0 4px}.bon table{width:100%;border-collapse:collapse;font-size:11px;margin-top:6px}.bon th,.bon td{border:0;border-bottom:1px solid #d7dee8;padding:6px 8px;text-align:left;overflow-wrap:anywhere}.bon th{font-weight:700;border-bottom:1.5px solid #142b49}.bon thead{display:table-header-group}.bon tr{break-inside:avoid}.bon td:nth-child(4),.bon th:nth-child(4){text-align:left}.bon .sign{display:flex;gap:60px;margin-top:34px}.bon .sign div{flex:1;border-top:1px solid #142b49;padding-top:6px;font-size:10px}.bon .foot{font-size:9.5px;color:#54677f;margin-top:14px}@media print{.bon thead{display:table-header-group}}</style>'+pcBonHtml(d,kind),root=>{if(owner!==ppIdentity()){root.innerHTML='';throw Error('Session modifiée.')}})}catch(e){if(owner===ppIdentity())toast(e.message,true)}}
+async function pcBonPrint(kind,id){
+ const owner=ppIdentity();
+ try{
+  const d=await api('/palette-console/'+kind+'/'+id);if(owner!==ppIdentity())return;
+  const partner=kind==='partner';
+  const party=partner?{
+   label:'Hub de réception',name:d.hub_name||d.destination_name,
+   lines:[d.hub_address,d.hub_city]
+  }:{
+   label:'Client destinataire',name:d.client_name||d.client_company||d.client_legal_name||d.client_contact_name,
+   lines:[d.client_contact_name&&d.client_contact_name!==d.client_name?'Contact : '+d.client_contact_name:'',d.client_phone?'Tél. : '+d.client_phone:'',d.client_email,d.client_address]
+  };
+  const printData={
+   title:partner?'Bon de réception':'Bon de retour',reference:d.reference,
+   date:opsDate(d.dispatched_at||d.created_at),status:pcLabel(d.status),
+   route:partner?`${d.client_name||'Client'} → ${d.hub_name||d.destination_name||'Hub'}`:`${d.hub_name||d.source_name||'Hub'} → ${d.client_name||'Client'}`,
+   party,count:d.count,received:d.received,remaining:d.remaining,missing:d.missing,note:d.note,
+   rows:(d.lines||[]).map(l=>({tracking:l.tracking,city:l.city,recipient:l.recipient,phone:l.phone,amount:l.amount})),
+   signatures:partner?['Société expéditrice','Transporteur','Réception par le hub']:['Responsable du hub','Transporteur','Réception par le vendeur']
+  };
+  await doPrint(o24BonHtml(printData),root=>{if(owner!==ppIdentity()){root.innerHTML='';throw Error('Session modifiée.')}})
+ }catch(e){if(owner===ppIdentity())toast(e.message,true)}
+}
 function pcCsvCell(v){let s=String(v==null?'':v);if(/^[\s]*[=+@-]/.test(s))s="'"+s;return s.replace(/[\r\n]+/g,' ')}
 function pcCsvBuild(d){const rows=['sep=;','ID de suivi; destinataire; adresse; Ville;Nature de produit;Numero de telephone;COD;Status']
  for(const l of d.lines)rows.push([l.tracking,l.recipient,l.address||'',l.city||'',l.product||'',l.phone||'',pcBonAmt(l.amount),String(l.current_status||'').toUpperCase()].map(pcCsvCell).join(';')+';')

@@ -58,69 +58,20 @@ async function rpPrint(id){
  const owner=ppIdentity();
  try{
   const d=await api('/return-palettes/'+id);if(owner!==ppIdentity())return;
-  const contact=S.settings||{};
-  const lang=typeof o24CurrentLanguage==='function'?o24CurrentLanguage():'fr';
-  const parcelCount=Number(d.count)||0,lotCount=Number(d.lots)||0;
-  const parcelWord=lang==='en'?(parcelCount===1?'parcel':'parcels'):lang==='ar'?(parcelCount===1?'طرد':'طرود'):'colis';
-  const lotWord=lang==='en'?(lotCount===1?'lot':'lots'):lang==='ar'?(lotCount===1?'دفعة':'دفعات'):(lotCount===1?'lot':'lots');
-  const contactLine=[contact.public_address,contact.public_phone,contact.public_email].filter(Boolean).map(esc).join(' · ');
-  const lines=(d.lines||[]).map(l=>{
-   const handover=l.received_at?`<span class="rp-state done">Remis</span><small data-no-translate>${esc(opsDate(l.received_at))}</small>`:d.status==='Annulé'?'<span class="rp-state cancelled">Annulé</span>':'<span class="rp-state pending">À remettre</span>';
-   return `<tr><td class="rp-code" data-no-translate>${esc(l.tracking)}</td><td data-no-translate>${esc(l.city||'—')}</td><td data-no-translate>${esc(l.recipient||'—')}</td><td class="rp-phone" dir="ltr" data-no-translate>${esc(l.phone||'—')}</td><td class="rp-money" data-no-translate>${l.amount==null?'—':money(l.amount)+' MAD'}</td><td>${handover}</td></tr>`;
-  }).join('');
-  const html=`<style>
-   @page{size:A4 portrait;margin:12mm}
-   .rp-return-print{font:10px/1.45 Arial,sans-serif;color:#142b49;width:100%;max-width:190mm}
-   .rp-return-print *{box-sizing:border-box}
-   .rp-return-print header{display:flex;align-items:center;justify-content:space-between;gap:18px;padding-bottom:12px;border-bottom:2px solid #142b49}
-   .rp-brand{display:flex;align-items:center;gap:12px;min-width:0}
-   .rp-brand img{width:145px;height:auto;max-height:54px;object-fit:contain}
-   .rp-brand-copy{display:grid;gap:2px}.rp-brand-copy b{font-size:14px;letter-spacing:.08em}.rp-brand-copy small{font-size:8.5px;color:#687b95;overflow-wrap:anywhere}
-   .rp-doc-title{text-align:right;flex-shrink:0}.rp-doc-title .eyebrow{font-size:8px;letter-spacing:.13em;color:#ef7d25;font-weight:700}.rp-doc-title h1{font-size:19px;line-height:1.2;margin:3px 0}.rp-doc-title strong{font-size:12px}.rp-doc-title small{display:block;margin-top:3px;color:#62748b}
-   .rp-route{margin:14px 0 8px;font-size:16px;line-height:1.35}.rp-route .rp-route-arrow{color:#ed7a22;padding:0 5px}
-   .rp-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:10px 0 14px}
-   .rp-fact{padding:7px 9px;border:1px solid #dbe3ed;border-radius:5px;min-height:42px}.rp-fact small{display:block;color:#75859a;font-size:7.5px;text-transform:uppercase;letter-spacing:.05em}.rp-fact b{display:block;margin-top:2px;font-size:9.5px;overflow-wrap:anywhere}
-   .rp-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 11px;margin:10px 0;background:#f4f7fb;border:1px solid #dbe3ed;border-radius:6px}.rp-summary b{font-size:12px}.rp-summary small{display:block;font-size:8px;color:#718198}.rp-note{padding:8px 10px;margin:9px 0;border-left:3px solid #ef7d25;background:#fff8f1;overflow-wrap:anywhere}
-   .rp-return-print table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8.5px;margin-top:7px}
-   .rp-return-print thead{display:table-header-group}.rp-return-print th{background:#142b49;color:#fff;text-align:left;font-size:7.5px;text-transform:uppercase;letter-spacing:.04em}
-   .rp-return-print th,.rp-return-print td{padding:6px 5px;border:1px solid #d9e0e8;vertical-align:top;overflow-wrap:anywhere}
-   .rp-return-print tbody tr:nth-child(even){background:#f7f9fc}.rp-return-print tr{break-inside:avoid;page-break-inside:avoid}
-   .rp-code{font-family:ui-monospace,Menlo,monospace;font-weight:700}.rp-phone{white-space:nowrap}.rp-money{white-space:nowrap;text-align:right}.rp-state{font-weight:700}.rp-state.done{color:#18734e}.rp-state.pending{color:#a35a09}.rp-state.cancelled{color:#b42318}.rp-return-print td small{display:block;color:#7a8899;font-size:7px;margin-top:2px}
-   .rp-warning{margin-top:9px;padding:7px 9px;background:#fff2f1;border:1px solid #f1c6c2;color:#94362f;border-radius:5px}
-   .rp-signatures{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:23px;break-inside:avoid;page-break-inside:avoid}
-   .rp-sign{min-height:76px;border-top:1px solid #bac5d2;padding-top:6px}.rp-sign b{display:block;font-size:8.5px}.rp-sign small{display:block;color:#718198;font-size:7.5px;margin-top:3px}
-   .rp-print-footer{border-top:1px solid #d9e0e8;margin-top:13px;padding-top:7px;color:#718198;font-size:7.5px;line-height:1.5}
-   @media print{.rp-return-print{max-width:none}.rp-signatures{break-inside:avoid}}
-  </style>
-  <article class="rp-return-print">
-   <header>
-    <div class="rp-brand"><img src="/static/wordmark.png" alt="ORIENTAL24"><div class="rp-brand-copy"><b>ORIENTAL24</b><small>Bon logistique de retour</small>${contactLine?`<small data-no-translate>${contactLine}</small>`:''}</div></div>
-    <div class="rp-doc-title"><span class="eyebrow">DOCUMENT LOGISTIQUE</span><h1>BON DE RETOUR</h1><strong data-no-translate>${esc(d.reference)}</strong><small>${esc(rpLabel(d.status))}</small></div>
-   </header>
-   <h2 class="rp-route"><span data-no-translate>${esc(d.source_name||'—')}</span> <span class="rp-route-arrow">→</span> <span data-no-translate>${esc(d.client_name||'—')}</span></h2>
-   <section class="rp-facts">
-    <div class="rp-fact"><small>Date de préparation</small><b data-no-translate>${esc(opsDate(d.created_at))}</b></div>
-    <div class="rp-fact"><small>Date d’envoi</small><b>${d.dispatched_at?`<span data-no-translate>${esc(opsDate(d.dispatched_at))}</span>`:'À confirmer'}</b></div>
-    <div class="rp-fact"><small>Hub de départ</small><b data-no-translate>${esc(d.source_name||'—')}</b></div>
-    <div class="rp-fact"><small>Vendeur destinataire</small><b data-no-translate>${esc(d.client_name||'—')}</b></div>
-    <div class="rp-fact"><small>Transport</small><b data-no-translate>${esc(d.transport||'—')}</b></div>
-    <div class="rp-fact"><small>Code bordereau / lots</small><b><span data-no-translate>${esc(d.tracking_code||'—')}</span> · <span data-no-translate>${lotCount}</span> <span data-no-translate>${esc(lotWord)}</span></b></div>
-   </section>
-   <div class="rp-summary"><div><b><span data-no-translate>${parcelCount}</span> <span data-no-translate>${esc(parcelWord)}</span></b><small>Nombre total porté sur ce bon</small></div><div><b><span data-no-translate>${Number(d.received)||0}</span> / <span data-no-translate>${parcelCount}</span> remis</b><small><span data-no-translate>${Number(d.remaining)||0}</span> restant(s) à remettre au vendeur</small></div></div>
-   ${d.note?`<p class="rp-note"><b>Observation :</b> <span data-no-translate>${esc(d.note)}</span></p>`:''}
-   ${d.cancel_reason?`<p class="rp-warning"><b>Palette annulée :</b> <span data-no-translate>${esc(d.cancel_reason)}</span></p>`:''}
-   <table>
-    <colgroup><col style="width:24%"><col style="width:14%"><col style="width:21%"><col style="width:15%"><col style="width:12%"><col style="width:14%"></colgroup>
-    <thead><tr><th>ID de suivi</th><th>Ville</th><th>Destinataire</th><th>Téléphone</th><th>Montant COD</th><th>Remise</th></tr></thead>
-    <tbody>${lines||'<tr><td colspan="6">Aucun colis dans ce bon.</td></tr>'}</tbody>
-   </table>
-   <section class="rp-signatures">
-    <div class="rp-sign"><b>Responsable du hub</b><small>Nom, signature et cachet</small></div>
-    <div class="rp-sign"><b>Livreur / transporteur</b><small>Nom, signature et date de départ</small></div>
-    <div class="rp-sign"><b>Réception par le vendeur</b><small>Nom, signature et cachet</small></div>
-   </section>
-   <footer class="rp-print-footer"><span>À signer lors de la remise physique des colis. Le montant COD indiqué est informatif : ce bon n’est ni une facture ni une preuve d’encaissement. Édité le</span> <span data-no-translate>${esc(opsDate(new Date().toISOString()))}</span>.</footer>
-  </article>`;
-  await doPrint(html,root=>{if(owner!==ppIdentity()){root.innerHTML='';throw Error('Session modifiée. Rouvrez le bon de retour.')}});
+  const partyName=d.client_name||d.client_company||d.client_legal_name||d.client_contact_name||'Client';
+  const partyLines=[
+   d.client_contact_name&&d.client_contact_name!==d.client_name?'Contact : '+d.client_contact_name:'',
+   d.client_phone?'Tél. : '+d.client_phone:'',d.client_email,d.client_address
+  ].filter(Boolean);
+  const printData={
+   title:'Bon de retour',reference:d.reference,
+   date:opsDate(d.dispatched_at||d.created_at),status:rpLabel(d.status),
+   route:`${d.hub_name||d.source_name||'Hub'} → ${partyName}`,
+   party:{label:'Client destinataire',name:partyName,lines:partyLines},
+   count:d.count,received:d.received,remaining:d.remaining,missing:d.missing,note:d.note,
+   rows:(d.lines||[]).map(l=>({tracking:l.tracking,city:l.city,recipient:l.recipient,phone:l.phone,amount:l.amount})),
+   signatures:['Responsable du hub','Transporteur','Réception par le vendeur']
+  };
+  await doPrint(o24BonHtml(printData),root=>{if(owner!==ppIdentity()){root.innerHTML='';throw Error('Session modifiée. Rouvrez le bon de retour.')}})
  }catch(e){if(owner===ppIdentity())toast(e.message,true)}
 }
