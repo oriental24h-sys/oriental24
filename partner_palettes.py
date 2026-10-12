@@ -53,7 +53,7 @@ def register_partner_palettes(app,s):
         if not r or(u['role']=='client' and r['client_id']!=u['id']) or(u['role']=='agent' and r['destination_hub_id']!=u['agent_hub_id']):raise Error('Palette introuvable.',404)
         return dict(r)
     def lines(c,did):
-        return [dict(r) for r in c.execute('SELECT l.*,p.phone,p.status current_status,p.current_hub_id FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=? ORDER BY l.id',(did,))]
+        return [dict(r) for r in c.execute('SELECT l.*,p.phone,p.amount,p.status current_status,p.current_hub_id FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=? ORDER BY l.id',(did,))]
     def receive_guard(did,u):
         # v1.4.17 · every refused reception is recorded with whom and why (outside the failing transaction).
         if u['role']=='admin':return
@@ -70,7 +70,24 @@ def register_partner_palettes(app,s):
         if block:raise Error(*block)
     def detail(c,d):
         ls=lines(c,d['id']);received=sum(bool(l['received_at']) for l in ls);missing=sum(bool(l['missing_at']) for l in ls)
-        return {**d,'lines':ls,'count':len(ls),'received':received,'missing':missing,'remaining':len(ls)-received-missing,'audit':[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE a.document_id=? ORDER BY a.id DESC',(d['id'],))]}
+        hid=d.get('destination_hub_id')
+        h=c.execute('SELECT h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=?',(hid,)).fetchone() if hid else None
+        cl=c.execute('''SELECT u.name,u.company,u.phone,u.email,COALESCE(a.legal_name,'') legal_name,
+            COALESCE(a.billing_address,'') billing_address FROM users u
+            LEFT JOIN account_dossiers a ON a.user_id=u.id WHERE u.id=? AND u.role='client' ''',(d.get('client_id'),)).fetchone() if d.get('client_id') else None
+        return {**d,
+            'hub_name':h['name'] if h else d.get('destination_name',''),
+            'hub_address':h['address'] if h else '',
+            'hub_city':h['city'] if h else '',
+            'client_contact_name':cl['name'] if cl else '',
+            'client_company':cl['company'] if cl else '',
+            'client_phone':cl['phone'] if cl else '',
+            'client_email':cl['email'] if cl else '',
+            'client_legal_name':cl['legal_name'] if cl else '',
+            'client_address':cl['billing_address'] if cl else '',
+            'lines':ls,'count':len(ls),'received':received,'missing':missing,
+            'remaining':len(ls)-received-missing,
+            'audit':[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE a.document_id=? ORDER BY a.id DESC',(d['id'],))]}
     def audit(c,did,u,action,details):
         c.execute('INSERT INTO ops_audit(document_id,actor_id,action,details,created_at) VALUES(?,?,?,?,?)',(did,u['id'],action,json.dumps(details,ensure_ascii=False),now()))
     def lockcheck(c,p,cid,did=None):

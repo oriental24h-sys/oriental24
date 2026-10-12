@@ -121,7 +121,9 @@ def register_logistics(app, services):
         if not d or (u['role']=='client' and (d['kind']=='transfer' or d['client_id']!=u['id'])) or (u['role']=='livreur' and d['driver_id']!=u['id']):raise Error('Document introuvable.',404)
         return dict(d)
     def document_data(c,d):
-        lines=[dict(r) for r in c.execute('SELECT * FROM ops_document_lines WHERE document_id=? ORDER BY id',(d['id'],))]
+        lines=[dict(r) for r in c.execute('''SELECT l.*,p.phone,p.amount,p.status current_status
+            FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id
+            WHERE l.document_id=? ORDER BY l.id''',(d['id'],))]
         return {**d,'lines':lines,'count':len(lines),'received':sum(bool(r['received_at']) for r in lines)}
 
     services.update(ops_change=change,ops_notify_event=notify_event)
@@ -268,8 +270,28 @@ def register_logistics(app, services):
     @app.get(P+'/documents/<int:did>')
     @auth()
     def ops_document(did):
+        viewer=user()
         with conn() as c:
-            d=document_data(c,allowed_doc(c,did,user()))
+            d=document_data(c,allowed_doc(c,did,viewer))
+            def hub_info(hid):
+                if not hid:return None
+                r=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=?',(hid,)).fetchone()
+                return dict(r) if r else None
+            d['source_hub']=hub_info(d.get('source_hub_id'))
+            d['destination_hub']=hub_info(d.get('destination_hub_id'))
+            may_view_client_contact=(viewer['role']=='admin' or (viewer['role']=='client' and viewer['id']==d.get('client_id')))
+            if d.get('client_id') and may_view_client_contact:
+                cl=c.execute('''SELECT u.name,u.company,u.phone,u.email,COALESCE(a.legal_name,'') legal_name,
+                    COALESCE(a.billing_address,'') billing_address FROM users u
+                    LEFT JOIN account_dossiers a ON a.user_id=u.id WHERE u.id=? AND u.role='client' ''',(d['client_id'],)).fetchone()
+                d['client_contact']={
+                    'name':cl['name'] if cl else '',
+                    'company':cl['company'] if cl else '',
+                    'phone':cl['phone'] if cl else '',
+                    'email':cl['email'] if cl else '',
+                    'legal_name':cl['legal_name'] if cl else '',
+                    'address':cl['billing_address'] if cl else ''}
+            else:d['client_contact']=None
             import qrcode, io, base64
             image=qrcode.make(d['reference']);buf=io.BytesIO();image.save(buf,format='PNG');d['qr']='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()
             d['audit']=[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE document_id=? ORDER BY a.id DESC',(did,))]
