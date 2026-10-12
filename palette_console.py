@@ -143,9 +143,25 @@ def register_palette_console(app,s):
             attachments=[dict(r) for r in c.execute('SELECT a.id,a.mime,a.note,a.created_at,u.name actor FROM palette_attachments a JOIN users u ON u.id=a.actor_id WHERE a.kind=? AND a.document_id=? ORDER BY a.id DESC',(KINDS[kind],did))]
             acts=[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE a.document_id=? ORDER BY a.id DESC LIMIT 40',(did,))]
             recv=sum(bool(l['received_at']) for l in ls);miss=sum(bool(l['missing_at']) for l in ls)
-            hid=d['destination_hub_id'] if kind=='partner' else d['source_hub_id']
-            hc=c.execute('SELECT ci.name FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=?',(hid,)).fetchone()
-            return jsonify({**d,'hub_city':hc[0] if hc else None,'lines':ls,'count':len(ls),'received':recv,'missing':miss,'remaining':len(ls)-recv-miss,'attachments':attachments,'activities':acts})
+            # The console stores the active hub in destination_hub_id for both
+            # partner arrivals (receiving hub) and hub-to-vendor returns (dispatch hub).
+            hid=d.get('destination_hub_id')
+            h=c.execute('SELECT h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=?',(hid,)).fetchone() if hid else None
+            client=c.execute('''SELECT u.name,u.company,u.phone,u.email,COALESCE(a.legal_name,'') legal_name,
+                COALESCE(a.billing_address,'') billing_address FROM users u
+                LEFT JOIN account_dossiers a ON a.user_id=u.id WHERE u.id=? AND u.role='client' ''',(d.get('client_id'),)).fetchone() if d.get('client_id') else None
+            return jsonify({**d,
+                'hub_name':h['name'] if h else (d.get('destination_name') if kind=='partner' else d.get('source_name')),
+                'hub_address':h['address'] if h else '',
+                'hub_city':h['city'] if h else None,
+                'client_contact_name':client['name'] if client else '',
+                'client_company':client['company'] if client else '',
+                'client_phone':client['phone'] if client else '',
+                'client_email':client['email'] if client else '',
+                'client_legal_name':client['legal_name'] if client else '',
+                'client_address':client['billing_address'] if client else '',
+                'lines':ls,'count':len(ls),'received':recv,'missing':miss,
+                'remaining':len(ls)-recv-miss,'attachments':attachments,'activities':acts})
 
     @app.get('/api/palette-console/<kind>/<int:did>/colis-csv')
     @auth('admin','agent')

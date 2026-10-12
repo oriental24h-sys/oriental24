@@ -85,6 +85,7 @@ def register_driver_workspace(app,s):
     def check(c,dr,p,mode):
         if mode not in ['assign','receive']:raise Error('Mode invalide.')
         received=c.execute('SELECT * FROM driver_receipts WHERE parcel_id=?',(p['id'],)).fetchone()
+        if mode=='receive' and p['status']=='Livré':raise Error('Colis Livré : il reste au livreur pour son suivi financier. Aucune récupération automatique.',409)
         if mode=='receive' and received and received['driver_id']==dr['id'] and p['driver_id'] in [None,dr['id']]:return True
         if p['operations_locked']:raise Error('Colis lié à un document actif : utilisez sa réception dédiée.',409)
         if mode=='assign' and 'damage_hold_open' in s and s['damage_hold_open'](c,p['id']):raise Error('Colis réceptionné endommagé : incident à traiter avant affectation.',409)
@@ -94,7 +95,6 @@ def register_driver_workspace(app,s):
             if p['driver_id'] and p['driver_id']!=dr['id']:raise Error('Récupérez d’abord ce colis auprès de son livreur actuel.',409)
             return p['driver_id']==dr['id'] and p['status'] in ['Reçu par le livreur','En livraison'] and not received
         if p['driver_id']!=dr['id']:raise Error('Ce colis n’est pas affecté à ce livreur.',409)
-        if p['status']=='Livré':raise Error('Colis Livré : il reste au livreur pour son suivi financier. Aucune récupération automatique.',409)
         if p['status'] not in CLOSED and (p['invoice_id'] or p['financial_locked']):raise Error('Colis ouvert verrouillé financièrement : régularisez le relevé.',409)
         return False
     @app.post('/api/drivers-workspace/<int:uid>/scan-preview')
@@ -140,3 +140,81 @@ def register_driver_workspace(app,s):
                     c.execute('INSERT INTO driver_receipts(parcel_id,driver_id,received_at,hub_id) VALUES(?,?,?,?) ON CONFLICT(parcel_id) DO UPDATE SET driver_id=excluded.driver_id,received_at=excluded.received_at,hub_id=excluded.hub_id',(p['id'],uid,now(),hub));note='Récupéré physiquement à l’agence auprès de '+dr['name']+' · retiré de sa tournée'
                 record(c,uid,u,d['mode'],{'before':previous,'hub_id':hub,'financial_attribution_preserved':p['status'] in CLOSED},p['id']);event(c,p['id'],status,note,u)
             result=dict(ok=True,already=bool(already),parcel_id=p['id'],mode=d['mode']);c.execute('INSERT INTO driver_scan_keys VALUES(?,?,?,?)',(u['id'],key,fp,json.dumps(result)));return jsonify(**result)
+
+    @app.post('/api/drivers-workspace/<int:uid>/scan-batch')
+    @auth('admin')
+    def driver_custody_scan_batch(uid):
+        """Confirm a collected barcode batch atomically after physical custody is verified."""
+        d=body();u=user()
+        required={'mode','scans','hub_id','request_key','confirmed'}
+        if set(d)!=required or d.get('confirmed') is not True:
+            raise Error('Confirmation de remise physique requise.')
+        mode=d.get('mode')
+        if mode not in ['assign','receive']:
+            raise Error('Mode invalide.')
+        scans=d.get('scans')
+        if not isinstance(scans,list) or not 1<=len(scans)<=200:
+            raise Error('Sélectionnez entre 1 et 200 colis à confirmer.')
+        key=d.get('request_key')
+        if not isinstance(key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,100}',key):
+            raise Error('Clé de requête invalide.')
+        hub=d.get('hub_id')
+        if hub is not None and (type(hub) is not int or hub<=0):
+            raise Error('Hub invalide.')
+        normalized=[];seen=set()
+        for item in scans:
+            if not isinstance(item,dict) or set(item)!={'parcel_id','revision'}:
+                raise Error('Détail de scan invalide.')
+            pid=item.get('parcel_id');revision=item.get('revision')
+            if type(pid) is not int or pid<=0 or type(revision) is not int or revision<0:
+                raise Error('Colis ou version invalide.')
+            if pid in seen:
+                raise Error('Un même colis apparaît plusieurs fois dans ce lot.')
+            seen.add(pid);normalized.append({'parcel_id':pid,'revision':revision})
+        fingerprint=hashlib.sha256(json.dumps([uid,d],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            dr=driver(c,uid)
+            prior=c.execute('SELECT * FROM driver_scan_keys WHERE actor_id=? AND request_key=?',(u['id'],key)).fetchone()
+            if prior:
+                if prior['fingerprint']!=fingerprint:
+                    raise Error('Clé déjà utilisée pour une autre opération.',409)
+                return jsonify(**json.loads(prior['result']),replayed=True)
+            if hub is not None and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub,)).fetchone():
+                raise Error('Hub invalide.')
+            if mode=='assign' and hub is not None:
+                raise Error('Le départ remet les colis au livreur, pas à un hub.')
+            checked=[]
+            for item in normalized:
+                p=parcel(c,item['parcel_id'],u)
+                already=check(c,dr,p,mode)
+                rev({'revision':item['revision']},p['ops_revision'])
+                checked.append((p,already))
+            applied=[];already_ids=[]
+            for p,already in checked:
+                if already:
+                    already_ids.append(p['id'])
+                    continue
+                previous={k:p[k] for k in ['status','driver_id','reason_code','next_attempt_at','current_hub_id']}
+                if mode=='assign':
+                    s['ops_change'](c,p,dict(driver_id=uid,status='Reçu par le livreur',revision=p['ops_revision']),u)
+                    c.execute("UPDATE parcels SET driver_id=?,status='Reçu par le livreur',updated_at=? WHERE id=?",(uid,now(),p['id']))
+                    c.execute('DELETE FROM driver_receipts WHERE parcel_id=?',(p['id'],))
+                    status='Reçu par le livreur';note='Remise physique au livreur : '+dr['name']
+                else:
+                    status=p['status'] if p['status'] in CLOSED else 'Réceptionné'
+                    if p['status'] in CLOSED:
+                        # Keep closed results, COD and commission attribution; receipt hides them from the route.
+                        c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1 WHERE id=?',(hub,p['id']))
+                    else:
+                        s['ops_change'](c,p,dict(driver_id=None,status=status,revision=p['ops_revision']),u)
+                        c.execute('UPDATE parcels SET driver_id=NULL,status=?,current_hub_id=?,updated_at=? WHERE id=?',(status,hub,now(),p['id']))
+                    c.execute('INSERT INTO driver_receipts(parcel_id,driver_id,received_at,hub_id) VALUES(?,?,?,?) ON CONFLICT(parcel_id) DO UPDATE SET driver_id=excluded.driver_id,received_at=excluded.received_at,hub_id=excluded.hub_id',(p['id'],uid,now(),hub))
+                    note='Récupéré physiquement à l’agence auprès de '+dr['name']+' · retiré de sa tournée'
+                record(c,uid,u,mode,{'before':previous,'hub_id':hub,'financial_attribution_preserved':p['status'] in CLOSED},p['id'])
+                event(c,p['id'],status,note,u)
+                applied.append(p['id'])
+            result={'ok':True,'mode':mode,'driver_id':uid,'count':len(applied),'parcel_ids':applied,
+                    'already':len(already_ids),'already_ids':already_ids}
+            c.execute('INSERT INTO driver_scan_keys VALUES(?,?,?,?)',(u['id'],key,fingerprint,json.dumps(result)))
+            return jsonify(**result)
