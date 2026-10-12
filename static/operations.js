@@ -40,7 +40,7 @@ async function openImports() {
     const history = await api("/imports");
     modal(
       "Importer des colis",
-      `${importSteps(1)}<div class="import-start"><div><h3>Plus de colis. Moins de saisie.</h3><p class="muted">Importez vos commandes en une fois. Vous vérifiez chaque ligne avant de confirmer.</p><form id="upload-import"><div class="form-error" role="alert"></div>${S.user.role === "admin" ? select("client_id", "Client destinataire de l’import", clientOptions()) : `<div class="import-account">${icon("user")}Import pour <strong>${esc(S.user.company || S.user.name)}</strong></div>`}<label class="upload-drop" id="upload-drop" for="import-file"><span class="stat-icon">${icon("upload")}</span><strong id="upload-file-name">Glissez votre fichier ici</strong><span id="upload-file-meta">ou cliquez pour parcourir vos fichiers</span><small>.xlsx ou .csv UTF-8 · 500 lignes · moins de 2 Mo</small><input id="import-file" type="file" name="file" accept=".xlsx,.csv" required aria-label="Fichier de colis"></label><button class="btn primary import-submit" type="submit">Vérifier mon fichier ${icon("arrow")}</button></form><div class="import-privacy">${icon("shield")}Aucun colis n’est créé sans votre confirmation.</div></div><aside class="import-guide"><div class="eyebrow">Bien préparer votre fichier</div><h3>Partez du bon modèle.</h3><p>Les villes ouvertes et leurs tarifs sont actualisés à chaque téléchargement du modèle Excel.</p><a href="/api/imports/template.xlsx" class="btn navy">${icon("download")}Modèle Excel .xlsx</a><a href="/api/imports/template.csv" class="section-link">Télécharger le modèle CSV ${icon("arrow")}</a><ul><li><b>Vendeur :</b> référence externe de commande ; tracking ORIENTAL24 automatique.</li><li><b>Société de livraison :</b> mettez votre tracking dans <code>reference_externe</code>. Il est conservé tel quel, unique sur la plateforme. Cellule texte pour garder les zéros.</li><li>Téléphones au format texte pour garder le zéro initial.</li><li>Remplacez la ligne d’exemple avant l’envoi.</li><li>Si une ligne est invalide, le lot entier attend votre correction.</li></ul></aside></div><div class="import-history"><div class="flex between"><h3>Mes derniers imports</h3><span class="sub">20 derniers lots</span></div>${
+      `${importSteps(1)}<div class="import-start"><div><h3>Plus de colis. Moins de saisie.</h3><p class="muted">Importez vos commandes en une fois. Vous vérifiez chaque ligne avant de confirmer.</p><form id="upload-import"><div class="form-error" role="alert"></div>${S.user.role === "admin" ? select("client_id", "Client destinataire de l’import", clientOptions()) : `<div class="import-account">${icon("user")}Import pour <strong>${esc(S.user.company || S.user.name)}</strong></div>`}<label class="upload-drop" id="upload-drop" for="import-file"><span class="stat-icon">${icon("upload")}</span><strong id="upload-file-name">Glissez votre fichier ici</strong><span id="upload-file-meta">ou cliquez pour parcourir vos fichiers</span><small>.xlsx ou .csv UTF-8 · 500 lignes · moins de 2 Mo</small><input id="import-file" type="file" name="file" accept=".xlsx,.csv" required aria-label="Fichier de colis"></label><button class="btn primary import-submit" type="submit">Vérifier mon fichier ${icon("arrow")}</button></form><div class="import-privacy">${icon("shield")}Aucun colis n’est créé sans votre confirmation.</div></div><aside class="import-guide"><div class="eyebrow">Bien préparer votre fichier</div><h3>Partez du bon modèle.</h3><p>Les villes ouvertes et leurs tarifs sont actualisés à chaque téléchargement du modèle Excel.</p><a href="/api/imports/template.xlsx" id="import-template-xlsx" class="btn navy">${icon("download")}Modèle Excel .xlsx</a><a href="/api/imports/template.csv" id="import-template-csv" class="section-link">Télécharger le modèle CSV ${icon("arrow")}</a><ul><li><b>Vendeur :</b> référence externe de commande ; tracking ORIENTAL24 automatique.</li><li><b>Société de livraison :</b> utilisez l’en-tête <code>tracking</code> pour votre numéro de suivi ; il est conservé tel quel. L’ancien en-tête <code>reference_externe</code> reste reconnu. Cellule texte pour garder les zéros.</li><li>Téléphones au format texte pour garder le zéro initial.</li><li>Remplacez la ligne d’exemple avant l’envoi.</li><li>Si une ligne est invalide, le lot entier attend votre correction.</li></ul></aside></div><div class="import-history"><div class="flex between"><h3>Mes derniers imports</h3><span class="sub">20 derniers lots</span></div>${
         history.length
           ? simpleTable(
               ["Fichier / Client", "Lignes", "Statut", "Date", ""],
@@ -59,6 +59,22 @@ async function openImports() {
       }</div>`,
       true,
     );
+    const templateClient = $("#f-client_id");
+    const syncTemplateLinks = () => {
+      const clientId = S.user.role === "admin" ? (templateClient?.value || "") : "";
+      const blocked = S.user.role === "admin" && !clientId;
+      ["xlsx", "csv"].forEach((ext) => {
+        const link = $("#import-template-" + ext);
+        if (!link) return;
+        link.href = blocked ? "#" : `/api/imports/template.${ext}${clientId ? `?client_id=${encodeURIComponent(clientId)}` : ""}`;
+        link.setAttribute("aria-disabled", String(blocked));
+        link.classList.toggle("is-disabled", blocked);
+        link.tabIndex = blocked ? -1 : 0;
+        link.onclick = blocked ? (event) => { event.preventDefault(); toast("Choisissez un client pour télécharger son modèle.", true); } : null;
+      });
+    };
+    templateClient?.addEventListener("change", syncTemplateLinks);
+    syncTemplateLinks();
     const inputEl = $("#import-file"),
       drop = $("#upload-drop");
     const showFile = () => {

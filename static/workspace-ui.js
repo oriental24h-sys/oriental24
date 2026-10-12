@@ -34,14 +34,20 @@ document.addEventListener('keydown',e=>{
  if(e.key==='Tab'&&sidebarMobile()&&$('.sidebar.open')){const nodes=[...$('.sidebar').querySelectorAll('a,button')].filter(n=>n.getClientRects().length&&!n.disabled);const first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}}
 });
 function announcementMarkup(rows){
- if(!rows.length&&S.settings.announcement)rows=[{id:0,title:'ORIENTAL24',body:S.settings.announcement,kind:'info',link_kind:'none'}];
- if(!rows.length)return '';
- return `<section class="workspace-notices" aria-label="Annonces ORIENTAL24">${rows.map(n=>`<article class="workspace-notice notice-${n.kind}"><span class="notice-symbol" aria-hidden="true">${icon(n.kind==='banner'?'truck':'bell')}</span><div class="notice-copy"><strong dir="auto">${esc(n.title)}</strong><span dir="auto">${esc(n.body)}</span>${n.link_kind==='url'?`<a href="${esc(n.link_url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span data-no-translate>${esc(n.link_label)}</span> ${icon('arrow')}<span class="sr-only"> · site externe, nouvel onglet</span></a>`:n.link_kind==='template'?`<button class="notice-link" onclick="downloadNoticeTemplate()"><span data-no-translate>${esc(n.link_label)}</span> ${icon('download')}</button>`:''}</div>${n.kind==='banner'?`<div class="notice-art" aria-hidden="true">${routeArt()}</div>`:''}</article>`).join('')}</section>`;
+ const visible=Array.isArray(rows)?[...rows]:[];
+ if(!visible.length&&S?.settings?.announcement)visible.push({id:0,title:'ORIENTAL24',body:S.settings.announcement,kind:'info',link_kind:'none'});
+ if(S?.user?.role==='client'&&!visible.some(n=>n.link_kind==='template'))visible.unshift({
+  id:'city-import-template',title:'Mise à jour du modèle Excel',
+  body:'Suite à la mise à jour de notre liste de villes, veuillez télécharger le nouveau modèle Excel pour vos prochaines importations.',
+  kind:'important',link_kind:'template',link_label:'Télécharger le nouveau modèle Excel',translate_notice:true,translate_link:true,
+ });
+ if(!visible.length)return '';
+ return `<section class="workspace-notices" aria-label="Annonces ORIENTAL24">${visible.map(n=>`<article class="workspace-notice notice-${n.kind}"><span class="notice-symbol" aria-hidden="true">${icon(n.kind==='banner'?'truck':'bell')}</span><div class="notice-copy"><strong${n.translate_notice?'':' dir="auto"'}>${esc(n.title)}</strong><span${n.translate_notice?'':' dir="auto"'}>${esc(n.body)}</span>${n.link_kind==='url'?`<a href="${esc(n.link_url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><span data-no-translate>${esc(n.link_label)}</span> ${icon('arrow')}<span class="sr-only"> · site externe, nouvel onglet</span></a>`:n.link_kind==='template'?`<button class="notice-link" onclick="downloadNoticeTemplate()"><span${n.translate_link?'':' data-no-translate'}>${esc(n.link_label)}</span> ${icon('download')}</button>`:''}</div>${n.kind==='banner'?`<div class="notice-art" aria-hidden="true">${routeArt()}</div>`:''}</article>`).join('')}</section>`;
 }
 async function downloadNoticeTemplate(){
  if(opsOffline){offlineUnavailable('Modèle Excel actualisé — version serveur');return}
  if(!['admin','client'].includes(S?.user?.role)){toast('Téléchargement réservé aux espaces Admin et Client.',true);return}
- const owner=S.user.id;try{const r=await fetch('/api/imports/template.xlsx',{credentials:'same-origin'});if(!r.ok)throw Error('Modèle inaccessible. Vérifiez votre connexion et vos droits.');const blob=await r.blob();if(S?.user?.id!==owner)return;const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download='ORIENTAL24-modele-colis.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1500)}catch(e){if(S?.user?.id===owner)toast(e.message,true)}
+ const owner=S.user.id;try{const r=await fetch('/api/imports/template.xlsx',{credentials:'same-origin'});if(!r.ok)throw Error('Modèle inaccessible. Vérifiez votre connexion et vos droits.');const blob=await r.blob();if(S?.user?.id!==owner)return;const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=S?.user?.client_type==='societe_livraison'?'ORIENTAL24-modele-societe-livraison.xlsx':'ORIENTAL24-modele-vendeur.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1500)}catch(e){if(S?.user?.id===owner)toast(e.message,true)}
 }
 function announcementsView(rows){
  managedAnnouncements=rows;

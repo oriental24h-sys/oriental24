@@ -29,9 +29,10 @@ async function ppRxFind(code){const d=await api('/partner-palettes?q='+encodeURI
 function ppRxCamFormats(){try{if(!window.BarcodeDetector)return[];return['code_128','code_39','code_93','qr_code','ean_13','ean_8','itf','codabar','upc_a','upc_e','data_matrix']}catch(e){return[]}}
 async function ppRxCamSupported(){if(!window.BarcodeDetector||!navigator.mediaDevices?.getUserMedia)return false;try{const f=await BarcodeDetector.getSupportedFormats();return f.some(x=>ppRxCamFormats().includes(x))}catch(e){return false}}
 function ppRxCam(box,btn,state,onCode,onStatus){
- let stream=null,det=null,raf=0,track=null,last='',lastAt=0,torchBtn=null;
- const setState=t=>{if(state)state.textContent=t};
- const loop=async()=>{
+ let stream=null,det=null,raf=0,track=null,last='',lastAt=0,torchBtn=null,starting=false,generation=0;
+  const setState=t=>{if(state)state.textContent=t};
+  const hideVideo=()=>{try{const v=box&&box.querySelector('video');if(v){if(typeof v.pause==='function')v.pause();v.srcObject=null}}catch(e){}if(box)box.hidden=true};
+  const loop=async()=>{
   if(!stream)return;
   try{
    const codes=await det.detect(box.querySelector('video'));
@@ -45,30 +46,41 @@ function ppRxCam(box,btn,state,onCode,onStatus){
   active:()=>!!stream,
   async start(){
    if(stream)return true;
+   if(starting)return false;
+   starting=true;const token=++generation;let pending=null;
    try{
-    const fmts=(await BarcodeDetector.getSupportedFormats()).filter(f=>ppRxCamFormats().includes(f));
-    if(!fmts.length){setState('Formats non pris en charge');return false}
+    if(!window.BarcodeDetector||!navigator.mediaDevices?.getUserMedia)throw Error('Caméra non prise en charge sur cet appareil.');
+    const supported=await BarcodeDetector.getSupportedFormats();
+    if(token!==generation)return false;
+    const fmts=supported.filter(f=>ppRxCamFormats().includes(f));
+    if(!fmts.length)throw Error('Formats de codes-barres non pris en charge.');
     det=new BarcodeDetector({formats:fmts});
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false});
+    pending=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false});
+    if(token!==generation){pending.getTracks().forEach(t=>t.stop());return false}
+    stream=pending;
     const v=box.querySelector('video');v.srcObject=stream;box.hidden=false;await v.play();
+    if(token!==generation){pending.getTracks().forEach(t=>t.stop());stream=null;hideVideo();return false}
     track=stream.getVideoTracks()[0];setState('Caméra active — présentez le code');
     if(btn)btn.textContent='⏹ Arrêter la caméra';
     try{const caps=track.getCapabilities?track.getCapabilities():{};if(caps&&caps.torch&&!torchBtn){torchBtn=document.createElement('button');torchBtn.type='button';torchBtn.className='btn sm';torchBtn.textContent='💡 Lampe';let on=false;torchBtn.onclick=async()=>{on=!on;try{await track.applyConstraints({advanced:[{torch:on}]});torchBtn.textContent=on?'💡 Lampe ON':'💡 Lampe'}catch(e){}};btn.parentNode.insertBefore(torchBtn,btn.nextSibling)}}catch(e){}
     loop();return true;
-   }catch(e){setState('Caméra refusée ou indisponible — utilisez la saisie.');return false}
+   }catch(e){
+    pending?.getTracks().forEach(t=>t.stop());if(stream===pending)stream=null;
+    det=null;hideVideo();
+    if(token===generation)setState(e.message||'Caméra refusée ou indisponible — utilisez la saisie.');return false
+   }finally{starting=false}
   },
   stop(){
+   generation++;
    try{cancelAnimationFrame(raf)}catch(e){}
    if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
-   det=null;if(box)box.hidden=true;if(btn)btn.textContent='📷 Caméra';setState('Caméra arrêtée')
+   det=null;hideVideo();if(btn)btn.textContent='📷 Caméra du téléphone';setState('Caméra arrêtée')
   }
  };
 }
 async function ppRxCamWidget(){
  const ok=await ppRxCamSupported();
- if(!ok)return `<p class="sub">Caméra : disponible sur Android/Chrome (lecteur de codes intégré). Sinon utilisez un lecteur USB/Bluetooth ou la saisie — sur iPhone, la saisie/le lecteur restent la solution.</p>`;
- return `<div class="pp-rx-cam" id="pp-rx-cam" hidden><video playsinline muted></video></div>
-  <div class="pp-rx-tools"><button type="button" class="btn" id="pp-rx-cam-btn">📷 Caméra du téléphone</button><span class="sub" id="pp-rx-cam-state"></span></div>`;
+ return `<button type="button" class="btn sm" id="pp-rx-cam-btn">📷 Caméra du téléphone</button>${ok?'':`<span class="sub pp-rx-camera-note">Caméra indisponible sur cet appareil : lecteur USB/Bluetooth ou saisie manuelle.</span>`}`;
 }
 /* --- étape 1 : code palette --- */
 function ppReceiveStart(){
@@ -99,6 +111,7 @@ function ppReceiveStart(){
 async function ppReceiveScan(id){
  const ctx=ppContext('Réception palette');
  const st={lines:[],byCode:new Map(),scanned:new Map(),cam:null,busy:false};
+ modalCleanup=()=>{try{st.cam&&st.cam.stop()}catch(e){}};
  const remain=()=>st.lines.filter(l=>!l.received_at&&!l.missing_at&&!st.scanned.has(String(l.tracking).toUpperCase())).length;
  const norm=t=>String(t||'').trim().toUpperCase();
  const lineRow=l=>{const c=norm(l.tracking),on=st.scanned.has(c);
@@ -106,12 +119,17 @@ async function ppReceiveScan(id){
    ${l.received_at?'<span class="tag good">Déjà réceptionné</span>':l.missing_at?'<span class="tag warn">Manquant</span>':on?`<span class="tag good">✓ Scanné</span><button type="button" class="btn sm pp-rx-x" data-und="${esc(l.tracking)}" title="Retirer du lot">✕</button>`:'<span class="tag blue">À scanner</span>'}</div>`};
  const askList=()=>st.lines.filter(l=>!l.received_at&&!l.missing_at);
  const scanBox=()=>`<div class="pp-rxbox" id="pp-rx-box">
+   <label for="pp-rx-track">Scanner les colis (lecteur USB, clavier ou caméra)</label>
+   <div class="pp-rx-entry">
+    <input id="pp-rx-track" placeholder="Tracking ORIENTAL24 puis Entrée" autocomplete="off" maxlength="80">
+    <button class="btn primary" type="button" id="pp-rx-one">Ajouter ce colis</button>
+    <span id="pp-rx-cam-slot"></span>
+    <button class="btn sm" type="button" id="pp-rx-snd" onclick="ppSoundToggle()">${ppSound?'🔊 Son activé':'🔇 Son coupé'}</button>
+    <button class="btn sm" type="button" id="pp-rx-reset">↺ Vider les scans</button>
+   </div>
    <div class="pp-rx-cam" id="pp-rx-cam" hidden><video playsinline muted></video></div>
-   <label for="pp-rx-track">Scanner le code du colis — <b>bip aigu = ajouté</b> · <b>bip grave = hors palette</b> · <b>bip double = déjà scanné</b></label>
-   <input id="pp-rx-track" placeholder="Tracking O24-… (caméra, lecteur USB ou clavier)" autocomplete="off" maxlength="80">
-   <div class="pp-rx-tools"><button class="btn primary" type="button" id="pp-rx-one">Ajouter ce colis</button><button class="btn sm" type="button" id="pp-rx-snd" onclick="ppSoundToggle()">${ppSound?'🔊 Son activé':'🔇 Son coupé'}</button><button class="btn sm" type="button" id="pp-rx-reset">↺ Vider les scans</button></div>
-   <div id="pp-rx-cam-slot"></div>
-   <div class="pp-rx-msg" id="pp-rx-msg">Le scan prépare la liste — rien n’est réceptionné avant votre validation finale.</div></div>`;
+   <span class="sub pp-rx-camera-state" id="pp-rx-cam-state" aria-live="polite"></span>
+   <div class="pp-rx-msg" id="pp-rx-msg">Présentez le premier colis. Son « validé » = ajouté ; son grave = refusé ou à confirmer.</div></div>`;
  const validBox=()=>{const n=askList().length,left=remain();
   return `<div class="pp-validate" id="pp-rx-val"><b class="${left?'':'ready'}">${left?('Il reste '+left+' colis à scanner'):(n+' / '+n+' colis scannés ✓')}</b>
    <button class="btn primary" type="button" id="pp-rx-validate" ${left?'disabled':''}>Réceptionner les ${n} colis et valider</button>
@@ -164,15 +182,15 @@ async function ppReceiveScan(id){
   const list=ctx.node.querySelector('#pp-rx-list');
   if(list)list.onclick=ev=>{const b=ev.target.closest('[data-und]');if(b)undo(b.getAttribute('data-und'))};
   const vb=ctx.node.querySelector('#pp-rx-validate');if(vb)vb.onclick=validate;
-  /* caméra */
+  /* Caméra du téléphone : même rangée de contrôles que le scan clavier/USB. */
   const slot=ctx.node.querySelector('#pp-rx-cam-slot');
   if(slot){
-   ppRxCamWidget().then(html=>{slot.innerHTML=html;const cbtn=slot.querySelector('#pp-rx-cam-btn');if(!cbtn)return;
-    const box=slot.querySelector('#pp-rx-cam'),cst=slot.querySelector('#pp-rx-cam-state');
+   ppRxCamWidget().then(html=>{if(!ctx.current())return;slot.innerHTML=html;const cbtn=slot.querySelector('#pp-rx-cam-btn');if(!cbtn)return;
+    const box=ctx.node.querySelector('#pp-rx-cam'),cst=ctx.node.querySelector('#pp-rx-cam-state');
     st.cam=ppRxCam(box,cbtn,cst,(code)=>{add(code,true)},null);
     cbtn.onclick=async()=>{if(st.cam.active()){st.cam.stop()}else{const ok=await st.cam.start();if(ok)ppRxMsg('ok','Caméra active : scannez les colis.')}};
     if(ctx.node.querySelector('#pp-rx-track'))ctx.node.querySelector('#pp-rx-track').focus();
-   });
+   }).catch(e=>{if(ctx.current())slot.innerHTML=`<span class="sub pp-rx-camera-note">${esc(e.message)}</span>`});
   }
  };
  const draw=async()=>{
@@ -190,7 +208,6 @@ async function ppReceiveScan(id){
    bind();
   }
   paint();
-  ctx.node.addEventListener('pp-close',()=>{try{st.cam&&st.cam.stop()}catch(e){}},{once:false});
  };
  try{await draw()}catch(e){ppError(ctx,e)}
 }

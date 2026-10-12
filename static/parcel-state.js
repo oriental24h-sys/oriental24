@@ -1,7 +1,9 @@
 /* Status uses existing transition/attempt workflows. Follow-up Note only changes the reason. */
 function parcelStateEditable(p){return !['client','support'].includes(S.user.role)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked&&!(S.user.role==='livreur'&&['Livré','Retourné'].includes(p.status))}
+function clientInterestedEligible(p){return S?.user?.role==='client'&&p.status!=='Intéressé'&&!['Livré','Retourné','Refusé','Annulé'].includes(p.status)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked&&!['Réglée','Soldé','Paid'].includes(p.invoice_status)}
+function parcelStatusEditable(p){return S?.user?.role==='client'?clientInterestedEligible(p):parcelStateEditable(p)}
 function parcelNoteControl(p){const label=p.reason_label||p.reason_code||'Aucun motif';return parcelStateEditable(p)?`<button class="parcel-note-button ${p.reason_code?'has-reason':''}" aria-label="Note de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelReason(${p.id},this)"><span>Note${p.reason_code?' · '+esc(label):''}</span>${icon('down')}</button>`:`<span class="parcel-note-readonly">${esc(label)}</span>`}
-function parcelStatusControl(p){return parcelStateEditable(p)?`<button class="parcel-status-button" aria-label="État de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">${esc(p.status)}${icon('down')}</button>`:''}
+function parcelStatusControl(p){if(S?.user?.role==='client')return clientInterestedEligible(p)?`<button class="parcel-status-button client-interested-button" title="Marquer comme intéressé" aria-label="Marquer ${esc(p.tracking)} comme intéressé" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">Marquer intéressé${icon('down')}</button>`:'';return parcelStateEditable(p)?`<button class="parcel-status-button" aria-label="État de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">${esc(p.status)}${icon('down')}</button>`:''}
 function parcelStateControls(p){return `<div class="parcel-state-controls">${tag(p.status)}${parcelStatusControl(p)}${parcelNoteControl(p)}</div>`}
 let activeReasonMenu=null;
 function closeParcelReason(focus=true){const a=activeReasonMenu;if(!a)return;activeReasonMenu=null;a.node.remove();a.anchor?.setAttribute('aria-expanded','false');if(focus&&a.anchor?.isConnected)a.anchor.focus()}
@@ -38,6 +40,7 @@ window.addEventListener('resize',()=>activeReasonMenu?.place?.());
 
 // The row's status itself is the dropdown trigger; no generic modal is opened.
 function parcelStatusChoices(p){
+ if(S.user.role==='client')return clientInterestedEligible(p)?['Intéressé']:[];
  if(S.user.role==='admin')return S.statuses;
  const next=S.status_policy.driver_transitions;
  return [p.status,...(next[p.status]||[])];
@@ -49,12 +52,12 @@ async function openParcelState(id,anchor){
  const node=document.createElement('section');node.className='parcel-reason-menu parcel-status-menu';node.setAttribute('role','dialog');node.setAttribute('aria-label','Changer l’état de la commande');node.innerHTML='<p class="reason-loading">Chargement des états autorisés…</p>';document.body.append(node);anchor?.setAttribute('aria-expanded','true');
  const state={kind:'state',node,anchor,id,owner:S.user.id,busy:false};activeReasonMenu=state;
  state.place=()=>{if(activeReasonMenu!==state)return;const w=Math.min(320,innerWidth-24),r=anchor?.getBoundingClientRect(),h=Math.min(state.confirming?570:440,innerHeight-24),below=(r?.bottom||20)+8,above=(r?.top||0)-h-8;node.style.width=w+'px';node.style.left=Math.max(12,Math.min(r?.left||12,innerWidth-w-12))+'px';node.style.top=Math.max(12,below+h<=innerHeight-12?below:above>=12?above:innerHeight-h-12)+'px';node.style.maxHeight=h+'px'};state.place();
- try{const d=await loadParcelCommand(id);if(activeReasonMenu!==state||S?.user?.id!==state.owner)return;state.parcel=d.parcel;if(!parcelStateEditable(d.parcel))throw Error('Colis verrouillé ou clôturé. Actualisez la liste.');renderStatusOptions(state)}
+ try{const d=await loadParcelCommand(id);if(activeReasonMenu!==state||S?.user?.id!==state.owner)return;state.parcel=d.parcel;if(!parcelStatusEditable(d.parcel))throw Error('Colis verrouillé, clôturé ou déjà marqué « Intéressé ». Actualisez la liste.');renderStatusOptions(state)}
  catch(e){if(activeReasonMenu===state)node.innerHTML=`<p class="reason-error">${esc(e.message)}</p><button class="btn sm" onclick="closeParcelReason()">Fermer</button>`}
 }
 function statusMenuHeader(state,title){return `<header><div><strong>${esc(title)}</strong><small>${esc(state.parcel.tracking)} · ${esc(state.parcel.status)}</small></div><button class="icon-btn" aria-label="Fermer les états" onclick="closeParcelReason()">${icon('close')}</button></header>`}
 function renderStatusOptions(state){
- if(activeReasonMenu!==state)return;state.confirming=false;state.node.innerHTML=statusMenuHeader(state,'Changer l’état')+'<div class="reason-options status-options"></div><p class="reason-error" role="alert" hidden></p><footer>Choisissez un état. Les étapes sensibles demandent une confirmation. Le motif précédent est réinitialisé.</footer>';
+ if(activeReasonMenu!==state)return;state.confirming=false;const footer=S.user.role==='client'?'Vous pouvez uniquement marquer cette commande comme intéressée. Cela ne confirme ni livraison ni paiement.':'Choisissez un état. Les étapes sensibles demandent une confirmation. Le motif précédent est réinitialisé.';state.node.innerHTML=statusMenuHeader(state,'Changer l’état')+'<div class="reason-options status-options"></div><p class="reason-error" role="alert" hidden></p><footer>'+footer+'</footer>';
  const list=state.node.querySelector('.status-options');for(const label of parcelStatusChoices(state.parcel)){const b=document.createElement('button');b.type='button';b.className='reason-option';b.dataset.status=label;b.textContent=label+(label===state.parcel.status?' · actuel':'');b.title=S.status_policy.help[label]||'';b.disabled=label===state.parcel.status;b.setAttribute('aria-pressed',String(b.disabled));b.onclick=()=>selectParcelStatus(state,label);list.append(b)}
  list.onkeydown=e=>{const buttons=[...list.querySelectorAll('button:not(:disabled)')],index=buttons.indexOf(document.activeElement);if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();buttons[e.key==='Home'?0:e.key==='End'?buttons.length-1:(index+(e.key==='ArrowDown'?1:buttons.length-1))%buttons.length]?.focus()}};
  state.place();list.querySelector('button:not(:disabled)')?.focus();

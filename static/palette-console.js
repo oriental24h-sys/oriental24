@@ -4,7 +4,7 @@
 const pcBin='<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1 11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 9zm3 2v8h1.5v-8H9zm3.25 0v8h1.5v-8h-1.5zM12 5.5A1.5 1.5 0 1 1 12 8.5 1.5 1.5 0 0 1 12 5.5z"/></svg>';
 let pcState={tab:'default',status:'',exc:'',hub_id:'',date_from:'',date_to:'',q:'',page:1,size:30},pcOwner=null,pcSel=new Set(),pcHubs=null,pcRelanceDays=7;
 let pcRDoc=null,pcRChecked=new Set(),pcRetCtx=null,pcRetSel=[],pcRetCands=[],pcRetSerial=0;
-menu[1][1].splice(2,0,['palette-hub','layers','Palettes',['admin','agent']]);
+menu[1][1].splice(2,0,['palette-hub','layers','Palettes',['admin']]);
 titles['palette-hub']='Palettes';
 function pcQuery(){const me=ppIdentity();if(pcOwner!==me){pcOwner=me;pcState={tab:'default',status:'',exc:'',hub_id:'',date_from:'',date_to:'',q:'',page:1,size:30};pcSel=new Set()}const p={};for(const k in pcState)if(pcState[k]!==''&&pcState[k]!==null&&pcState[k]!==undefined)p[k]=pcState[k];return new URLSearchParams(p).toString()}
 const pcLabel=s=>({'Préparé':'Brouillon','En transit':'En transit','Partiellement reçu':'Réception partielle','Partiellement remis':'Remise partielle','Reçu':'Reçu','Remis':'Remis','Clôturé (écarts)':'Clôturé (écarts)','Annulé':'Annulée'}[s]||s);

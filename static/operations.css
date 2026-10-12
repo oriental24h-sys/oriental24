@@ -1182,3 +1182,4 @@
   #print-root .shipping-label .parcel-policy-badges{margin:1mm 0}
   #print-root .shipping-label .parcel-policy-tag{font-size:6pt;padding:.5mm 1.2mm}
 }
+.import-guide a.is-disabled{opacity:.55;cursor:not-allowed}
