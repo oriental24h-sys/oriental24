@@ -114,7 +114,7 @@ def register_tour_control(app,s):
         return jsonify(ok=True,points=n,retention_days=30)
 
     @app.get('/api/control-tower')
-    @auth('admin','agent')
+    @auth('admin')
     def control_tower():
         t=now()[:10]
         with conn() as c:

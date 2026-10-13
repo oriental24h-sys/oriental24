@@ -17,6 +17,9 @@ def register_reception_extras(app, s):
     with conn() as c:
         if 'agent_hub_id' not in {r[1] for r in c.execute('PRAGMA table_info(users)')}:
             c.execute('ALTER TABLE users ADD COLUMN agent_hub_id INTEGER REFERENCES ops_hubs(id)')
+        # One-time idempotent conversion. Keep the legacy column name during this rollout so
+        # currently deployed palette/receipt modules do not lose hub assignments.
+        c.execute("UPDATE users SET role='hub_manager' WHERE role='agent'")
         if 'missing_at' not in {r[1] for r in c.execute('PRAGMA table_info(ops_document_lines)')}:
             c.execute('ALTER TABLE ops_document_lines ADD COLUMN missing_at TEXT')
             c.execute('ALTER TABLE ops_document_lines ADD COLUMN missing_by INTEGER REFERENCES users(id)')
@@ -100,7 +103,7 @@ def register_reception_extras(app, s):
         d = dict(r)
         if u['role'] == 'client' and d['client_id'] != u['id']:
             raise Error('Palette introuvable.', 404)
-        if u['role'] == 'agent' and d['destination_hub_id'] != u['agent_hub_id']:
+        if u['role'] == 'agent' and (d['destination_hub_id'] != u.get('agent_hub_id') or d['status'] not in ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)')):
             raise Error('Palette introuvable.', 404)
         return d
 
@@ -175,9 +178,14 @@ def register_reception_extras(app, s):
         u = user()
         with conn() as c:
             r = c.execute(SELECT_INC + ' WHERE i.id=?', (iid,)).fetchone()
-            if not r or r['photo'] is None:
+            if not r:
                 raise Error('Photo introuvable.', 404)
-            users_and_doc(c, r['document_id'], u)
+            try:
+                users_and_doc(c, r['document_id'], u)
+            except Error:
+                raise Error('Photo introuvable.', 404)
+            if r['photo'] is None:
+                raise Error('Photo introuvable.', 404)
             resp = send_file(io.BytesIO(r['photo']), mimetype=r['photo_mime'], as_attachment=True, download_name=r['photo_name'] or 'photo.jpg', max_age=0)
             resp.headers['Cache-Control'] = 'private, no-store'
             resp.headers['X-Content-Type-Options'] = 'nosniff'
@@ -240,7 +248,7 @@ def register_reception_extras(app, s):
                 status, remaining = recompute(c, doc, at)
                 audit(c, did, u, 'Colis reçu endommagé', {'tracking': tracking, 'incident_id': iid, 'note': note})
             else:
-                match = c.execute('SELECT id FROM parcels WHERE tracking=? COLLATE NOCASE AND client_id=?', (tracking, doc['client_id'])).fetchone()
+                match = c.execute('SELECT id FROM parcels WHERE tracking=? COLLATE NOCASE AND client_id=? AND current_hub_id=?', (tracking, doc['client_id'], doc['destination_hub_id'])).fetchone()
                 if match:
                     c.execute('UPDATE pp_incidents SET parcel_id=? WHERE id=?', (match['id'], iid))
                 audit(c, did, u, 'Colis imprévu constaté', {'tracking': tracking, 'incident_id': iid, 'note': note})

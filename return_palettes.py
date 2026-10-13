@@ -34,10 +34,14 @@ def register_return_palettes(app,s):
         if not r:raise Error('Vendeur actif requis.')
         return dict(r)
     def hub(c,hid,u):
-        if isinstance(hid,bool) or not re.fullmatch(r'[1-9][0-9]{0,9}',str(hid)):raise Error('Hub de départ invalide.')
+        if isinstance(hid,bool) or not re.fullmatch(r'[1-9][0-9]{0,9}',str(hid)):
+            if u['role']=='agent':raise Error('Hub introuvable.',404)
+            raise Error('Hub de départ invalide.')
         r=c.execute('SELECT * FROM ops_hubs WHERE id=? AND active=1',(hid,)).fetchone()
-        if not r:raise Error('Choisissez un hub de départ actif.',409)
-        if u['role']=='agent' and u['agent_hub_id']!=r['id']:raise Error('Vous ne pouvez expédier des retours que depuis votre hub.',403)
+        if not r:
+            if u['role']=='agent':raise Error('Hub introuvable.',404)
+            raise Error('Choisissez un hub de départ actif.',409)
+        if u['role']=='agent' and u['agent_hub_id']!=r['id']:raise Error('Hub introuvable.',404)
         return dict(r)
     def get(c,did,u):
         r=c.execute('SELECT d.*,m.transport,m.tracking_code,m.lots FROM ops_documents d JOIN return_palette_meta m ON m.document_id=d.id WHERE d.id=? AND d.kind=?',(did,KIND)).fetchone()
@@ -76,7 +80,7 @@ def register_return_palettes(app,s):
                 block=('Remise réservée à Admin, aux agents de réception et au vendeur destinataire.',403)
             elif u['role']=='agent' and row and row['destination_hub_id']!=u['agent_hub_id']:
                 audit(gc,did,u,'Remise refusée',{'reason':'Agent rattaché à un autre hub','actor_hub_id':u['agent_hub_id']})
-                block=('Palette retour introuvable pour votre hub.',404)
+                block=('Palette retour introuvable.',404)
             elif u['role']=='client' and row and row['client_id']!=u['id']:
                 audit(gc,did,u,'Remise refusée',{'reason':'Vendeur non destinataire de la palette'})
                 block=('Palette retour introuvable.',404)
@@ -112,10 +116,17 @@ def register_return_palettes(app,s):
         u=user();access(u)
         with conn() as c:
             if u['role']=='agent':
-                hubs=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 AND h.id=?',(u['agent_hub_id'],)).fetchall()
+                hub_id=u.get('agent_hub_id')
+                hubs=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 AND h.id=?',(hub_id,)).fetchall()
+                clients=c.execute('''SELECT DISTINCT u.id,u.name,u.company,u.client_type FROM users u
+                    JOIN parcels p ON p.client_id=u.id WHERE u.role='client' AND u.active=1
+                    AND p.current_hub_id=? AND p.status IN ('Refusé','Retourné')
+                    AND NOT EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.parcel_id=p.id AND l.active=1)
+                    ORDER BY u.company,u.name''',(hub_id,)).fetchall()
             else:
                 hubs=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 ORDER BY h.name').fetchall()
-            return jsonify(hubs=[dict(r) for r in hubs],clients=[dict(r) for r in c.execute("SELECT id,name,company,client_type FROM users WHERE role='client' AND active=1 ORDER BY company,name")])
+                clients=c.execute("SELECT id,name,company,client_type FROM users WHERE role='client' AND active=1 ORDER BY company,name").fetchall()
+            return jsonify(hubs=[dict(r) for r in hubs],clients=[dict(r) for r in clients])
 
     @app.get('/api/return-palettes/vendor-counts')
     @auth('admin','agent')
@@ -220,6 +231,8 @@ def register_return_palettes(app,s):
     def return_action(did,action):
         u=user();access(u)
         if action not in ['dispatch','cancel','receive','receive-all']:raise Error('Action inconnue.',404)
+        if action=='receive-all' and u['role']=='agent':
+            raise Error('Le responsable du Hub doit scanner chaque colis individuellement.',403)
         if action in ['receive','receive-all']:receive_guard(did,u)
         else:creator(u)
         with conn() as c:

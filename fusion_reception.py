@@ -5,6 +5,7 @@ non-received (missing_at) and the sending company is notified.
 """
 import json,re
 from flask import request,jsonify
+from hub_access import hub_received_lines
 
 KIND='partner_palette'
 
@@ -28,14 +29,15 @@ def register_fusion_reception(app,s):
         for pid in ids:
             r=c.execute('SELECT d.*,m.partner_reference,m.transport FROM ops_documents d JOIN partner_palette_meta m ON m.document_id=d.id WHERE d.id=? AND d.kind=?',(pid,KIND)).fetchone()
             if not r:raise Error('Palette introuvable.',404)
+            if u['role']=='agent' and r['destination_hub_id']!=u['agent_hub_id']:
+                raise Error('Palette introuvable.',404)
             if r['status'] not in ('En transit','Partiellement reçu'):raise Error(r['reference']+' : déjà réceptionnée ou non expédiée — fusion impossible.',409)
-            if u['role']=='agent' and r['destination_hub_id']!=u['agent_hub_id']:raise Error(r['reference']+' : elle attend d\'un autre hub.',404)
             rows.append(dict(r))
         hubs={r['destination_hub_id'] for r in rows}
         if len(hubs)>1:raise Error('Toutes les palettes doivent arriver au même hub.',409)
         return rows,hubs.pop()
     def lines(c,ids):
-        return [dict(r) for r in c.execute('SELECT l.id,l.document_id palette_id,l.tracking,l.recipient,l.city,l.received_at,l.missing_at,l.parcel_id,d.reference,d.client_id,d.client_name FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id WHERE l.document_id IN (%s) AND (l.active=1 OR l.received_at IS NOT NULL OR l.missing_at IS NOT NULL) ORDER BY d.id,l.id' % (','.join('?'*len(ids))),ids)]
+        return [dict(r) for r in c.execute('SELECT l.id,l.document_id palette_id,l.tracking,l.recipient,l.city,l.received_at,l.missing_at,l.parcel_id,d.reference,d.client_id,d.client_name,p.current_hub_id FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id IN (%s) AND (l.active=1 OR l.received_at IS NOT NULL OR l.missing_at IS NOT NULL) ORDER BY d.id,l.id' % (','.join('?'*len(ids))),ids)]
     def payload(c,bid,u):
         b=c.execute('SELECT * FROM fusion_batches WHERE id=?',(bid,)).fetchone()
         if not b:raise Error('Aucun pack de fusion.',404)
@@ -44,9 +46,14 @@ def register_fusion_reception(app,s):
         ls=lines(c,ids)
         if u['role']=='agent':
             h=c.execute('SELECT hub_destination_id FROM fusion_batches WHERE id=?',(bid,)).fetchone()
-            if h and h['hub_destination_id']!=u['agent_hub_id']:raise Error('Pack introuvable pour votre hub.',404)
+            if h and h['hub_destination_id']!=u['agent_hub_id']:raise Error('Aucun pack de fusion.',404)
         received=sum(bool(l['received_at']) for l in ls);missing=sum(bool(l['missing_at']) for l in ls)
         return {'id':bid,'reference':f'FUS-{bid:05d}','palettes':pl,'lines':ls,'count':len(ls),'received':received,'missing':missing,'remaining':len(ls)-received-missing,'closed':bool(b['closed_at'])}
+    def view_payload(c,bid,u):
+        value=payload(c,bid,u)
+        if u['role']=='agent':
+            value['lines']=hub_received_lines(value['lines'],u.get('agent_hub_id'))
+        return value
 
     @app.post('/api/partner-palettes/fusion')
     @auth('admin','agent')
@@ -59,13 +66,13 @@ def register_fusion_reception(app,s):
             for r in rows:c.execute('INSERT INTO fusion_batch_palettes(batch_id,palette_id) VALUES(?,?)',(bid,r['id']))
             for r in rows:
                 c.execute('INSERT INTO ops_audit(document_id,actor_id,action,details,created_at) VALUES(?,?,?,?,?)',(r['id'],u['id'],'Palette ajoutée au pack FUS-%05d' % bid,json.dumps({'batch_id':bid},ensure_ascii=False),now()))
-            return jsonify(payload(c,bid,u))
+            return jsonify(view_payload(c,bid,u))
 
     @app.get('/api/partner-palettes/fusion/<int:bid>')
     @auth('admin','agent')
     def fusion_get(bid):
         u=user();access(u)
-        with conn() as c:return jsonify(payload(c,bid,u))
+        with conn() as c:return jsonify(view_payload(c,bid,u))
 
     @app.post('/api/partner-palettes/fusion/<int:bid>/scan')
     @auth('admin','agent')
@@ -78,13 +85,13 @@ def register_fusion_reception(app,s):
             b=c.execute('SELECT * FROM fusion_batches WHERE id=?',(bid,)).fetchone()
             if not b:raise Error('Aucun pack de fusion.',404)
             if b['closed_at']:raise Error('Pack déjà clôturé.',409)
-            if u['role']=='agent' and b['hub_destination_id']!=u['agent_hub_id']:raise Error('Pack introuvable pour votre hub.',404)
+            if u['role']=='agent' and b['hub_destination_id']!=u['agent_hub_id']:raise Error('Aucun pack de fusion.',404)
             ids=[r['palette_id'] for r in c.execute('SELECT palette_id FROM fusion_batch_palettes WHERE batch_id=?',(bid,))]
             ls=lines(c,ids)
             l=next((x for x in ls if x['tracking']==trk),None)
             if not l:raise Error('Ce tracking ne figure dans aucune palette du pack.',404)
             if l['received_at']:
-                p=json.dumps(payload(c,bid,u))
+                p=json.dumps(view_payload(c,bid,u))
                 return app.response_class(p,mimetype='application/json',status=200,headers={'X-Already-Received':'1'})
             if l['missing_at']:raise Error('Ce colis est déjà déclaré non réceptionné.',409)
             at=now()
@@ -95,7 +102,7 @@ def register_fusion_reception(app,s):
             pend=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND active=1 AND received_at IS NULL AND missing_at IS NULL',(l['palette_id'],)).fetchone()[0]
             c.execute('UPDATE ops_documents SET status=?,completed_at=CASE WHEN ?=0 THEN ? ELSE completed_at END,revision=revision+1 WHERE id=?',('Reçu' if pend==0 else 'Partiellement reçu',pend,at,l['palette_id']))
             event(c,l['parcel_id'],'En transit',dline['reference']+' · reçu au pack de fusion FUS-%05d' % bid,u)
-            return jsonify(payload(c,bid,u))
+            return jsonify(view_payload(c,bid,u))
 
     @app.post('/api/partner-palettes/fusion/<int:bid>/close')
     @auth('admin','agent')
@@ -105,11 +112,11 @@ def register_fusion_reception(app,s):
             c.execute('BEGIN IMMEDIATE')
             b=c.execute('SELECT * FROM fusion_batches WHERE id=?',(bid,)).fetchone()
             if not b:raise Error('Aucun pack de fusion.',404)
-            if u['role']=='agent' and b['hub_destination_id']!=u['agent_hub_id']:raise Error('Pack introuvable pour votre hub.',404)
+            if u['role']=='agent' and b['hub_destination_id']!=u['agent_hub_id']:raise Error('Aucun pack de fusion.',404)
             ids=[r['palette_id'] for r in c.execute('SELECT palette_id FROM fusion_batch_palettes WHERE batch_id=?',(bid,))]
             paly=payload(c,bid,u)
             if paly['closed']:
-                r=dict(paly);r['replayed']=True
+                r=dict(view_payload(c,bid,u));r['replayed']=True
                 return jsonify(r)
             pending=[l for l in payload(c,bid,u)['lines'] if not l['received_at'] and not l['missing_at']]
             if type(d.get('expected_remaining')) is not int or d['expected_remaining']!=len(pending):
@@ -134,5 +141,5 @@ def register_fusion_reception(app,s):
                 cur=c.execute('SELECT status FROM ops_documents WHERE id=?',(pid,)).fetchone()['status']
                 if pend==0 and miss==0 and cur!='Reçu':c.execute("UPDATE ops_documents SET status='Reçu',completed_at=?,revision=revision+1 WHERE id=?",(at,pid))
             c.execute('UPDATE fusion_batches SET closed_at=? WHERE id=?',(at,bid))
-            out=payload(c,bid,u);out['notified']=len(per)
+            out=view_payload(c,bid,u);out['notified']=len(per)
             return jsonify(out)
