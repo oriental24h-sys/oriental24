@@ -7,6 +7,7 @@ required for Railway.
 from __future__ import annotations
 
 import re
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,6 +23,26 @@ DEFAULT_ZONE_RADIUS_KM = 20.0
 OPEN_JOB_STATES = ('assigned', 'en_route')
 JOB_STATES = ('pending', 'assigned', 'en_route', 'picked_up', 'cancelled')
 _GOOGLE_HOSTS = {'google.com', 'maps.google.com', 'maps.app.goo.gl', 'goo.gl'}
+
+
+def _city_key(value):
+    """Accent/case-insensitive city key for matching DB labels to known centroids."""
+    text = unicodedata.normalize('NFKD', str(value or '')).casefold()
+    return ''.join(ch for ch in text if not unicodedata.combining(ch) and ch.isalnum())
+
+
+_GEO_BY_CITY_KEY = {_city_key(name): coords for name, coords in GEO.items()}
+_GEO_BY_CITY_KEY.update({
+    _city_key('Oujda-Angad'): GEO['Oujda'],
+    _city_key('Oujda Angad'): GEO['Oujda'],
+    _city_key('وجدة'): GEO['Oujda'],
+    _city_key('بركان'): GEO['Berkane'],
+    _city_key('Barkane'): GEO['Berkane'],
+})
+
+
+def _city_centroid(name):
+    return _GEO_BY_CITY_KEY.get(_city_key(name))
 
 
 def _valid_google_url(value, *, short_only=False):
@@ -120,6 +141,22 @@ def _row_dict(row):
 def register_ramassage_tower(app, s):
     conn, auth, user, now, Error = s['conn'], s['auth'], s['user'], s['now'], s['APIError']
 
+    def ensure_default_zones(c):
+        """Seed missing circular geofences for every pickup-enabled city with a known centroid.
+
+        Run this on requests as well as startup: an administrator can enable pickup for a
+        city after the process has started, so startup-only seeding leaves the dropdown empty.
+        Existing configured zones (including their radius and active flag) are never overwritten.
+        """
+        stamp = now()
+        for city in c.execute('SELECT id,name FROM cities WHERE pickup=1').fetchall():
+            center = _city_centroid(city['name'])
+            if center:
+                c.execute('''INSERT OR IGNORE INTO ramassage_zones
+                             (city_id,center_lat,center_lng,radius_km,active,updated_at)
+                             VALUES(?,?,?,?,1,?)''',
+                          (city['id'], center[0], center[1], DEFAULT_ZONE_RADIUS_KM, stamp))
+
     with conn() as c:
         c.executescript('''
         CREATE TABLE IF NOT EXISTS ramassage_zones(
@@ -168,17 +205,13 @@ def register_ramassage_tower(app, s):
                 c.execute('ALTER TABLE ops_hubs ADD COLUMN lat REAL')
             if 'lng' not in hubcols:
                 c.execute('ALTER TABLE ops_hubs ADD COLUMN lng REAL')
-        # Approximate city-centre defaults only where the repository already has a known centroid.
-        for row in c.execute('SELECT id,name FROM cities WHERE pickup=1').fetchall():
-            geo = GEO.get(row['name'])
-            if row['name'] == 'Azilal':
-                geo = (32.0, -6.35)
-            if geo:
-                c.execute('INSERT OR IGNORE INTO ramassage_zones(city_id,center_lat,center_lng,radius_km,active,updated_at) VALUES(?,?,?,?,1,?)',
-                          (row['id'], geo[0], geo[1], DEFAULT_ZONE_RADIUS_KM, now()))
+        # Seed known pickup-city geofences on startup; ensure_default_zones also handles
+        # cities switched on later, without changing an existing admin-configured zone.
+        ensure_default_zones(c)
         c.execute("INSERT OR IGNORE INTO ramassage_settings(key,value) VALUES('auto_dispatch','0')")
 
     def zone_for_point(c, lat, lng):
+        ensure_default_zones(c)
         hits = []
         for z in c.execute('''SELECT z.city_id,z.center_lat,z.center_lng,z.radius_km,ci.name
                               FROM ramassage_zones z JOIN cities ci ON ci.id=z.city_id
@@ -191,6 +224,7 @@ def register_ramassage_tower(app, s):
     def zone_by_id(c, city_id):
         if city_id in (None, ''):
             return None
+        ensure_default_zones(c)
         return c.execute('''SELECT z.city_id,z.center_lat,z.center_lng,z.radius_km,ci.name
                             FROM ramassage_zones z JOIN cities ci ON ci.id=z.city_id
                             WHERE z.city_id=? AND z.active=1 AND ci.pickup=1''', (int(city_id),)).fetchone()
@@ -286,11 +320,16 @@ def register_ramassage_tower(app, s):
 
     def tower_payload():
         with conn() as c:
+            ensure_default_zones(c)
             zones = [dict(r) for r in c.execute('''SELECT z.city_id,ci.name city,z.center_lat,z.center_lng,z.radius_km,z.active
                   FROM ramassage_zones z JOIN cities ci ON ci.id=z.city_id WHERE ci.pickup=1 ORDER BY ci.name''')]
             cities = [dict(r) for r in c.execute('''SELECT id,name FROM cities WHERE pickup=1 ORDER BY name''')]
             for city in cities:
-                city['zone_ready'] = any(z['city_id'] == city['id'] and z['active'] for z in zones)
+                zone = next((z for z in zones if z['city_id'] == city['id']), None)
+                city['zone_ready'] = bool(zone and zone['active'])
+                city['zone_center_lat'] = zone['center_lat'] if zone else None
+                city['zone_center_lng'] = zone['center_lng'] if zone else None
+                city['zone_radius_km'] = zone['radius_km'] if zone else None
             clients = []
             for r in c.execute('''SELECT rc.*,ci.name zone FROM ramassage_clients rc LEFT JOIN cities ci ON ci.id=rc.city_id
                                   ORDER BY rc.updated_at DESC,rc.id DESC LIMIT 300'''):
