@@ -180,22 +180,22 @@ function rxApiGuide(){
 /* ---------------- Agents de réception ---------------- */
 
 function rxAgentsBlock(){
- const agents=(S.users||[]).filter(u=>u.role==='agent'),hubs=S.hubs||[];
+ const agents=(S.users||[]).filter(u=>u.role==='hub_manager'||u.role==='agent'),hubs=S.hubs||[];
  const hubName=id=>hubs.find(h=>h.id===id)?.name||'Hub retiré';
- return `<section class="card"><div class="card-head"><h3>Agents de réception (${agents.length})</h3><button class="btn sm primary" onclick="agentForm(null)">${icon('plus')}Ajouter un agent</button></div>${agents.length?`<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Hub de réception</th><th>Statut</th><th></th></tr></thead><tbody>${agents.map(u=>`<tr><td><div class="recipient"><span class="avatar navy">${initials(u.name)}</span><strong>${esc(u.name)}</strong><span class="sub">${esc(u.email)}</span></div></td><td>${esc(hubName(u.agent_hub_id))}</td><td><span class="tag ${u.active?'good':'bad'}">${u.active?'Actif':'Désactivé'}</span></td><td><button class="icon-btn" onclick="agentForm(${u.id})">${icon('edit')}</button></td></tr>`).join('')}</tbody></table></div>`:empty('Aucun agent','Créez un compte agent par hub : il réceptionne les palettes sans voir la facturation.')}</section>`;
+ return `<section class="card"><div class="card-head"><h3>Responsables de Hub (${agents.length})</h3><button class="btn sm primary" onclick="agentForm(null)">${icon('plus')}Ajouter un responsable</button></div>${agents.length?`<div class="table-wrap"><table><thead><tr><th>Responsable</th><th>Hub</th><th>Statut</th><th></th></tr></thead><tbody>${agents.map(u=>`<tr><td><div class="recipient"><span class="avatar navy">${initials(u.name)}</span><strong>${esc(u.name)}</strong><span class="sub">${esc(u.email)}</span></div></td><td>${esc(hubName(u.agent_hub_id))}</td><td><span class="tag ${u.active?'good':'bad'}">${u.active?'Actif':'Désactivé'}</span></td><td><button class="icon-btn" onclick="agentForm(${u.id})">${icon('edit')}</button></td></tr>`).join('')}</tbody></table></div>`:empty('Aucun responsable de Hub','Créez un compte responsable pour le Hub ; son périmètre est limité au Hub qui lui est affecté.')}</section>`;
 }
 function agentForm(id){
  const u=id?(S.users||[]).find(x=>x.id===id):{name:'',email:'',phone:'',active:1,agent_hub_id:null};
  const hubs=(S.hubs||[]).filter(h=>h.active||h.id===u.agent_hub_id);
  if(!hubs.length){toast('Créez d’abord un hub actif (Palettes partenaires → Ajouter un hub).',true);return}
- modal(id?'Modifier l’agent':'Nouvel agent de réception',form(
-  `<div class="full form-hint">L’agent réceptionne <b>uniquement</b> les palettes arrivant à son hub : scan, écarts, clôture. Il ne voit ni facturation, ni liste des colis, ni autres hubs.</div>
+ modal(id?'Modifier le responsable de Hub':'Nouveau responsable de Hub',form(
+  `<div class="full form-hint">Le responsable travaille <b>uniquement</b> dans le Hub qui lui est affecté : réception, scans et opérations autorisées. Son périmètre sera vérifié côté serveur.</div>
   ${input('name','Nom complet',u.name)}${!id?input('email','Adresse e-mail','','email'):`<div class="form-hint">${esc(u.email)}</div>`}${input('phone','Téléphone',u.phone,'tel')}
   ${select('agent_hub_id','Hub de réception',hubs.map(h=>[h.id,h.name+' · '+h.city]),u.agent_hub_id)}
   ${input('password',id?'Nouveau mot de passe (facultatif)':'Mot de passe initial','','password',!id,'minlength="10" autocomplete="new-password"')}
   ${id?`<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active?'checked':''}><label for="user-active">Compte actif</label></div>`:''}
   <div class="full form-hint">Révoqué immédiatement en cas de désactivation : toutes ses sessions ferment.</div>`));
- bindForm(async d=>{await api('/users'+(id?'/'+id:''),id?'PATCH':'POST',{...d,role:'agent',agent_hub_id:Number(d.agent_hub_id)});await saved('Compte agent enregistré')});
+ bindForm(async d=>{await api('/users'+(id?'/'+id:''),id?'PATCH':'POST',{...d,role:'hub_manager',agent_hub_id:Number(d.agent_hub_id)});await saved('Compte responsable de Hub enregistré')});
 }
 
 const rxBaseUsersView=usersView;
