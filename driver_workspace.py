@@ -1,6 +1,7 @@
 """Morning dispatch / evening recovery. Physical custody is distinct from closed financial attribution."""
 import json,re,hashlib
 from flask import request,jsonify
+from audit_guard import install_driver_workspace_audit_guards
 from werkzeug.security import generate_password_hash
 
 CLOSED=['Livré','Refusé','Retourné']
@@ -16,6 +17,7 @@ def register_driver_workspace(app,s):
         CREATE TABLE IF NOT EXISTS driver_workspace_audit(id INTEGER PRIMARY KEY,driver_id INTEGER NOT NULL REFERENCES users(id),actor_id INTEGER NOT NULL REFERENCES users(id),action TEXT NOT NULL,parcel_id INTEGER REFERENCES parcels(id),details TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS driver_scan_keys(actor_id INTEGER NOT NULL REFERENCES users(id),request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(actor_id,request_key));
         ''')
+        install_driver_workspace_audit_guards(c)
     def driver(c,uid):
         r=c.execute("SELECT id,name,email,phone,company,active,created_at,driver_city_id,driver_address,driver_revision,driver_blocked,driver_archived FROM users WHERE id=? AND role='livreur'",(uid,)).fetchone()
         if not r:raise Error('Livreur introuvable.',404)

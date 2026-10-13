@@ -13,6 +13,7 @@ DB = configure(app, BASE)
 from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, policy as status_policy
 from billing import driver_paid_sql
 import client_types
+from hub_access import hub_manager_route_allowed, hub_manager_requires_active_hub, hub_parcel_scope
 
 def now(): return datetime.now().isoformat(timespec='seconds')
 @contextmanager
@@ -151,6 +152,11 @@ def user():
             session.clear();raise APIError('Connectez-vous pour continuer.',401)
         security_check_session(c,u['id'])
         result=dict(u)
+        # Persist hub_manager while retaining the old internal alias for legacy module checks.
+        # New route scopes still need to be migrated to explicit Hub Manager policies.
+        if result['role'] in ('agent','hub_manager'):
+            result['role_display']='Responsable de hub'
+            result['role']='agent'
         if result['role']=='support':
             result['city_ids']=[r['city_id'] for r in c.execute('SELECT city_id FROM support_cities WHERE support_id=? ORDER BY city_id',(u['id'],))]
         return result
@@ -160,6 +166,13 @@ def auth(*roles):
         def wrapped(*a,**kw):
             u=user()
             if roles and u['role'] not in roles: raise APIError('Accès non autorisé.',403)
+            if u.get('role_display')=='Responsable de hub':
+                if not hub_manager_route_allowed(request.method,request.path):
+                    raise APIError('Accès refusé : cette route n’est pas encore validée pour le Hub.',403)
+                if hub_manager_requires_active_hub(request.path):
+                    with conn() as hc:
+                        active_hub=hc.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone()
+                    if not active_hub:raise APIError('Le Hub de ce compte est inactif ou introuvable.',403)
             if u['role']=='support':
                 path=request.path
                 read_only=(request.method in ('GET','HEAD') and (
@@ -195,7 +208,7 @@ def team_member_ids(c,lead_id):
     return [r[0] for r in c.execute("SELECT id FROM users WHERE team_lead_id=? AND role='livreur' AND active=1",(lead_id,))]
 def scope(u,alias='p',c=None):
     if u['role']=='support': return f'{alias}.support_id=?',[u['id']]
-    if u['role']=='agent': return '1=0',[]  # Agents travaillent via les palettes, jamais la liste globale des colis.
+    if u['role']=='agent': return hub_parcel_scope(c,alias,u.get('agent_hub_id')) if c is not None else ('1=0',[])
     if u['role']=='client': return f'{alias}.client_id=?',[u['id']]
     if u['role']=='livreur':
         # v1.5.0 : un chef d'équipe voit (et pilote via les transitions livreur) les colis de ses livreurs actifs.
@@ -306,8 +319,23 @@ def bootstrap():
         cities=[dict(r) for r in c.execute('SELECT * FROM cities ORDER BY name')]
         if u['role']=='support':
             assigned=set(u.get('city_ids',[]));cities=[city for city in cities if city['id'] in assigned]
-        settings={r['key']:r['value'] for r in c.execute('SELECT * FROM settings')}
-        hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')] if u['role'] in ('admin','agent') else []
+        elif u['role']=='agent':
+            active_hub=c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone()
+            if active_hub:
+                assigned={r['city_id'] for r in c.execute('SELECT city_id FROM hub_cities WHERE hub_id=? AND active=1',(u.get('agent_hub_id'),))}
+                cities=[city for city in cities if city['id'] in assigned]
+            else:
+                cities=[]
+        safe_setting_keys=('announcement','company')+PUBLIC_CONTACT_KEYS
+        if u['role']=='admin':
+            settings={r['key']:r['value'] for r in c.execute('SELECT * FROM settings')}
+        else:
+            settings={r['key']:r['value'] for r in c.execute('SELECT key,value FROM settings WHERE key IN (%s)'%','.join('?'*len(safe_setting_keys)),safe_setting_keys)}
+        if u['role']=='admin':
+            hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')]
+        elif u['role']=='agent' and u.get('agent_hub_id'):
+            hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1',(u['agent_hub_id'],))]
+        else:hubs=[]
         return jsonify(user=u,csrf=session['csrf'],cities=cities,users=users,parcels=list_parcels(c,u),statuses=STATUSES,status_policy=status_policy(),settings=settings,hubs=hubs)
 @app.get('/api/parcels/<int:pid>')
 @auth()
@@ -593,7 +621,8 @@ def save_support_cities(c,support_id,ids):
 @auth('admin')
 def add_user():
     d=request.get_json() or {}; role=d.get('role')
-    if role not in ['client','livreur','agent','support']:raise APIError('Rôle invalide.')
+    if role=='agent':role='hub_manager'  # compatibility for an old admin screen during rollout
+    if role not in ['client','livreur','hub_manager','support']:raise APIError('Rôle invalide.')
     pw=text(d,'password',maxlen=128)
     if len(pw)<10:raise APIError('10 caractères minimum pour le mot de passe.')
     email=text(d,'email').lower()
@@ -603,9 +632,9 @@ def add_user():
         c.execute('BEGIN IMMEDIATE')
         city_ids=validate_support_cities(c,d.get('city_ids')) if role=='support' else []
         hub_id=None
-        if role=='agent':
+        if role=='hub_manager':
             hub_id=d.get('agent_hub_id')
-            if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez le hub de réception actif de cet agent.')
+            if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez le Hub actif de ce responsable.')
         lead=None
         if role=='livreur':
             lead=d.get('team_lead_id')
@@ -629,9 +658,9 @@ def edit_user(uid):
             if v['driver_archived'] and d.get('active'):raise APIError('Désarchivez le livreur depuis sa fiche.',409)
             c.execute('UPDATE users SET driver_blocked=?,driver_revision=driver_revision+1 WHERE id=?',(int(not bool(d.get('active'))),uid))
         hub_id=v['agent_hub_id']
-        if v['role']=='agent':
+        if v['role'] in ('agent','hub_manager'):
             hub_id=d.get('agent_hub_id',hub_id)
-            if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez un hub de réception actif pour cet agent.')
+            if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez un Hub actif pour ce responsable.')
         if v['role']=='livreur' and 'team_lead_id' in d:
             lead=d['team_lead_id'] or None
             if lead==uid:raise APIError('Un livreur ne peut pas être son propre chef d’équipe.')
@@ -888,6 +917,8 @@ from advanced_tech import register_advanced_tech
 register_advanced_tech(app, globals())
 from smart_delivery import register_smart_delivery
 register_smart_delivery(app, globals())
+from ramassage_tower import register_ramassage_tower
+register_ramassage_tower(app, globals())
 from smart_warehouse import register_smart_warehouse
 register_smart_warehouse(app, globals())
 from connected_ops import register_connected_ops
@@ -915,8 +946,12 @@ if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':
         else:
             city=c.execute('SELECT id FROM cities ORDER BY id LIMIT 1').fetchone()
             hid=c.execute("INSERT INTO ops_hubs(name,city_id,address,active,created_at) VALUES(?,?,?,1,?)",('Hub Oujda · démo',city['id'],'Zone logistique — données fictives',t)).lastrowid
+        home_city=c.execute('SELECT city_id FROM ops_hubs WHERE id=?',(hid,)).fetchone()['city_id']
+        if not c.execute('SELECT 1 FROM hub_cities WHERE hub_id=? AND city_id=?',(hid,home_city)).fetchone():
+            # Demo coverage never auto-designates a city primary; Central Hub fallback is configured by Admin.
+            c.execute('INSERT INTO hub_cities(hub_id,city_id,active,is_primary,created_at) VALUES(?,?,1,0,?)',(hid,home_city,t))
         if not c.execute("SELECT 1 FROM users WHERE email='agent@oriental24.ma'").fetchone():
-            c.execute('INSERT INTO users(name,email,password,role,company,phone,active,client_type,agent_hub_id,created_at) VALUES(?,?,?,?,?,?,1,?,?,?)',('Nadia Réception','agent@oriental24.ma',generate_password_hash('Oriental24!Demo'),'agent','ORIENTAL24','0600000000','vendeur',hid,t))
+            c.execute('INSERT INTO users(name,email,password,role,company,phone,active,client_type,agent_hub_id,created_at) VALUES(?,?,?,?,?,?,1,?,?,?)',('Nadia Réception','agent@oriental24.ma',generate_password_hash('Oriental24!Demo'),'hub_manager','ORIENTAL24','0600000000','vendeur',hid,t))
 
 
 # — v1.6.2 « Portail vendeur » : suivi public en lecture seule, sécurisé par un lien à clé.

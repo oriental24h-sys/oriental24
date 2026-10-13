@@ -4,6 +4,7 @@ No parcel creation, tracking replacement, financial transaction or automatic rec
 import csv,io,json,hashlib,re
 from flask import request,jsonify,Response
 from client_types import tracking_text
+from hub_access import hub_received_lines
 
 KIND='partner_palette'
 STATES=('Préparé','En transit','Partiellement reçu','Reçu','Clôturé (écarts)','Annulé')
@@ -50,7 +51,7 @@ def register_partner_palettes(app,s):
         return dict(r)
     def get(c,did,u):
         r=c.execute('SELECT d.*,m.partner_reference,m.transport FROM ops_documents d JOIN partner_palette_meta m ON m.document_id=d.id WHERE d.id=? AND d.kind=?',(did,KIND)).fetchone()
-        if not r or(u['role']=='client' and r['client_id']!=u['id']) or(u['role']=='agent' and r['destination_hub_id']!=u['agent_hub_id']):raise Error('Palette introuvable.',404)
+        if not r or(u['role']=='client' and r['client_id']!=u['id']) or(u['role']=='agent' and (r['destination_hub_id']!=u.get('agent_hub_id') or r['status'] not in ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)'))):raise Error('Palette introuvable.',404)
         return dict(r)
     def lines(c,did):
         return [dict(r) for r in c.execute('SELECT l.*,p.phone,p.amount,p.status current_status,p.current_hub_id FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=? ORDER BY l.id',(did,))]
@@ -65,7 +66,7 @@ def register_partner_palettes(app,s):
                 block=('Réception physique réservée à Admin et aux agents de réception.',403)
             elif u['role']=='agent' and row and row['destination_hub_id']!=u['agent_hub_id']:
                 audit(gc,did,u,'Réception refusée',{'reason':'Agent rattaché à un autre hub','actor_hub_id':u['agent_hub_id'],'palette_hub_id':row['destination_hub_id']})
-                block=('Palette introuvable pour votre hub.',404)
+                block=('Palette introuvable.',404)
             else:block=None
         if block:raise Error(*block)
     def detail(c,d):
@@ -88,6 +89,15 @@ def register_partner_palettes(app,s):
             'lines':ls,'count':len(ls),'received':received,'missing':missing,
             'remaining':len(ls)-received-missing,
             'audit':[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE a.document_id=? ORDER BY a.id DESC',(d['id'],))]}
+    def manager_detail(c,doc,u):
+        value=detail(c,doc)
+        if u['role']!='agent':return value
+        value['lines']=hub_received_lines(value['lines'],u.get('agent_hub_id'))
+        # Keep aggregate progress, not IDs/trackings for parcels that have not arrived physically.
+        value['audit']=[{**row,'details':{}} for row in value['audit']]
+        for key in ('client_contact_name','client_phone','client_email','client_legal_name','client_address'):
+            value[key]=''
+        return value
     def audit(c,did,u,action,details):
         c.execute('INSERT INTO ops_audit(document_id,actor_id,action,details,created_at) VALUES(?,?,?,?,?)',(did,u['id'],action,json.dumps(details,ensure_ascii=False),now()))
     def lockcheck(c,p,cid,did=None):
@@ -145,13 +155,19 @@ def register_partner_palettes(app,s):
             if request.method=='GET':
                 where=['d.kind=?'];args=[KIND]
                 if u['role']=='client':where.append('d.client_id=?');args.append(u['id'])
-                if u['role']=='agent':where.append('d.destination_hub_id=?');args.append(u['agent_hub_id'])
+                if u['role']=='agent':
+                    where.append('d.destination_hub_id=?');args.append(u['agent_hub_id'])
+                    where.append("d.status IN ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)')")
                 state=request.args.get('state','');q=text(request.args,'q',120)
                 if state:
                     if state not in STATES:raise Error('État de palette invalide.')
                     where.append('d.status=?');args.append(state)
-                if q:
-                    where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(m.partner_reference),lower(?))>0 OR EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.document_id=d.id AND instr(lower(l.tracking),lower(?))>0))");args.extend([q]*4)
+                if q and u['role']=='agent':
+                    # Hub managers may search palette identifiers, not parcel tracking strings
+                    # for lines that have not been physically received at their Hub.
+                    where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(m.partner_reference),lower(?))>0)");args.extend([q]*3)
+                elif q:
+                    where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(m.partner_reference),lower(?))>0 OR EXISTS(SELECT 1 FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=d.id AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0 OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0)))");args.extend([q]*5)
                 try:
                     page=int(request.args.get('page',1));size=int(request.args.get('size',20))
                     if page<1 or size not in [20,50,100]:raise ValueError()
@@ -160,7 +176,23 @@ def register_partner_palettes(app,s):
                 total=c.execute('SELECT count(*)'+sql,args).fetchone()[0];page=min(page,max(1,(total+size-1)//size))
                 rows=[]
                 for row in c.execute('SELECT d.*,m.partner_reference,m.transport'+sql+' ORDER BY d.id DESC LIMIT ? OFFSET ?',args+[size,(page-1)*size]):
-                    r=dict(row);counts=c.execute('SELECT count(*),sum(received_at IS NOT NULL),sum(missing_at IS NOT NULL) FROM ops_document_lines WHERE document_id=?',(r['id'],)).fetchone();r.update(count=counts[0],received=counts[1] or 0,missing=counts[2] or 0,remaining=counts[0]-(counts[1] or 0)-(counts[2] or 0));rows.append(r)
+                    r=dict(row);counts=c.execute('SELECT count(*),sum(received_at IS NOT NULL),sum(missing_at IS NOT NULL) FROM ops_document_lines WHERE document_id=?',(r['id'],)).fetchone();r.update(count=counts[0],received=counts[1] or 0,missing=counts[2] or 0,remaining=counts[0]-(counts[1] or 0)-(counts[2] or 0))
+                    r['tracking_matches']=[];r['tracking_match_count']=0
+                    if q and u['role']!='agent':
+                        found=[];seen_parcels=set()
+                        for match in c.execute('''SELECT l.parcel_id,l.tracking snapshot_tracking,p.tracking current_tracking
+                                                  FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id
+                                                  WHERE l.document_id=? AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0
+                                                    OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0) ORDER BY l.id''',(r['id'],q,q)):
+                            if match['parcel_id'] in seen_parcels:continue
+                            seen_parcels.add(match['parcel_id'])
+                            current=str(match['current_tracking'] or '');snapshot=str(match['snapshot_tracking'] or '')
+                            tracking=current if q.lower() in current.lower() else snapshot
+                            found.append({'parcel_id':match['parcel_id'],'tracking':tracking or current or snapshot})
+                        r['tracking_match_count']=len(found);r['tracking_matches']=found[:5]
+                    if u['role']=='agent':
+                        r['tracking_matches']=[];r['tracking_match_count']=0
+                    rows.append(r)
                 return jsonify(rows=rows,total=total,page=page,size=size)
             creator(u)
             d=body();c.execute('BEGIN IMMEDIATE');fp,prior=replay(c,u,d,None,'create')
@@ -245,14 +277,14 @@ def register_partner_palettes(app,s):
     def partner_detail(did):
         u=user();access(u)
         with conn() as c:
-            c.execute('BEGIN');return jsonify(detail(c,get(c,did,u)))
+            c.execute('BEGIN');return jsonify(manager_detail(c,get(c,did,u),u))
 
     @app.get('/api/partner-palettes/<int:did>/csv')
     @auth('admin','client','agent')
     def partner_csv(did):
         u=user();access(u)
         with conn() as c:
-            c.execute('BEGIN');d=detail(c,get(c,did,u))
+            c.execute('BEGIN');d=manager_detail(c,get(c,did,u),u)
         def safe(v):
             v=str(v or '');return "'"+v if v.lstrip().startswith(('=','+','-','@')) else v
         buf=io.StringIO();w=csv.writer(buf,delimiter=';');w.writerow(['Palette','Société','Réf. partenaire','Destination','État palette','Tracking original','Destinataire','Ville','Téléphone','Réception','Reçu le','État actuel colis'])
@@ -266,6 +298,12 @@ def register_partner_palettes(app,s):
         if action not in ['dispatch','cancel','receive','receive-all']:raise Error('Action inconnue.',404)
         # Le blocage de réception est enregistré pour TOUT utilisateur (rôle, hub étranger) avant les autres gardes.
         if action.startswith('receive'):receive_guard(did,u)
+        if action=='receive-all' and u['role']=='agent':
+            # Keep a durable denial record, but never confirm a batch for a Hub Manager.
+            with conn() as c:
+                c.execute('BEGIN IMMEDIATE');doc=get(c,did,u)
+                audit(c,did,u,'Réception groupée refusée',{'reason':'scan individuel obligatoire','hub_id':doc['destination_hub_id']})
+            raise Error('Le responsable du Hub doit scanner chaque colis individuellement.',403)
         access(u);d=body()
         if action in ['dispatch','cancel']:creator(u)
         if d.get('confirmed') is not True:raise Error('Confirmez explicitement cette opération.')

@@ -21,6 +21,7 @@ import hashlib
 import json
 import re
 from flask import request, jsonify
+from hub_access import parcel_by_tracking_at_hub, parcel_by_manifest_at_hub
 
 KIND = 'return_palette'
 DEFAULT_WEEK_DAYS = 7
@@ -46,12 +47,16 @@ def register_return_scan(app, s):
 
     def clean_hub(c, hid, u):
         if isinstance(hid, bool) or not re.fullmatch(r'[1-9][0-9]{0,9}', str(hid)):
+            if u['role'] == 'agent':
+                raise Error('Hub introuvable.', 404)
             raise Error('Hub de départ invalide.')
         h = c.execute('SELECT h.*,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1', (hid,)).fetchone()
         if not h:
+            if u['role'] == 'agent':
+                raise Error('Hub introuvable.', 404)
             raise Error('Choisissez un hub de départ actif.', 409)
         if u['role'] == 'agent' and u['agent_hub_id'] != h['id']:
-            raise Error('Vous ne pouvez expédier des retours que depuis votre hub.', 403)
+            raise Error('Hub introuvable.', 404)
         return dict(h)
 
     def clean_client(c, cid):
@@ -67,10 +72,12 @@ def register_return_scan(app, s):
             WHERE l.parcel_id=? AND l.active=1 AND l.received_at IS NULL AND l.missing_at IS NULL LIMIT 1''', (pid,)).fetchone()
         return dict(r) if r else None
 
-    def verdict_for(c, p, cid, u):
-        """Décide ce que l'application doit faire du code scanné."""
+    def verdict_for(c, p, cid, u, hub_id):
+        """Décide quoi faire du code sans révéler les colis d'un autre hub."""
         if p is None:
             return 'not_found', 'Code inconnu : aucun colis avec ce tracking.', None
+        if p['current_hub_id']!=hub_id:
+            return 'other_hub', 'Colis non réceptionné physiquement dans le Hub choisi.', None
         info = dict(p)
         age = c.execute("SELECT CAST(julianday('now','localtime')-julianday(?) AS INTEGER) d", (p['created_at'],)).fetchone()['d']
         info['days'] = int(age or 0)
@@ -89,17 +96,15 @@ def register_return_scan(app, s):
                 p['tracking'], info['days'], p['status']), info
         return 'ok', 'Colis <b>%s</b> · %d jours · état %s.' % (p['tracking'], info['days'], p['status']), info
 
-    def find_tracking(c, code, u):
-        """Recherche par tracking, puis par référence de palette (une palette = ses colis)."""
+    def find_tracking(c, code, u, hub_id):
+        """Recherche uniquement parmi les colis physiquement présents au Hub choisi."""
         code = str(code or '').strip()
         if not code or len(code) > 160:
             raise Error('Code invalide.')
-        p = c.execute('SELECT * FROM parcels WHERE upper(tracking)=upper(?)', (code,)).fetchone()
+        p = parcel_by_tracking_at_hub(c, code, hub_id)
         if p:
             return p
-        p = c.execute('''SELECT p.* FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
-            JOIN parcels p ON p.id=l.parcel_id WHERE d.reference=? AND l.active=1 ORDER BY l.id LIMIT 1''', (code,)).fetchone()
-        return p
+        return parcel_by_manifest_at_hub(c, code, hub_id)
 
     @app.get('/api/return-palettes/scan-lookup')
     @auth('admin', 'agent')
@@ -108,9 +113,9 @@ def register_return_scan(app, s):
         staff(u)
         with conn() as c:
             cid = clean_client(c, request.args.get('client_id'))['id']
-            clean_hub(c, request.args.get('hub_id'), u)
-            p = find_tracking(c, request.args.get('tracking'), u)
-            verdict, message, info = verdict_for(c, p, cid, u)
+            hub = clean_hub(c, request.args.get('hub_id'), u)
+            p = find_tracking(c, request.args.get('tracking'), u, hub['id'])
+            verdict, message, info = verdict_for(c, p, cid, u, hub['id'])
             payload = {k: info[k] for k in ('id', 'tracking', 'recipient', 'city', 'status', 'days') if k in info} if info else {}
             if info and 'client_name' in info:
                 payload['client_name'] = info['client_name']
@@ -160,7 +165,7 @@ def register_return_scan(app, s):
                 p = c.execute('SELECT * FROM parcels WHERE id=? AND client_id=?', (pid, cl['id'])).fetchone()
                 if not p:
                     raise Error('Colis inaccessible pour ce vendeur.', 404)
-                verdict, message, info = verdict_for(c, p, cl['id'], u)
+                verdict, message, info = verdict_for(c, p, cl['id'], u, hub['id'])
                 if verdict == 'too_recent' and pid not in confirmed:
                     raise Error('Colis %s : la semaine n’est pas encore passée — confirmez son ajout.' % p['tracking'], 409)
                 if verdict not in ('ok', 'too_recent'):
@@ -218,7 +223,7 @@ def register_return_scan(app, s):
             if not doc:
                 raise Error('Palette retour introuvable.', 404)
             if u['role'] == 'agent' and doc['destination_hub_id'] != u['agent_hub_id']:
-                raise Error('Palette retour introuvable pour votre hub.', 404)
+                raise Error('Palette retour introuvable.', 404)
             if u['role'] == 'client' and doc['client_id'] != u['id']:
                 raise Error('Palette retour introuvable.', 404)
             if doc['status'] not in ('Préparé', 'En transit', 'Partiellement remis'):
