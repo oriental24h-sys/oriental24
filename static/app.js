@@ -527,6 +527,7 @@ async function renderView(background = false) {
   const pageTitle = titles[view] || "Mon espace";
   document.title = `${window.o24Translate ? window.o24Translate(pageTitle) : pageTitle} — ORIENTAL24`;
   const current = view, owner = S?.user?.id;
+  if (current !== "tour" && window.rtMapStop) window.rtMapStop();
   try {
     let html = "";
     switch (view) {
@@ -656,6 +657,8 @@ async function renderView(background = false) {
     const notices = current === "print" ? [] : await api("/announcements","GET",undefined,background);
     if (current !== view || S?.user?.id !== owner || !$("#content")) return;
     $("#content").innerHTML = (current === "print" ? "" : announcementMarkup(notices)) + html + footer();
+    if (window.rtMapStop) window.rtMapStop();
+    if (current === "tour" && window.rtMapStart) window.rtMapStart(S.tower || {});
     if (view === "parcels") drawParcelTable();
     if (view === "support-orders") drawSupportOrders();
     if (supportPollTimer) { clearTimeout(supportPollTimer); supportPollTimer = null; }

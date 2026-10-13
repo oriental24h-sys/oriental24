@@ -130,7 +130,7 @@
         <span class="da-version">v ${esc((typeof RUNTIME !== 'undefined' && RUNTIME.version) || '')}</span>
         <button class="icon-btn da-app-refresh" onclick="reloadView()" aria-label="Actualiser les données" title="Actualiser toutes les données" ${refreshBusy ? 'disabled' : ''}>${icon('refresh')}</button>
         <span class="spacer"></span>
-        <button class="icon-btn" onclick="daPos()" aria-label="Transmettre ma position">${icon('search')}</button>
+        <button class="icon-btn" onclick="daTrackToggle()" aria-label="Démarrer ou arrêter le suivi GPS" title="Suivi GPS Ramassage">${icon('pin')}</button>
         <button class="icon-btn" onclick="daVehicle()" aria-label="Mon véhicule connecté">${icon('truck')}</button>
         <button class="icon-btn" onclick="daItin()" aria-label="Itinéraire">${icon('pin')}</button>
         <button class="icon-btn" onclick="openScanner()" aria-label="Scanner un colis">${icon('scan')}</button>
@@ -142,6 +142,7 @@
         ${st.plan ? `<button class="seg" onclick="daQuick('plan')">${icon('calendar')} ${st.plan} programmé(s) aujourd’hui</button>` : ''}
         ${st.retards ? `<button class="seg warn" onclick="daQuick('retards')">${icon('clock')} ${st.retards} colis en retard (+48 h)</button>` : ''}
       </div>` : ''}
+      <section id="da-ramassage-jobs" class="da-ramassage-jobs" aria-live="polite"></section>
       <div class="da-stats">
         <button class="da-stat" onclick="daReset()"><small>Total colis</small><b>${st.total}</b></button>
         <button class="da-stat" onclick="daQuick('ouverts')"><small>Ouverts</small><b>${st.ouverts}</b></button>
@@ -188,6 +189,8 @@
     </div>`;
     ensurePwa();
     daNotices();
+    window.daStartGpsTracking?.();
+    window.daStartRamassagePoll?.();
   }
 
   /* v1.5.0 : écran équipe du chef — synthèse par membre, filtre par livreur. */
@@ -458,16 +461,37 @@
     if (isDriver() && smallScreen() && view === 'dashboard') navigate(VIEW);
   };
 })();
-/* v1.8.0 « Tour de contrôle » : transmission de la position du livreur.
-   GPS du navigateur si disponible, sinon centre de la ville du colis en retard (démo terrain). */
-window.daPos=(silent)=>{
-  const send=(lat,lng,approx)=>{api('/driver/position','POST',{lat,lng}).then(()=>{if(!silent)toast(approx?'Position transmise (centre de ville — GPS indisponible).':'Position transmise ✓');}).catch((e)=>{if(!silent)toast(e.message||'Position refusée',true);});};
-  const fallback=()=>{const p=S.parcels.find((x)=>x.status==='En livraison')||S.parcels.find((x)=>x.status==='Programmé')||S.parcels[0];
-    const g=(typeof TOUR_GEO!=='undefined'&&p&&p.city)?TOUR_GEO[p.city]:null;
-    if(!g){if(!silent)toast('Position GPS indisponible et ville inconnue.',true);return;}
-    send(Math.round((g[0]+(Math.random()-0.5)*0.05)*10000)/10000,Math.round((g[1]+(Math.random()-0.5)*0.05)*10000)/10000,true);};
-  if(!navigator.geolocation){fallback();return;}
-  navigator.geolocation.getCurrentPosition((c)=>send(Math.round(c.coords.latitude*10000)/10000,Math.round(c.coords.longitude*10000)/10000,false),fallback,{timeout:4000,maximumAge:30000});
+/* Ramassage live : only browser GPS fixes are submitted; GPS failure never fabricates a city position. */
+window.daBatteryPct=async()=>{
+  try{if(navigator.getBattery){const b=await navigator.getBattery();return Math.round(b.level*100);}}catch(_){}
+  return null;
+};
+window.daPos=async(silent)=>{
+  const battery_pct=await window.daBatteryPct();
+  const gpsState=async(enabled)=>{try{await api('/driver/tower-status','POST',{gps_enabled:enabled,battery_pct});}catch(_){} };
+  if(!navigator.geolocation){await gpsState(false);if(!silent)toast('Géolocalisation indisponible sur cet appareil.',true);return;}
+  navigator.geolocation.getCurrentPosition(async(c)=>{
+    const payload={lat:Number(c.coords.latitude),lng:Number(c.coords.longitude),battery_pct};
+    if(S?.user?.driver_city_id)payload.city_id=Number(S.user.driver_city_id);
+    try{await api('/driver/position','POST',payload);if(!silent)toast('Position GPS réelle transmise ✓');}
+    catch(e){if(!silent)toast(e.message||'Position refusée',true);}
+  },async(err)=>{
+    const denied=!!(err&&err.code===1);await gpsState(!denied);
+    if(!silent)toast(denied?'Autorisez le GPS du navigateur pour partager votre position.':'Position GPS momentanément indisponible.',true);
+  },{timeout:8000,maximumAge:5000,enableHighAccuracy:true});
+};
+window.daStartGpsTracking=(silent=true)=>{
+  if(!S?.user||S.user.role!=='livreur'||localStorage.getItem('o24.ramassage.gps')!=='1'||window.__o24GpsTimer)return;
+  window.daPos(silent);
+  window.__o24GpsTimer=setInterval(()=>{if(document.visibilityState==='visible'&&S?.user?.role==='livreur')window.daPos(true);},10000);
+};
+window.daTrackToggle=async()=>{
+  if(localStorage.getItem('o24.ramassage.gps')==='1'){
+    localStorage.removeItem('o24.ramassage.gps');if(window.__o24GpsTimer){clearInterval(window.__o24GpsTimer);window.__o24GpsTimer=null;}
+    try{await api('/driver/tower-status','POST',{gps_enabled:false});}catch(_){}
+    toast('Suivi GPS arrêté.');return;
+  }
+  localStorage.setItem('o24.ramassage.gps','1');window.daStartGpsTracking(false);toast('Suivi GPS demandé — autorisez la localisation si demandé.');
 };
 /* v1.8.1 « Messagerie guidée » : messages prêts à l'emploi au client (enregistrés + visibles sur le suivi public). */
 const DA_MSGS=[['near','Je suis proche de votre adresse','📍'],['eta10','J’arrive dans environ 10 minutes','⏱️'],['patience','Merci de patienter, je suis en route','🛵']];
@@ -492,9 +516,11 @@ window.daMsgSend=async(id,code)=>{
 
 /* v1.10.0 « Flotte connectée » : véhicule du livreur (usure prédictive, batterie, état, télémétrie). */
 window.daVehicle=async()=>{
-  let v,al;try{[v,al]=await Promise.all([api('/vehicles'),api('/vehicles/alerts')])}catch(e){toast(e.message||'Flotte indisponible',true);return}
+  let v,al,ts;try{[v,al,ts]=await Promise.all([api('/vehicles'),api('/vehicles/alerts'),api('/driver/tower-status')])}catch(e){toast(e.message||'Flotte indisponible',true);return}
   const r=(v.rows||[])[0];
-  if(!r){modal('Mon véhicule',`<p class="muted">Aucun véhicule ne vous est affecté — l’administrateur déclare la flotte depuis le module Flotte &amp; relais.</p>`);return}
+  const gpsOn=localStorage.getItem('o24.ramassage.gps')==='1';
+  const towerControls=`<div class="da-tower-status"><b>Présence · Ramassage</b><small>Le point GPS est transmis uniquement quand le suivi est activé et que l’application reste ouverte.</small><div class="da-tower-actions"><button class="btn sm" type="button" onclick="daTowerState('available',null)">🟢 Disponible</button><button class="btn sm" type="button" onclick="daTowerState('rest',null)">⏸ Repos</button><button class="btn sm ${ts.full_load?'primary':''}" type="button" onclick="daTowerState(null,${!ts.full_load})">${ts.full_load?'✅ Charge normale':'🟠 Chargement complet'}</button><button class="btn sm ${gpsOn?'danger':'primary'}" type="button" onclick="daTrackToggle()">${gpsOn?'Arrêter GPS':'Activer GPS'}</button></div></div>`;
+  if(!r){modal('Mon véhicule',`<p class="muted">Aucun véhicule ne vous est affecté — l’administrateur déclare la flotte depuis le module Flotte &amp; relais.</p>${towerControls}`);return}
   const m=(v.maintenance||[]).find(x=>x.id===r.id)||{};
   const alerts=(al.alerts||[]).filter(a=>a.vehicle_id===r.id);
   modal('Mon véhicule connecté',`
@@ -509,7 +535,7 @@ window.daVehicle=async()=>{
     <button class="btn sm" type="button" onclick="daVState(${r.id},'disponible')">🟢 Disponible</button>
     <button class="btn sm primary" type="button" onclick="daVState(${r.id},'en_tournee')">🚚 En tournée</button>
     <button class="btn sm" type="button" onclick="daVState(${r.id},'maintenance')">🔧 Maintenance</button>
-    <button class="btn sm" type="button" onclick="daVTelemetry(${r.id})">📡 Compteur / batterie</button></div>`,true);
+    <button class="btn sm" type="button" onclick="daVTelemetry(${r.id})">📡 Compteur / batterie</button></div>${towerControls}`,true);
 };
 window.daVState=async(id,st)=>{try{await api('/vehicles/'+id,'PATCH',{state:st});toast('État : '+st);closeModal();}catch(e){toast(e.message,true)}};
 window.daVTelemetry=async(id)=>{
@@ -517,4 +543,40 @@ window.daVTelemetry=async(id)=>{
   const b=prompt('Batterie % (vide si N/A) :','');if(b===null)return;
   try{await api('/vehicles/'+id+'/telemetry','POST',{km:Number(km)||0,battery_pct:b===''?null:Number(b)});toast('Télémétrie envoyée ✓');closeModal();}
   catch(e){toast(e.message,true)}
+};
+window.daTowerState=async(availability,full_load)=>{
+  const payload={};if(availability!==null)payload.availability=availability;if(typeof full_load==='boolean')payload.full_load=full_load;
+  try{await api('/driver/tower-status','POST',payload);toast(availability==='rest'?'Statut : repos.':availability==='available'?'Statut : disponible.':full_load?'Charge complète signalée.':'Charge normale signalée.');closeModal();}
+  catch(e){toast(e.message||'Statut non enregistré.',true)}
+};
+window.daStartRamassagePoll=()=>{
+  if(!S?.user||S.user.role!=='livreur'||window.__o24RamassageTimer)return;
+  window.daRefreshRamassage();
+  window.__o24RamassageTimer=setInterval(()=>{if(document.visibilityState==='visible')window.daRefreshRamassage();},10000);
+};
+window.daRefreshRamassage=async()=>{
+  const host=document.getElementById('da-ramassage-jobs');if(!host||!S?.user||S.user.role!=='livreur')return;
+  try{
+    const data=await api('/driver/ramassage'),items=data.items||[];
+    let seen=[];try{seen=JSON.parse(localStorage.getItem('o24.ramassage.seen')||'[]')}catch(_){}
+    const fresh=items.filter(x=>!seen.includes(x.id));
+    if(fresh.length){
+      seen=[...new Set([...seen,...fresh.map(x=>x.id)])].slice(-100);try{localStorage.setItem('o24.ramassage.seen',JSON.stringify(seen))}catch(_){}
+      const first=fresh[0];
+      if('Notification'in window&&Notification.permission==='granted'){
+        const title='Nouveau ramassage';const body=`${first.client_name} · ${first.phone}`;
+        try{const reg=await navigator.serviceWorker?.getRegistration();if(reg?.showNotification)await reg.showNotification(title,{body,tag:'o24-ramassage-'+first.id});else new Notification(title,{body});}catch(_){}
+      }
+      if(document.visibilityState==='visible')toast(`Nouveau ramassage : ${first.client_name} · ${first.zone||''}`);
+    }
+    host.innerHTML=items.length?`<div class="da-ramassage-head"><b>Demandes de ramassage</b><span>${items.length}</span></div>${items.map(x=>{
+      const route=`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${x.lat},${x.lng}`)}&travelmode=driving`;
+      const phone=String(x.phone||'').replace(/[^0-9+]/g,'');const wa=phone.replace(/\D/g,'');
+      return `<article class="da-ramassage-card"><div class="da-ramassage-top"><b>${esc(x.client_name)}</b><span class="tag ${x.status==='en_route'?'blue':'warn'}">${x.status==='en_route'?'En route':'Nouveau'}</span></div><small>Ramassage #${x.id} · ${esc(x.zone||'Zone')} · ${x.parcels_count} colis</small><div class="da-ramassage-contact"><a href="tel:${encodeURIComponent(phone)}">📞 ${esc(phone)}</a><a target="_blank" rel="noopener" href="https://wa.me/${encodeURIComponent(wa)}">WhatsApp</a></div><div class="da-ramassage-actions"><a class="btn sm primary" target="_blank" rel="noopener" href="${route}">📍 Ouvrir l’itinéraire</a>${x.status==='assigned'?`<button class="btn sm" type="button" onclick="daPickupStatus(${x.id},'en_route')">Partir</button>`:`<button class="btn sm" type="button" onclick="daPickupStatus(${x.id},'picked_up')">Confirmer le ramassage</button>`}</div></article>`;
+    }).join('')}`:'';
+  }catch(_){/* The driver map remains usable if its optional pickup feed is briefly offline. */}
+};
+window.daPickupStatus=async(id,status)=>{
+  try{await api('/driver/ramassage/'+id,'PATCH',{status});toast(status==='picked_up'?'Ramassage confirmé ✓':'Départ vers le client enregistré.');await window.daRefreshRamassage();}
+  catch(e){toast(e.message||'Mise à jour refusée.',true)}
 };

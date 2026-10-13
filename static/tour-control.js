@@ -7,7 +7,7 @@ const TOUR_GEO={'Oujda':[34.681,-1.912],'Casablanca':[33.573,-7.5898],'Rabat':[3
  'El Jadida':[33.2309,-8.4997],'Kénitra':[34.261,-6.5802],'Taza':[34.2214,-4.0071],'Ouarzazate':[30.9188,-6.8825],
  'Laâyoune':[27.1536,-13.2033],'Dakhla':[23.6848,-15.9587],'Essaouira':[31.5085,-9.7596],'Safi':[32.3017,-9.2373],
  'Mohammedia':[33.7205,-7.3817],'Témara':[34.267,-6.9126],'Beni Mellal':[32.3373,-6.3498],'Al Hoceïma':[35.2515,-3.9375],
- 'Errachidia':[31.9314,-4.4247],'Midelt':[32.6837,-4.7486],'Azilal':[32.0,6.35],'Chefchaouen':[35.1683,-5.2696],
+ 'Errachidia':[31.9314,-4.4247],'Midelt':[32.6837,-4.7486],'Azilal':[32.0,-6.35],'Chefchaouen':[35.1683,-5.2696],
  'Ouezzane':[34.7633,-5.5813],'Taourirt':[34.6867,-1.2653],'Jerada':[34.2967,-1.6353],'Guercif':[34.2264,-2.176],
  'Taounate':[34.5331,-4.4586],'Sefrou':[33.8573,-5.1661],'Ifrane':[33.5253,-5.1098],'Khouribga':[32.8823,-6.909],
  'Berrechid':[33.3664,-7.59],'Settat':[33.0016,-7.6619],'Youssoufia':[32.2747,-8.5278],'Taroudant':[30.4645,-8.8874],
@@ -28,6 +28,7 @@ function tourMap(drivers){
     <p class="muted" style="font-size:11px;margin:6px 0 0">Points = dernière position GPS transmise par les livreurs (auto à chaque changement de statut, ou bouton « Position »).</p></div>`;
 }
 function tourControlView(d){
+  if(typeof ramassageControlView==='function')return ramassageControlView(d);
   const k=d.kpis||{};
   const cards=(d.drivers||[]).map(r=>`<div class="stat"><div class="stat-top">${esc(r.name)}
       <span class="stat-icon ${r.pos?'green':'navy'}">${icon(r.pos?'pin':'clock')}</span></div>
