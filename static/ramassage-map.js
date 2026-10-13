@@ -7,7 +7,8 @@
     centerLat: 32.35, centerLng: -6.65, zoom: 6, timer: null, resize: null, frame: null,
     selectedJobId: null, selectedDriverId: null, routeKey: '', routeGeo: null,
     routeInfo: null, historyGeo: null, historyLabel: '', placeHubId: null,
-    dragging: null, moved: false, lastPoll: null, lastOsrmAt: 0
+    dragging: null, hubDrag: null, suppressHubClickId: null,
+    moved: false, lastPoll: null, lastOsrmAt: 0
   };
 
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -158,7 +159,7 @@
   }
 
   function renderOverlays() {
-    if(!state.map||!state.data) return;
+    if(!state.map||!state.data||state.hubDrag) return;
     const {w,h}=mapSize();
     for(const svg of [state.routes,state.zonesLayer]) if(svg){svg.setAttribute('viewBox',`0 0 ${w} ${h}`);svg.setAttribute('width',w);svg.setAttribute('height',h);svg.replaceChildren();}
     const job=currentJob(), zone=zoneForJob(job);
@@ -185,9 +186,51 @@
     };
     (state.data.hubs||[]).forEach(h=>{
       if(h.lat==null||h.lng==null)return;
-      const el=document.createElement('button');el.type='button';el.className='rt-marker rt-hub'+(!h.exact_location?' approximate':'');
-      el.innerHTML='<span>🏬</span>';el.title=h.name+(h.exact_location?'':' · centre de ville approximatif, emplacement à confirmer');
-      el.addEventListener('click',e=>{e.stopPropagation();if(typeof toast==='function')toast(h.name+(h.exact_location?'':' — position approximative'));});
+      const canMove=typeof S!=='undefined'&&S.user?.role==='admin';
+      const el=document.createElement('button');el.type='button';el.className='rt-marker rt-hub'+(!h.exact_location?' approximate':'')+(canMove?' draggable':'');
+      el.innerHTML='<span>🏬</span>';
+      el.title=canMove?`${h.name} · glissez-déposez pour déplacer le hub`:`${h.name}${h.exact_location?'':' · centre de ville approximatif, emplacement à confirmer'}`;
+      el.addEventListener('click',e=>{e.stopPropagation();if(state.suppressHubClickId===h.id)return;if(typeof toast==='function')toast(h.name+(h.exact_location?'':' — position approximative'));});
+      if(canMove){
+        el.addEventListener('pointerdown',e=>{
+          if(e.pointerType==='mouse'&&e.button!==0)return;
+          e.preventDefault();e.stopPropagation();
+          const r=state.map.getBoundingClientRect(),p=pointOnScreen(h.lat,h.lng);
+          state.hubDrag={id:h.id,element:el,pointerId:e.pointerId,startX:e.clientX,startY:e.clientY,
+            offsetX:p.x-(e.clientX-r.left),offsetY:p.y-(e.clientY-r.top),lat:Number(h.lat),lng:Number(h.lng),moved:false};
+          el.classList.add('dragging');
+          try{el.setPointerCapture(e.pointerId);}catch(_){}
+        });
+        el.addEventListener('pointermove',e=>{
+          const drag=state.hubDrag;if(!drag||drag.id!==h.id||drag.pointerId!==e.pointerId)return;
+          if(Math.abs(e.clientX-drag.startX)+Math.abs(e.clientY-drag.startY)>3)drag.moved=true;
+          if(!drag.moved)return;
+          e.preventDefault();
+          const r=state.map.getBoundingClientRect(),x=e.clientX-r.left+drag.offsetX,y=e.clientY-r.top+drag.offsetY;
+          const p=screenToPoint(r.left+x,r.top+y);drag.lat=p.lat;drag.lng=p.lng;
+          el.style.left=x+'px';el.style.top=y+'px';
+        });
+        const finishHubDrag=async(e,cancelled=false)=>{
+          const drag=state.hubDrag;if(!drag||drag.id!==h.id||drag.pointerId!==e.pointerId)return;
+          state.hubDrag=null;el.classList.remove('dragging');
+          if(cancelled){renderOverlays();return;}
+          if(!drag.moved){return;}
+          state.suppressHubClickId=h.id;
+          setTimeout(()=>{if(state.suppressHubClickId===h.id)state.suppressHubClickId=null;},500);
+          try{
+            await api(`/control-tower/hubs/${h.id}/location`,'PATCH',{lat:drag.lat,lng:drag.lng});
+            const live=(state.data?.hubs||[]).find(x=>x.id===h.id);
+            if(live){live.lat=drag.lat;live.lng=drag.lng;live.exact_location=true;}
+            renderOverlays();
+            if(typeof toast==='function')toast(`${h.name} — nouvelle position enregistrée.`);
+          }catch(err){
+            renderOverlays();
+            if(typeof toast==='function')toast(err.message||'Déplacement du hub refusé.',true);
+          }
+        };
+        el.addEventListener('pointerup',e=>{finishHubDrag(e,false);});
+        el.addEventListener('pointercancel',e=>{finishHubDrag(e,true);});
+      }
       put(el,h.lat,h.lng);
     });
     const jobs=(state.data.ramassage_jobs||[]).filter(j=>['pending','assigned','en_route'].includes(j.status));
@@ -308,6 +351,13 @@
     if(state.selectedJobId){const job=currentJob(), candidates=suitableDrivers(job);if(job)drawRoute(job,candidates[0]||null);}
   };
   window.rtMapStop=function(){
+    const oldMap=state.map;
+    if(oldMap?.classList.contains('rt-map-expanded'))oldMap.classList.remove('rt-map-expanded');
+    if(oldMap&&(document.fullscreenElement||document.webkitFullscreenElement)===oldMap){
+      const exit=document.exitFullscreen||document.webkitExitFullscreen;
+      if(exit)try{const result=exit.call(document);result?.catch?.(()=>{});}catch(_){}
+    }
+    state.hubDrag=null;state.dragging=null;state.placeHubId=null;state.suppressHubClickId=null;
     if(state.timer){clearInterval(state.timer);state.timer=null;}
     if(state.resize){state.resize.disconnect();state.resize=null;}
     if(state.frame){cancelAnimationFrame(state.frame);state.frame=null;}
@@ -332,6 +382,35 @@
     if(job&&d?.pos){setCenter((d.pos.lat+job.client.lat)/2,(d.pos.lng+job.client.lng)/2,clamp(Math.max(state.zoom,11),11,15));drawRoute(job,d);}
     else if(d?.pos){setCenter(d.pos.lat,d.pos.lng,Math.max(11,state.zoom));}
     renderLists();
+  };
+  function syncFullscreenControl(){
+    const button=document.getElementById('rt-fullscreen-button');
+    const active=(document.fullscreenElement||document.webkitFullscreenElement)===state.map||!!state.map?.classList.contains('rt-map-expanded');
+    if(button){button.textContent=active?'⤢':'⛶';button.title=active?'Quitter le plein écran':'Afficher la carte en plein écran';button.setAttribute('aria-label',button.title);button.setAttribute('aria-pressed',active?'true':'false');}
+  }
+  function redrawAfterFullscreen(){syncFullscreenControl();if(state.map)requestAnimationFrame(()=>{renderTiles();renderOverlays();});}
+  document.addEventListener('fullscreenchange',redrawAfterFullscreen);
+  document.addEventListener('webkitfullscreenchange',redrawAfterFullscreen);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&state.map?.classList.contains('rt-map-expanded')){state.map.classList.remove('rt-map-expanded');redrawAfterFullscreen();}
+  });
+  window.rtToggleFullscreen=async function(){
+    if(!state.map)return;
+    const nativeEl=document.fullscreenElement||document.webkitFullscreenElement;
+    if(nativeEl===state.map){
+      const exit=document.exitFullscreen||document.webkitExitFullscreen;
+      if(exit)try{await exit.call(document);}catch(_){}
+      return;
+    }
+    if(state.map.classList.contains('rt-map-expanded'))state.map.classList.remove('rt-map-expanded');
+    else {
+      const enter=state.map.requestFullscreen||state.map.webkitRequestFullscreen;
+      if(enter){
+        try{await enter.call(state.map);state.map.classList.remove('rt-map-expanded');}
+        catch(_){state.map.classList.add('rt-map-expanded');}
+      }else state.map.classList.add('rt-map-expanded');
+    }
+    redrawAfterFullscreen();
   };
   window.rtZoom=function(delta){setCenter(state.centerLat,state.centerLng,state.zoom+Number(delta||0));};
   window.rtFit=function(){
@@ -459,7 +538,7 @@
           <div class="rt-map-top"><div><b>Carte live · Maroc</b><small id="rt-updated">Initialisation…</small></div><span id="rt-online-count" class="rt-online-count">— en ligne</span></div>
           <div id="rt-map" class="rt-map" role="application" aria-label="Carte interactive des livreurs et ramassages">
             <div id="rt-map-tiles" class="rt-map-tiles"></div><svg id="rt-zone-layer" class="rt-svg-layer" aria-hidden="true"></svg><svg id="rt-route-layer" class="rt-svg-layer" aria-hidden="true"></svg><div id="rt-marker-layer" class="rt-marker-layer"></div>
-            <div class="rt-map-controls"><button class="rt-map-control" type="button" onclick="rtZoom(1)" aria-label="Zoom avant">+</button><button class="rt-map-control" type="button" onclick="rtZoom(-1)" aria-label="Zoom arrière">−</button><button class="rt-map-control" type="button" onclick="rtFit()" aria-label="Cadrer les marqueurs">⌖</button>${isAdmin?'<button class="rt-map-control" type="button" onclick="rtBeginHubPlacement()" title="Positionner un hub">🏬</button>':''}</div>
+            <div class="rt-map-controls"><button class="rt-map-control" type="button" onclick="rtZoom(1)" aria-label="Zoom avant" title="Zoom avant">+</button><button class="rt-map-control" type="button" onclick="rtZoom(-1)" aria-label="Zoom arrière" title="Zoom arrière">−</button><button class="rt-map-control" type="button" onclick="rtFit()" aria-label="Cadrer les marqueurs" title="Cadrer les marqueurs">⌖</button><button id="rt-fullscreen-button" class="rt-map-control" type="button" onclick="rtToggleFullscreen()" aria-label="Afficher la carte en plein écran" aria-pressed="false" title="Afficher la carte en plein écran">⛶</button>${isAdmin?'<button class="rt-map-control" type="button" onclick="rtBeginHubPlacement()" title="Positionner un hub">🏬</button>':''}</div>
             <div class="rt-map-attribution">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a></div>
             <div class="rt-map-legend"><span><i class="rt-legend-dot green"></i>Disponible</span><span><i class="rt-legend-dot orange"></i>Ramassage</span><span>🏬 Hub</span><span>🏍 / 🚘 Véhicule</span></div>
           </div>
