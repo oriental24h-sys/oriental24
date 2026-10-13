@@ -1,8 +1,9 @@
 """v1.8.0 — « Tour de contrôle » : positions GPS des livreurs, tableau de bord temps réel,
 répartition intelligente des colis non affectés (blocs par ville + 2-opt), ETA estimée,
 code client OTP comme preuve de livraison et lien de suivi public limité.
-Tout est calculé localement : aucune API de cartographie ni service externe."""
+Les calculs existants restent locaux; la carte Ramassage utilise des tuiles OSM et le routeur public OSRM quand ils sont accessibles."""
 import math,secrets,time
+from datetime import datetime,timedelta
 from flask import request,jsonify
 
 OPEN_STATES=('Transit','Créé','Ramassé','Au hub','Réceptionné','Reçu par le livreur','En livraison','Programmé','Reporté','Intéressé')
@@ -17,7 +18,7 @@ GEO={'Oujda':(34.681,-1.912),'Casablanca':(33.573,-7.5898),'Rabat':(34.0209,-6.8
  'El Jadida':(33.2309,-8.4997),'Kénitra':(34.261,-6.5802),'Taza':(34.2214,-4.0071),'Ouarzazate':(30.9188,-6.8825),
  'Laâyoune':(27.1536,-13.2033),'Dakhla':(23.6848,-15.9587),'Essaouira':(31.5085,-9.7596),'Safi':(32.3017,-9.2373),
  'Mohammedia':(33.7205,-7.3817),'Témara':(34.267,-6.9126),'Beni Mellal':(32.3373,-6.3498),'Al Hoceïma':(35.2515,-3.9375),
- 'Errachidia':(31.9314,-4.4247),'Midelt':(32.6837,-4.7486),'Azilal':(32.0,6.35),'Chefchaouen':(35.1683,-5.2696),
+ 'Errachidia':(31.9314,-4.4247),'Midelt':(32.6837,-4.7486),'Azilal':(32.0,-6.35),'Chefchaouen':(35.1683,-5.2696),
  'Ouezzane':(34.7633,-5.5813),'Taourirt':(34.6867,-1.2653),'Jerada':(34.2967,-1.6353),'Guercif':(34.2264,-2.176),
  'Taounate':(34.5331,-4.4586),'Sefrou':(33.8573,-5.1661),'Ifrane':(33.5253,-5.1098),'Khouribga':(32.8823,-6.909),
  'Berrechid':(33.3664,-7.59),'Settat':(33.0016,-7.6619),'Youssoufia':(32.2747,-8.5278),'Taroudant':(30.4645,-8.8874),
@@ -58,6 +59,7 @@ def register_tour_control(app,s):
         c.executescript('''
         CREATE TABLE IF NOT EXISTS driver_positions(id INTEGER PRIMARY KEY,driver_id INTEGER NOT NULL REFERENCES users(id),lat REAL NOT NULL,lng REAL NOT NULL,city_id INTEGER REFERENCES cities(id),created_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS driver_positions_driver_idx ON driver_positions(driver_id,id);
+        CREATE INDEX IF NOT EXISTS driver_positions_driver_created_idx ON driver_positions(driver_id,created_at);
         CREATE TABLE IF NOT EXISTS parcel_messages(id INTEGER PRIMARY KEY,parcel_id INTEGER NOT NULL REFERENCES parcels(id),actor_id INTEGER NOT NULL REFERENCES users(id),code TEXT NOT NULL,created_at TEXT NOT NULL);
         ''')
         for col in ("otp_required INTEGER NOT NULL DEFAULT 0","otp_code TEXT","otp_verified_at TEXT"):
@@ -84,16 +86,32 @@ def register_tour_control(app,s):
         d=request.get_json(silent=True) or {};u=user()
         lat,lng=d.get('lat'),d.get('lng')
         if not (isinstance(lat,(int,float)) and isinstance(lng,(int,float)) and -90<=lat<=90 and -180<=lng<=180):
-            raise Error('Position invalide : latitude/longitude requises.')
+            raise Error('Position GPS invalide : latitude/longitude réelles requises.')
+        battery=d.get('battery_pct')
+        if battery not in (None,''):
+            try:battery=float(battery)
+            except (TypeError,ValueError):raise Error('Pourcentage de batterie invalide.')
+            if not 0<=battery<=100:raise Error('La batterie doit être entre 0 et 100 %.')
         with conn() as c:
+            profile=c.execute('SELECT driver_city_id FROM users WHERE id=? AND role=\'livreur\'',(u['id'],)).fetchone()
+            city_id=d.get('city_id')
+            if city_id in (None,''):city_id=profile['driver_city_id'] if profile else None
+            if city_id not in (None,'') and (type(city_id) is not int or not c.execute('SELECT 1 FROM cities WHERE id=?',(city_id,)).fetchone()):
+                raise Error('Ville de position invalide.')
+            stamp=now()
             c.execute('INSERT INTO driver_positions(driver_id,lat,lng,city_id,created_at) VALUES(?,?,?,?,?)',
-             (u['id'],round(float(lat),6),round(float(lng),6),d.get('city_id'),now()))
-            keep=c.execute('SELECT COALESCE(MAX(id),1)-48 m FROM driver_positions WHERE driver_id=?',(u['id'],)).fetchone()['m']
-            c.execute('DELETE FROM driver_positions WHERE driver_id=? AND id<?',(u['id'],max(1,keep)))
+             (u['id'],round(float(lat),6),round(float(lng),6),city_id,stamp))
+            # Keep a route archive, not just the last 48 points. GPS records older than 30 days expire.
+            cutoff=(datetime.now()-timedelta(days=30)).isoformat(timespec='seconds')
+            c.execute('DELETE FROM driver_positions WHERE driver_id=? AND created_at<?',(u['id'],cutoff))
             n=c.execute('SELECT COUNT(*) n FROM driver_positions WHERE driver_id=? AND created_at>=?',(u['id'],time.strftime('%Y-%m-%dT%H:%M:%S',time.localtime(time.time()-12*3600)))).fetchone()['n']
-            fn=getattr(app,'o24_geofence',None)  # v1.9.0 : alertes automatiques proche/arrivé
+            c.execute('''INSERT INTO ramassage_driver_state(driver_id,availability,full_load,gps_enabled,battery_pct,updated_at)
+                         VALUES(?,'available',0,1,?,?) ON CONFLICT(driver_id) DO UPDATE SET
+                         gps_enabled=1,battery_pct=COALESCE(excluded.battery_pct,ramassage_driver_state.battery_pct),updated_at=excluded.updated_at''',
+                      (u['id'],battery,stamp))
+            fn=getattr(app,'o24_geofence',None)  # alertes automatiques existantes livraison proche/arrivée
             if fn: fn(c,u['id'],float(lat),float(lng))
-        return jsonify(ok=True,points=n)
+        return jsonify(ok=True,points=n,retention_days=30)
 
     @app.get('/api/control-tower')
     @auth('admin','agent')
@@ -128,10 +146,14 @@ def register_tour_control(app,s):
         unassigned={}
         for p in parcels:
             if p['status']=='Créé' and not p['driver_id']:unassigned.setdefault(p['city'] or 'Sans ville',[]).append(p['id'])
-        return jsonify(drivers=rows,kpis={'out_today':sum(r['stops_out'] for r in rows),'delivered_today':sum(r['done_today'] for r in rows),
+        payload={'drivers':rows,'kpis':{'out_today':sum(r['stops_out'] for r in rows),'delivered_today':sum(r['done_today'] for r in rows),
          'cod_today':round(sum(r['cod_today'] for r in rows),2),'late_48h':len(lates),'unassigned':sum(len(v) for v in unassigned.values()),
          'co2_kg_today':round(sum(r['co2_kg'] for r in rows),2)},
-         alerts=lates[:12],unassigned_by_city=[{'city':k,'count':len(v),'parcel_ids':v} for k,v in sorted(unassigned.items(),key=lambda x:(-x[1][0] if isinstance(x[1],list) else 0,-len(x[1]),str(x[0])))])
+         'alerts':lates[:12],'unassigned_by_city':[{'city':k,'count':len(v),'parcel_ids':v} for k,v in sorted(unassigned.items(),key=lambda x:(-x[1][0] if isinstance(x[1],list) else 0,-len(x[1]),str(x[0])))]}
+        extra=getattr(app,'o24_ramassage_tower_payload',None)
+        if extra:
+            payload.update(extra())
+        return jsonify(**payload)
 
     @app.get('/api/dispatch/suggest')
     @auth('admin')

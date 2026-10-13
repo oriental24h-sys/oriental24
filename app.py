@@ -888,6 +888,8 @@ from advanced_tech import register_advanced_tech
 register_advanced_tech(app, globals())
 from smart_delivery import register_smart_delivery
 register_smart_delivery(app, globals())
+from ramassage_tower import register_ramassage_tower
+register_ramassage_tower(app, globals())
 from smart_warehouse import register_smart_warehouse
 register_smart_warehouse(app, globals())
 from connected_ops import register_connected_ops

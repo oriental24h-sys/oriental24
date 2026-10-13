@@ -142,7 +142,12 @@ def register_logistics(app, services):
             c.execute('BEGIN IMMEDIATE')
             if not c.execute('SELECT 1 FROM cities WHERE id=?',(cid,)).fetchone():raise Error('Ville inconnue.')
             if hid:
-                hub(c,hid,False);c.execute('UPDATE ops_hubs SET name=?,city_id=?,address=?,active=? WHERE id=?',(name,cid,address,int(bool(d.get('active'))),hid))
+                previous=c.execute('SELECT city_id,address FROM ops_hubs WHERE id=?',(hid,)).fetchone()
+                hub(c,hid,False)
+                if previous and (previous['city_id']!=cid or previous['address']!=address):
+                    # A saved map pin may belong to its former address; require fresh placement after relocation.
+                    c.execute('UPDATE ops_hubs SET lat=NULL,lng=NULL WHERE id=?',(hid,))
+                c.execute('UPDATE ops_hubs SET name=?,city_id=?,address=?,active=? WHERE id=?',(name,cid,address,int(bool(d.get('active'))),hid))
             else:hid=c.execute('INSERT INTO ops_hubs(name,city_id,address,created_at) VALUES(?,?,?,?)',(name,cid,address,now())).lastrowid
             audit(c,None,user(),'Hub configuré',{'hub_id':hid,'name':name})
         return jsonify(ok=True,id=hid)
