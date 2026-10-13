@@ -61,6 +61,24 @@ def register_billing(app,s):
         parties=list({r['party_id']:{'id':r['party_id'],'name':r['name']} for r in reversed(rows)}.values())
         q=request.args.get('q','').strip().casefold();party=request.args.get('party','');state=request.args.get('state','');archive=request.args.get('archive','all')
         if state not in ('','Not Paid','Partiel','Paid','Annulé') or archive not in ('all','current','paid'):raise Error('Filtre invalide.')
+        if q:
+            tracking_map={};invoice_ids=[r['id'] for r in rows]
+            for offset in range(0,len(invoice_ids),500):
+                ids=invoice_ids[offset:offset+500];marks=','.join('?'*len(ids))
+                if kind=='client':
+                    sql=f'SELECT invoice_id owner_id,tracking FROM parcels WHERE invoice_id IN ({marks}) ORDER BY invoice_id,id'
+                else:
+                    sql=f'SELECT statement_id owner_id,tracking FROM driver_statement_lines WHERE statement_id IN ({marks}) ORDER BY statement_id,id'
+                for item in c.execute(sql,ids):
+                    tracking=str(item['tracking'] or '').strip()
+                    if tracking:tracking_map.setdefault(item['owner_id'],[]).append(tracking)
+            for row in rows:
+                trackings=list(dict.fromkeys(tracking_map.get(row['id'],[])))
+                matches=[tracking for tracking in trackings if q in tracking.casefold()]
+                row['tracking_matches']=matches[:5];row['tracking_match_count']=len(matches)
+                row['_tracking_search']=' '.join(trackings).casefold()
+        else:
+            for row in rows:row['tracking_matches']=[];row['tracking_match_count']=0;row['_tracking_search']=''
         bounds=[]
         for keyname in ('from','to'):
             v=request.args.get(keyname,'')
@@ -72,7 +90,8 @@ def register_billing(app,s):
             bounds.append(v)
         start,end=bounds
         if start and end and start>end:raise Error('La date de début doit précéder la date de fin.')
-        rows=[r for r in rows if (not q or q in (r['reference']+' '+r['name']+' '+r['email']).casefold()) and (not party or str(r['party_id'])==party) and (not state or r['state']==state) and (archive=='all' or (archive=='paid')==(r['state']=='Paid')) and (not start or r['created_at']>=start) and (not end or r['created_at']<=end+':59')]
+        rows=[r for r in rows if (not q or q in (r['reference']+' '+r['name']+' '+r['email']+' '+r.get('_tracking_search','')).casefold()) and (not party or str(r['party_id'])==party) and (not state or r['state']==state) and (archive=='all' or (archive=='paid')==(r['state']=='Paid')) and (not start or r['created_at']>=start) and (not end or r['created_at']<=end+':59')]
+        for row in rows:row.pop('_tracking_search',None)
         totals={k:sum(r[k] for r in rows if r['state']!='Annulé') for k in ('cod_cents','fees_cents','net_cents','incoming_cents','outgoing_cents')}
         return dict(kind=kind,rows=rows,parties=parties,totals=totals,count=len(rows))
     @app.get('/api/billing')

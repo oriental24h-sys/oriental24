@@ -151,7 +151,7 @@ def register_partner_palettes(app,s):
                     if state not in STATES:raise Error('État de palette invalide.')
                     where.append('d.status=?');args.append(state)
                 if q:
-                    where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(m.partner_reference),lower(?))>0 OR EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.document_id=d.id AND instr(lower(l.tracking),lower(?))>0))");args.extend([q]*4)
+                    where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(m.partner_reference),lower(?))>0 OR EXISTS(SELECT 1 FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=d.id AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0 OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0)))");args.extend([q]*5)
                 try:
                     page=int(request.args.get('page',1));size=int(request.args.get('size',20))
                     if page<1 or size not in [20,50,100]:raise ValueError()
@@ -160,7 +160,21 @@ def register_partner_palettes(app,s):
                 total=c.execute('SELECT count(*)'+sql,args).fetchone()[0];page=min(page,max(1,(total+size-1)//size))
                 rows=[]
                 for row in c.execute('SELECT d.*,m.partner_reference,m.transport'+sql+' ORDER BY d.id DESC LIMIT ? OFFSET ?',args+[size,(page-1)*size]):
-                    r=dict(row);counts=c.execute('SELECT count(*),sum(received_at IS NOT NULL),sum(missing_at IS NOT NULL) FROM ops_document_lines WHERE document_id=?',(r['id'],)).fetchone();r.update(count=counts[0],received=counts[1] or 0,missing=counts[2] or 0,remaining=counts[0]-(counts[1] or 0)-(counts[2] or 0));rows.append(r)
+                    r=dict(row);counts=c.execute('SELECT count(*),sum(received_at IS NOT NULL),sum(missing_at IS NOT NULL) FROM ops_document_lines WHERE document_id=?',(r['id'],)).fetchone();r.update(count=counts[0],received=counts[1] or 0,missing=counts[2] or 0,remaining=counts[0]-(counts[1] or 0)-(counts[2] or 0))
+                    r['tracking_matches']=[];r['tracking_match_count']=0
+                    if q:
+                        found=[];seen_parcels=set()
+                        for match in c.execute('''SELECT l.parcel_id,l.tracking snapshot_tracking,p.tracking current_tracking
+                                                  FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id
+                                                  WHERE l.document_id=? AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0
+                                                    OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0) ORDER BY l.id''',(r['id'],q,q)):
+                            if match['parcel_id'] in seen_parcels:continue
+                            seen_parcels.add(match['parcel_id'])
+                            current=str(match['current_tracking'] or '');snapshot=str(match['snapshot_tracking'] or '')
+                            tracking=current if q.lower() in current.lower() else snapshot
+                            found.append({'parcel_id':match['parcel_id'],'tracking':tracking or current or snapshot})
+                        r['tracking_match_count']=len(found);r['tracking_matches']=found[:5]
+                    rows.append(r)
                 return jsonify(rows=rows,total=total,page=page,size=size)
             creator(u)
             d=body();c.execute('BEGIN IMMEDIATE');fp,prior=replay(c,u,d,None,'create')
