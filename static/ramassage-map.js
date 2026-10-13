@@ -102,7 +102,7 @@
     const saved=document.getElementById('rt-saved-client');
     if(saved){const current=saved.value;saved.innerHTML=savedClientOptions();if(current)saved.value=current;}
     const citySelect=document.getElementById('rt-city-id');
-    if(citySelect){const current=citySelect.value,ready=(state.data.pickup_cities||[]).filter(c=>c.zone_ready);citySelect.innerHTML='<option value="">Détection GPS</option>'+ready.map(c=>`<option value="${c.id}">${escText(c.name)}</option>`).join('');if(current)citySelect.value=current;}
+    if(citySelect){const current=citySelect.value,cities=state.data.pickup_cities||[];citySelect.innerHTML='<option value="">Détection GPS</option>'+cities.map(c=>`<option value="${c.id}" ${c.zone_ready?'':'disabled'}>${escText(c.name)}${c.zone_ready?'':' · zone à configurer'}</option>`).join('');if(current)citySelect.value=current;}
     const jobCount=document.getElementById('rt-job-count');if(jobCount)jobCount.textContent=String((state.data.ramassage_jobs||[]).filter(j=>['pending','assigned','en_route'].includes(j.status)).length);
     const online=drivers.filter(d=>d.online).length;
     const activeCount=jobs.filter(j=>['pending','assigned','en_route'].includes(j.status)).length;
@@ -430,7 +430,7 @@
     const z=(state.data?.zones||[]).find(x=>x.city_id===Number(id));
     const set=(n,v)=>{const e=document.getElementById(n);if(e)e.value=v==null?'':String(v);};
     if(z){set('rt-zone-lat',z.center_lat);set('rt-zone-lng',z.center_lng);set('rt-zone-radius',z.radius_km);}
-    else{const city=(state.data?.pickup_cities||[]).find(x=>x.id===Number(id));const geo=typeof TOUR_GEO!=='undefined'&&city?TOUR_GEO[city.name]:null;set('rt-zone-lat',geo?.[0]??'');set('rt-zone-lng',geo?.[1]??'');set('rt-zone-radius',20);}
+    else{const city=(state.data?.pickup_cities||[]).find(x=>x.id===Number(id));const geo=city?.zone_center_lat!=null?[city.zone_center_lat,city.zone_center_lng]:(typeof TOUR_GEO!=='undefined'&&city?TOUR_GEO[city.name]:null);set('rt-zone-lat',geo?.[0]??'');set('rt-zone-lng',geo?.[1]??'');set('rt-zone-radius',city?.zone_radius_km??20);}
   };
   window.rtSaveZone=async function(){
     const id=Number(document.getElementById('rt-zone-city')?.value),lat=Number(document.getElementById('rt-zone-lat')?.value),lng=Number(document.getElementById('rt-zone-lng')?.value),radius=Number(document.getElementById('rt-zone-radius')?.value);
@@ -446,7 +446,7 @@
   window.ramassageControlView=function(d){
     const k=d.kpis||{},drivers=d.map_drivers||d.drivers||[],zones=d.zones||[],jobs=d.ramassage_jobs||[];
     const isAdmin=typeof S!=='undefined'&&S.user?.role==='admin';
-    const readyCities=(d.pickup_cities||[]).filter(c=>c.zone_ready);
+    const pickupCities=d.pickup_cities||[];
     const date=new Date().toISOString().slice(0,10);
     const alerts=(d.gps_alerts||[]).map(x=>`${escText(x.name)} — GPS désactivé`).join(' · ');
     return heading('Tour de contrôle — Ramassage','Carte temps réel des livreurs et demandes de collecte · mise à jour automatique toutes les 8 secondes.',
@@ -475,9 +475,9 @@
             <label class="rt-field"><span>Réutiliser un client enregistré</span><select id="rt-saved-client" onchange="rtUseSavedClient(this.value)">${savedClientOptions()}</select></label>
             <div class="rt-two"><label class="rt-field"><span>Nom du client *</span><input id="rt-client-name" maxlength="100" required autocomplete="name" placeholder="Nom / société"></label><label class="rt-field"><span>Téléphone *</span><input id="rt-client-phone" type="tel" maxlength="32" required autocomplete="tel" placeholder="+212…"></label></div>
             <label class="rt-field"><span>Lien Google Maps *</span><input id="rt-map-url" type="text" inputmode="url" maxlength="2048" required placeholder="maps.app.goo.gl/… ou lien Maps complet"></label>
-            <div class="rt-two"><label class="rt-field"><span>Zone géographique</span><select id="rt-city-id"><option value="">Détection GPS</option>${readyCities.map(c=>`<option value="${c.id}">${escText(c.name)}</option>`).join('')}</select></label><label class="rt-field rt-count"><span>Colis</span><input id="rt-count" type="number" min="1" max="10000" value="1" required></label></div>
+            <div class="rt-two"><label class="rt-field"><span>Zone géographique</span><select id="rt-city-id"><option value="">Détection GPS</option>${pickupCities.map(c=>`<option value="${c.id}" ${c.zone_ready?'':'disabled'}>${escText(c.name)}${c.zone_ready?'':' · zone à configurer'}</option>`).join('')}</select></label><label class="rt-field rt-count"><span>Colis</span><input id="rt-count" type="number" min="1" max="10000" value="1" required></label></div>
             <button class="rt-primary-btn rt-submit" type="submit">＋ Créer la demande</button>
-            <small class="rt-form-hint">Les coordonnées sont extraites côté serveur; le client et son lieu seront mémorisés. Les liens courts nécessitent un accès sortant à Google.</small>
+            <small class="rt-form-hint">Détection GPS compare le point aux rayons actifs des villes. Les coordonnées sont extraites côté serveur et le client est mémorisé; les liens courts nécessitent un accès sortant à Google.</small>
             </fieldset>
           </form>
           <div id="rt-selected-job" class="rt-selected-job" hidden></div>
