@@ -101,7 +101,7 @@ function ppReceiveStart(){
    if(r.status==='Préparé'){ppSignal('err');ppRxFlash('err');ppRxMsg('err','Palette <b>'+esc(r.reference)+'</b> encore en brouillon : la société doit d’abord confirmer l’envoi.');return}
    if(r.status==='Annulé'){ppSignal('err');ppRxFlash('err');ppRxMsg('err','Palette <b>'+esc(r.reference)+'</b> annulée : aucune réception possible.');return}
    if(r.status==='Clôturé (écarts)'||r.status==='Reçu'){ppSignal('dup');ppRxFlash('dup');ppRxMsg('dup','Palette <b>'+esc(r.reference)+'</b> déjà traitée : '+r.received+' / '+r.count+' reçus.');return}
-   ppSignal('ok');inp.value='';await ppReceiveScan(r.id);
+   ppSignal('ok');inp.value='';if(S?.user?.role==='agent')await openPartnerPalette(r.id);else await ppReceiveScan(r.id);
   }catch(e){ppSignal('err');ppRxMsg('err',esc(e.message))}
  };
  ctx.node.querySelector('#pp-rx-go').onclick=go;
