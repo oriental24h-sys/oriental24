@@ -368,7 +368,7 @@ def register_ramassage_tower(app, s):
     app.o24_ramassage_tower_payload = tower_payload
 
     @app.get('/api/control-tower/map-data')
-    @auth('admin', 'agent')
+    @auth('admin')
     def ramassage_map_data():
         return jsonify(**tower_payload())
 
@@ -487,7 +487,7 @@ def register_ramassage_tower(app, s):
                        warning=None if assignment or not auto else 'Aucun livreur en ligne, disponible et adapté dans cette zone; demande conservée sans affectation.')
 
     @app.get('/api/control-tower/ramassage/<int:job_id>/candidates')
-    @auth('admin', 'agent')
+    @auth('admin')
     def ramassage_candidates(job_id):
         with conn() as c:
             job = c.execute('''SELECT j.id,j.city_id,rc.lat,rc.lng FROM ramassage_jobs j
@@ -589,7 +589,7 @@ def register_ramassage_tower(app, s):
         return jsonify(ok=True, status=status)
 
     @app.get('/api/control-tower/route-history/<int:driver_id>')
-    @auth('admin', 'agent')
+    @auth('admin')
     def ramassage_route_history(driver_id):
         day = str(request.args.get('date') or datetime.now().date().isoformat())
         try:

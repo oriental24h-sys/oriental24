@@ -8,6 +8,8 @@ from flask import request, jsonify
 
 from claims import prepare_claim
 from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES
+from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
+from hub_access import resolve_routing_hub, central_hub_transfer_allowed, parcel_physically_at_hub, hub_document_lines_at_hub, hub_manager_transfer_scope, ops_manifest_counts, manifest_status_from_counts
 
 P='/api/logistics'
 REASONS=[('absent','Destinataire absent'),('unreachable','Destinataire injoignable'),('address','Adresse à corriger'),('appointment','Rendez-vous demandé'),('refused','Refus du destinataire'),('return','Retour demandé')]
@@ -28,11 +30,23 @@ def register_logistics(app, services):
         c.executescript('''
         CREATE TABLE IF NOT EXISTS ops_hubs(id INTEGER PRIMARY KEY,name TEXT NOT NULL,city_id INTEGER NOT NULL REFERENCES cities(id),address TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS ops_hub_name ON ops_hubs(name COLLATE NOCASE);
+        CREATE TABLE IF NOT EXISTS hub_cities(
+          hub_id INTEGER NOT NULL REFERENCES ops_hubs(id) ON DELETE CASCADE,
+          city_id INTEGER NOT NULL REFERENCES cities(id) ON DELETE CASCADE,
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          is_primary INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1)),
+          created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(hub_id,city_id)
+        );
+        CREATE INDEX IF NOT EXISTS hub_cities_city_active ON hub_cities(city_id,active,hub_id);
+        CREATE INDEX IF NOT EXISTS hub_cities_hub_active ON hub_cities(hub_id,active,city_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS hub_cities_one_primary_per_city ON hub_cities(city_id) WHERE is_primary=1;
         CREATE TABLE IF NOT EXISTS ops_reasons(code TEXT PRIMARY KEY,label TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS ops_assignments(id INTEGER PRIMARY KEY,parcel_id INTEGER NOT NULL REFERENCES parcels(id),old_driver_id INTEGER,new_driver_id INTEGER,actor_id INTEGER NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS ops_attempts(id INTEGER PRIMARY KEY,parcel_id INTEGER NOT NULL REFERENCES parcels(id),driver_id INTEGER,actor_id INTEGER NOT NULL,outcome TEXT NOT NULL,reason_code TEXT,reason_label TEXT,next_attempt_at TEXT,note TEXT NOT NULL,receiver TEXT,amount_cents INTEGER,request_key TEXT NOT NULL UNIQUE,payload_hash TEXT NOT NULL,created_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS ops_documents(id INTEGER PRIMARY KEY,reference TEXT UNIQUE,kind TEXT NOT NULL,client_id INTEGER REFERENCES users(id),driver_id INTEGER REFERENCES users(id),source_hub_id INTEGER REFERENCES ops_hubs(id),destination_hub_id INTEGER REFERENCES ops_hubs(id),client_name TEXT,driver_name TEXT,source_name TEXT,destination_name TEXT,status TEXT NOT NULL DEFAULT 'Préparé',revision INTEGER NOT NULL DEFAULT 1,note TEXT NOT NULL,created_by INTEGER NOT NULL,created_at TEXT NOT NULL,dispatched_at TEXT,completed_at TEXT,cancel_reason TEXT);
-        CREATE TABLE IF NOT EXISTS ops_document_lines(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES ops_documents(id),parcel_id INTEGER NOT NULL REFERENCES parcels(id),tracking TEXT NOT NULL,recipient TEXT NOT NULL,city TEXT NOT NULL,initial_status TEXT NOT NULL,received_at TEXT,received_by INTEGER,active INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS ops_documents(id INTEGER PRIMARY KEY,reference TEXT UNIQUE,kind TEXT NOT NULL,client_id INTEGER REFERENCES users(id),driver_id INTEGER REFERENCES users(id),source_hub_id INTEGER REFERENCES ops_hubs(id),destination_hub_id INTEGER REFERENCES ops_hubs(id),client_name TEXT,driver_name TEXT,source_name TEXT,destination_name TEXT,status TEXT NOT NULL DEFAULT 'Préparé',revision INTEGER NOT NULL DEFAULT 1,note TEXT NOT NULL,created_by INTEGER NOT NULL,created_at TEXT NOT NULL,dispatched_at TEXT,completed_at TEXT,cancel_reason TEXT,departure_scan_required INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS ops_document_lines(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES ops_documents(id),parcel_id INTEGER NOT NULL REFERENCES parcels(id),tracking TEXT NOT NULL,recipient TEXT NOT NULL,city TEXT NOT NULL,initial_status TEXT NOT NULL,departure_scanned_at TEXT,departure_scanned_by INTEGER REFERENCES users(id),departure_reconciled_at TEXT,departure_reconciled_by INTEGER REFERENCES users(id),departure_reconciliation_reason TEXT,received_at TEXT,received_by INTEGER,active INTEGER NOT NULL DEFAULT 1);
         CREATE UNIQUE INDEX IF NOT EXISTS ops_one_active_document ON ops_document_lines(parcel_id) WHERE active=1;
         CREATE TABLE IF NOT EXISTS ops_audit(id INTEGER PRIMARY KEY,document_id INTEGER REFERENCES ops_documents(id),actor_id INTEGER NOT NULL,action TEXT NOT NULL,details TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS ops_notifications(id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),parcel_id INTEGER REFERENCES parcels(id),title TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL,read_at TEXT);
@@ -42,6 +56,25 @@ def register_logistics(app, services):
         CREATE TABLE IF NOT EXISTS ops_ticket_links(ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id),parcel_id INTEGER NOT NULL REFERENCES parcels(id),priority TEXT NOT NULL,assigned_to INTEGER REFERENCES users(id),first_response_at TEXT);
         CREATE TABLE IF NOT EXISTS ops_batch_previews(token TEXT PRIMARY KEY,owner_id INTEGER NOT NULL,driver_id INTEGER NOT NULL,parcel_ids TEXT NOT NULL,snapshot TEXT NOT NULL,created_at TEXT NOT NULL,committed_at TEXT);
         ''')
+        install_ops_audit_guards(c)
+        # Multi-hub coverage is many-to-many. Keep each Hub's physical city in ops_hubs.city_id,
+        # and seed it as secondary coverage. Never infer a city primary from creation order; routing
+        # without an explicitly selected primary will use the Admin-designated Central Hub.
+        for legacy_hub in c.execute('SELECT id,city_id,active FROM ops_hubs ORDER BY id').fetchall():
+            if c.execute('SELECT 1 FROM hub_cities WHERE hub_id=? AND city_id=?',(legacy_hub['id'],legacy_hub['city_id'])).fetchone():
+                continue
+            c.execute('INSERT INTO hub_cities(hub_id,city_id,active,is_primary,created_at) VALUES(?,?,?,?,?)',
+                      (legacy_hub['id'],legacy_hub['city_id'],int(bool(legacy_hub['active'])),0,now()))
+        document_columns={r['name'] for r in c.execute('PRAGMA table_info(ops_documents)')}
+        if 'departure_scan_required' not in document_columns:
+            c.execute('ALTER TABLE ops_documents ADD COLUMN departure_scan_required INTEGER NOT NULL DEFAULT 0')
+        line_columns={r['name'] for r in c.execute('PRAGMA table_info(ops_document_lines)')}
+        if 'departure_scanned_at' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_scanned_at TEXT')
+        if 'departure_scanned_by' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_scanned_by INTEGER')
+        if 'departure_reconciled_at' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_reconciled_at TEXT')
+        if 'departure_reconciled_by' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_reconciled_by INTEGER')
+        if 'departure_reconciliation_reason' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_reconciliation_reason TEXT')
+        install_departure_reconciliation_guard(c)
         columns={r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
         for key,definition in [('reason_code','TEXT'),('next_attempt_at','TEXT'),('ops_revision','INTEGER NOT NULL DEFAULT 0'),('current_hub_id','INTEGER REFERENCES ops_hubs(id)')]:
             if key not in columns:c.execute(f'ALTER TABLE parcels ADD COLUMN {key} {definition}')
@@ -69,6 +102,25 @@ def register_logistics(app, services):
         h=c.execute('SELECT * FROM ops_hubs WHERE id=?',(integer(hid,'Hub'),)).fetchone()
         if not h or (active and not h['active']):raise Error('Hub actif introuvable.')
         return h
+    def ensure_home_city_coverage(c,hub_id,city_id,actor_id=None):
+        exists=c.execute('SELECT 1 FROM hub_cities WHERE hub_id=? AND city_id=?',(hub_id,city_id)).fetchone()
+        if exists:return
+        # A Hub's home-city coverage does not make it the city's automatic primary.
+        c.execute('INSERT INTO hub_cities(hub_id,city_id,active,is_primary,created_by,created_at) VALUES(?,?,?,?,?,?)',
+                  (hub_id,city_id,1,0,actor_id,now()))
+    def hub_coverage(c,hub_id):
+        return [dict(r) for r in c.execute('''SELECT hc.hub_id,hc.city_id,hc.active,hc.is_primary,hc.created_at,
+                    ci.name city,ci.region,ci.delivery,ci.pickup
+             FROM hub_cities hc JOIN cities ci ON ci.id=hc.city_id
+             WHERE hc.hub_id=? ORDER BY hc.is_primary DESC,ci.name COLLATE NOCASE''',(hub_id,)).fetchall()]
+    def current_central_hub(c):
+        setting=c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
+        if not setting:return None,None
+        try:hid=int(setting['value'])
+        except (TypeError,ValueError):return None,None
+        if hid<=0:return None,None
+        row=c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=?',(hid,)).fetchone()
+        return hid,dict(row) if row else None
     def guard(c,p,documents=True):
         if p['invoice_id'] or c.execute('SELECT 1 FROM driver_statement_lines WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():raise Error('Colis verrouillé dans un relevé financier.',409)
         if documents and c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():raise Error('Colis lié à un document actif. Terminez ou annulez ce document avant modification.',409)
@@ -119,38 +171,142 @@ def register_logistics(app, services):
     def allowed_doc(c,did,u):
         d=c.execute('SELECT * FROM ops_documents WHERE id=?',(did,)).fetchone()
         if not d or (u['role']=='client' and (d['kind']=='transfer' or d['client_id']!=u['id'])) or (u['role']=='livreur' and d['driver_id']!=u['id']):raise Error('Document introuvable.',404)
+        if u['role']=='agent' and (d['kind']!='transfer' or u.get('agent_hub_id') not in (d['source_hub_id'],d['destination_hub_id'])):raise Error('Document introuvable.',404)
         return dict(d)
     def document_data(c,d):
-        lines=[dict(r) for r in c.execute('''SELECT l.*,p.phone,p.amount,p.status current_status
+        lines=[dict(r) for r in c.execute('''SELECT l.*,p.phone,p.amount,p.status current_status,p.current_hub_id
             FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id
             WHERE l.document_id=? ORDER BY l.id''',(d['id'],))]
-        return {**d,'lines':lines,'count':len(lines),'received':sum(bool(r['received_at']) for r in lines)}
+        return {**d,'lines':lines,**ops_manifest_counts(lines)}
+    def scoped_document_data(c,d,u):
+        data=document_data(c,d)
+        if u['role']=='agent':
+            data['lines']=hub_document_lines_at_hub(data['lines'],u.get('agent_hub_id'))
+            for line in data['lines']:
+                line.pop('departure_reconciliation_reason',None)
+                line.pop('departure_reconciled_by',None)
+            data.pop('original_count',None)
+            data.pop('departure_reconciled_count',None)
+            data['note']=''
+            data['cancel_reason']=''
+        return data
 
     services.update(ops_change=change,ops_notify_event=notify_event)
 
     @app.get(P+'/config')
-    @auth()
+    @auth('admin','agent')
     def ops_config():
-        with conn() as c:return jsonify(reasons=[dict(r) for r in c.execute('SELECT * FROM ops_reasons ORDER BY label')],hubs=[dict(r) for r in c.execute('SELECT h.*,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')],started_at=c.execute("SELECT value FROM settings WHERE key='ops_started_at'").fetchone()[0])
+        u=user()
+        with conn() as c:
+            central_hub_id,central_hub_row=current_central_hub(c)
+            if u['role']=='admin':
+                hubs=[dict(r) for r in c.execute('SELECT h.*,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')]
+                cities=[dict(r) for r in c.execute('SELECT id,name,region,delivery,pickup FROM cities ORDER BY name COLLATE NOCASE')]
+            else:
+                hub_id=u.get('agent_hub_id')
+                if not hub_id:raise Error('Ce compte n’est pas rattaché à un Hub actif.',403)
+                hubs=[dict(r) for r in c.execute('SELECT h.*,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1',(hub_id,))]
+                if not hubs:raise Error('Le Hub de ce responsable est inactif ou introuvable.',403)
+                cities=[dict(r) for r in c.execute('''SELECT ci.id,ci.name,ci.region,ci.delivery,ci.pickup
+                    FROM hub_cities hc JOIN cities ci ON ci.id=hc.city_id
+                    WHERE hc.hub_id=? AND hc.active=1 ORDER BY ci.name COLLATE NOCASE''',(hub_id,))]
+            for h in hubs:
+                coverage=hub_coverage(c,h['id']);h['coverage']=coverage
+                h['covered_city_ids']=[x['city_id'] for x in coverage]
+                h['primary_city_id']=next((x['city_id'] for x in coverage if x['is_primary']),None)
+            for city in cities:
+                if u['role']=='admin':
+                    mappings=[dict(r) for r in c.execute('''SELECT hc.hub_id,h.name hub_name,hc.is_primary
+                        FROM hub_cities hc JOIN ops_hubs h ON h.id=hc.hub_id
+                        WHERE hc.city_id=? AND hc.active=1 AND h.active=1 ORDER BY hc.is_primary DESC,h.name''',(city['id'],))]
+                else:
+                    mappings=[dict(r) for r in c.execute('''SELECT hc.hub_id,h.name hub_name,hc.is_primary
+                        FROM hub_cities hc JOIN ops_hubs h ON h.id=hc.hub_id
+                        WHERE hc.city_id=? AND hc.hub_id=? AND hc.active=1 AND h.active=1''',(city['id'],u['agent_hub_id']))]
+                city['hub_ids']=[x['hub_id'] for x in mappings]
+                primary=c.execute('''SELECT hc.hub_id FROM hub_cities hc JOIN ops_hubs h ON h.id=hc.hub_id
+                    WHERE hc.city_id=? AND hc.active=1 AND hc.is_primary=1 AND h.active=1''',(city['id'],)).fetchone()
+                city['primary_hub_id']=primary['hub_id'] if primary else None
+                city['routing_hub_id'],city['routing_hub_source']=resolve_routing_hub(
+                    city['primary_hub_id'],central_hub_id,bool(central_hub_row and central_hub_row['active']))
+                city['hub_names']=[x['hub_name'] for x in mappings]
+            return jsonify(reasons=[dict(r) for r in c.execute('SELECT * FROM ops_reasons ORDER BY label')],hubs=hubs,cities=cities,central_hub_id=central_hub_id,central_hub=central_hub_row,started_at=c.execute("SELECT value FROM settings WHERE key='ops_started_at'").fetchone()[0])
+
+    @app.patch(P+'/central-hub')
+    @auth('admin')
+    def ops_central_hub_update():
+        d=body()
+        if set(d)!={'hub_id'}:raise Error('Seul l’identifiant d’un Hub Central actif est requis.')
+        hid=integer(d.get('hub_id'),'Hub central');u=user()
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            selected=hub(c,hid,True)
+            previous_id,_=current_central_hub(c)
+            if previous_id==hid:return jsonify(ok=True,changed=False,central_hub_id=hid)
+            c.execute("INSERT INTO settings(key,value) VALUES('central_hub_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(hid),))
+            city=c.execute('SELECT name FROM cities WHERE id=?',(selected['city_id'],)).fetchone()
+            audit(c,None,u,'Hub Central modifié',{'before_hub_id':previous_id,'after_hub_id':hid,'name':selected['name'],'city':city['name'] if city else None})
+        return jsonify(ok=True,changed=True,central_hub_id=hid)
 
     @app.route(P+'/hubs',methods=['POST'])
     @app.route(P+'/hubs/<int:hid>',methods=['PATCH'])
     @auth('admin')
     def ops_hub(hid=None):
-        d=body();name=text(d,'name',maxlen=100);address=text(d,'address',maxlen=300);cid=integer(d.get('city_id'))
+        d=body();u=user();name=text(d,'name',maxlen=100);address=text(d,'address',maxlen=300);cid=integer(d.get('city_id'))
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
             if not c.execute('SELECT 1 FROM cities WHERE id=?',(cid,)).fetchone():raise Error('Ville inconnue.')
             if hid:
                 previous=c.execute('SELECT city_id,address FROM ops_hubs WHERE id=?',(hid,)).fetchone()
                 hub(c,hid,False)
+                if not bool(d.get('active')):
+                    central_id,_=current_central_hub(c)
+                    if central_id==hid:
+                        raise Error('Désignez un autre Hub Central avant de désactiver celui-ci.',409)
                 if previous and (previous['city_id']!=cid or previous['address']!=address):
                     # A saved map pin may belong to its former address; require fresh placement after relocation.
                     c.execute('UPDATE ops_hubs SET lat=NULL,lng=NULL WHERE id=?',(hid,))
                 c.execute('UPDATE ops_hubs SET name=?,city_id=?,address=?,active=? WHERE id=?',(name,cid,address,int(bool(d.get('active'))),hid))
-            else:hid=c.execute('INSERT INTO ops_hubs(name,city_id,address,created_at) VALUES(?,?,?,?)',(name,cid,address,now())).lastrowid
-            audit(c,None,user(),'Hub configuré',{'hub_id':hid,'name':name})
+                ensure_home_city_coverage(c,hid,cid,u['id'])
+            else:
+                hid=c.execute('INSERT INTO ops_hubs(name,city_id,address,created_at) VALUES(?,?,?,?)',(name,cid,address,now())).lastrowid
+                ensure_home_city_coverage(c,hid,cid,u['id'])
+            audit(c,None,u,'Hub configuré',{'hub_id':hid,'name':name,'home_city_id':cid})
         return jsonify(ok=True,id=hid)
+
+    @app.patch(P+'/hubs/<int:hid>/coverage')
+    @auth('admin')
+    def ops_hub_coverage_update(hid):
+        d=body();u=user();raw=d.get('city_ids');primary_raw=d.get('primary_city_id')
+        if not isinstance(raw,list) or len(raw)>500:raise Error('La liste des villes de couverture est invalide.')
+        city_ids=[integer(x,'Ville') for x in raw]
+        if len(city_ids)!=len(set(city_ids)):raise Error('Une ville ne peut apparaître qu’une fois.')
+        primary=integer(primary_raw,'Ville principale') if primary_raw not in (None,'') else None
+        if primary is not None and primary not in city_ids:raise Error('La ville principale doit aussi être dans la couverture.')
+        # primary_city_id may be empty for a secondary hub that shares another hub's city coverage.
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE');h=hub(c,hid,False)
+            if city_ids:
+                marks=','.join('?'*len(city_ids))
+                found={r['id'] for r in c.execute(f'SELECT id FROM cities WHERE id IN ({marks})',city_ids)}
+                if found!=set(city_ids):raise Error('Une ou plusieurs villes sont introuvables.')
+            if primary:
+                other=c.execute('''SELECT h.name FROM hub_cities hc JOIN ops_hubs h ON h.id=hc.hub_id
+                    WHERE hc.city_id=? AND hc.is_primary=1 AND hc.hub_id<>?''',(primary,hid)).fetchone()
+                if other:raise Error('Cette ville a déjà un Hub principal : '+other['name']+'. Vous pouvez quand même l’ajouter comme couverture secondaire.')
+            before=hub_coverage(c,hid)
+            c.execute('UPDATE hub_cities SET is_primary=0 WHERE hub_id=?',(hid,))
+            if city_ids:
+                marks=','.join('?'*len(city_ids))
+                c.execute(f'DELETE FROM hub_cities WHERE hub_id=? AND city_id NOT IN ({marks})',[hid]+city_ids)
+            else:c.execute('DELETE FROM hub_cities WHERE hub_id=?',(hid,))
+            for city_id in city_ids:
+                c.execute('''INSERT INTO hub_cities(hub_id,city_id,active,is_primary,created_by,created_at)
+                    VALUES(?,?,1,?,?,?) ON CONFLICT(hub_id,city_id) DO UPDATE SET
+                    active=1,is_primary=excluded.is_primary''',(hid,city_id,int(city_id==primary),u['id'],now()))
+            after=hub_coverage(c,hid)
+            audit(c,None,u,'Couverture Hub modifiée',{'hub_id':hid,'before':before,'after':after})
+            return jsonify(ok=True,hub_id=hid,coverage=after)
 
     @app.route(P+'/reasons',methods=['POST'])
     @auth('admin')
@@ -233,9 +389,14 @@ def register_logistics(app, services):
     @app.get(P+'/documents')
     @auth()
     def ops_documents():
-        u=user();where,args=('1=1',[]) if u['role']=='admin' else ("kind!='transfer' AND client_id=?",[u['id']]) if u['role']=='client' else ('driver_id=?',[u['id']])
+        u=user()
+        if u['role']=='admin':where,args='1=1',[]
+        elif u['role']=='client':where,args="kind!='transfer' AND client_id=?",[u['id']]
+        elif u['role']=='agent' and u.get('agent_hub_id'):where,args="kind='transfer' AND (source_hub_id=? OR destination_hub_id=?)",[u['agent_hub_id'],u['agent_hub_id']]
+        elif u['role']=='livreur':where,args='driver_id=?',[u['id']]
+        else:where,args='1=0',[]
         with conn() as c:
-            return jsonify([document_data(c,dict(r)) for r in c.execute('SELECT * FROM ops_documents WHERE '+where+' ORDER BY id DESC LIMIT 500',args).fetchall()])
+            return jsonify([scoped_document_data(c,dict(r),u) for r in c.execute('SELECT * FROM ops_documents WHERE '+where+' ORDER BY id DESC LIMIT 500',args).fetchall()])
 
     @app.post(P+'/documents')
     @auth('admin')
@@ -249,6 +410,13 @@ def register_logistics(app, services):
             src=hub(c,d.get('source_hub_id')) if kind!='pickup' else None
             dest=hub(c,d.get('destination_hub_id')) if kind!='return' else None
             if src and dest and src['id']==dest['id']:raise Error('Choisissez deux hubs différents.')
+            if kind=='transfer':
+                central_hub_id,central_hub_row=current_central_hub(c)
+                central_is_active=bool(central_hub_row and central_hub_row['active'])
+                if not central_is_active:
+                    raise Error('Configurez un Hub Central actif avant de créer un transfert inter-Hubs.',409)
+                if not central_hub_transfer_allowed(src['id'],dest['id'],central_hub_id,central_is_active):
+                    raise Error('Chaque transfert doit relier le Hub Central à un autre Hub. Les transferts directs entre Hubs secondaires ne sont pas autorisés.',409)
             parcels=[]
             for pid in pids:
                 p=parcel(c,pid,u)
@@ -260,9 +428,12 @@ def register_logistics(app, services):
                     guard(c,p)
                     if kind=='pickup' and p['status'] not in ['Créé','Ramassé']:raise Error('Ramassage : sélectionnez des colis créés ou ramassés.')
                     if kind=='transfer' and p['status'] not in ['Ramassé','Au hub','Réceptionné']:raise Error('Transfert : sélectionnez des colis ramassés, au hub ou réceptionnés en agence.')
-                if src and p['current_hub_id'] and p['current_hub_id']!=src['id']:raise Error('Le hub connu du colis ne correspond pas à l’origine.')
+                if kind=='transfer' and not parcel_physically_at_hub(p['current_hub_id'],src['id']):
+                    raise Error('Le colis doit être physiquement enregistré au Hub de départ avant la préparation du transfert.',409)
+                if kind!='transfer' and src and p['current_hub_id'] and p['current_hub_id']!=src['id']:
+                    raise Error('Le hub connu du colis ne correspond pas à l’origine.')
                 parcels.append(p)
-            did=c.execute('INSERT INTO ops_documents(kind,client_id,driver_id,source_hub_id,destination_hub_id,client_name,driver_name,source_name,destination_name,note,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(kind,cl['id'] if cl else None,dr['id'] if dr else None,src['id'] if src else None,dest['id'] if dest else None,cl['name'] if cl else None,dr['name'] if dr else None,src['name'] if src else 'Chez le client',dest['name'] if dest else 'Retour au client',text(d,'note',False,600),u['id'],now())).lastrowid
+            did=c.execute('INSERT INTO ops_documents(kind,client_id,driver_id,source_hub_id,destination_hub_id,client_name,driver_name,source_name,destination_name,note,created_by,created_at,departure_scan_required) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(kind,cl['id'] if cl else None,dr['id'] if dr else None,src['id'] if src else None,dest['id'] if dest else None,cl['name'] if cl else None,dr['name'] if dr else None,src['name'] if src else 'Chez le client',dest['name'] if dest else 'Retour au client',text(d,'note',False,600),u['id'],now(),int(kind=='transfer'))).lastrowid
             reference={'pickup':'RAM','return':'RET','transfer':'TRF'}[kind]+f'-{did:06d}'
             c.execute('UPDATE ops_documents SET reference=? WHERE id=?',(reference,did))
             for p in parcels:
@@ -277,11 +448,14 @@ def register_logistics(app, services):
     def ops_document(did):
         viewer=user()
         with conn() as c:
-            d=document_data(c,allowed_doc(c,did,viewer))
+            d=scoped_document_data(c,allowed_doc(c,did,viewer),viewer)
             def hub_info(hid):
                 if not hid:return None
                 r=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=?',(hid,)).fetchone()
-                return dict(r) if r else None
+                if not r:return None
+                info=dict(r)
+                if viewer['role']=='agent' and hid!=viewer.get('agent_hub_id'):info.pop('address',None)
+                return info
             d['source_hub']=hub_info(d.get('source_hub_id'))
             d['destination_hub']=hub_info(d.get('destination_hub_id'))
             may_view_client_contact=(viewer['role']=='admin' or (viewer['role']=='client' and viewer['id']==d.get('client_id')))
@@ -299,16 +473,120 @@ def register_logistics(app, services):
             else:d['client_contact']=None
             import qrcode, io, base64
             image=qrcode.make(d['reference']);buf=io.BytesIO();image.save(buf,format='PNG');d['qr']='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()
-            d['audit']=[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE document_id=? ORDER BY a.id DESC',(did,))]
+            audit_rows=[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE document_id=? ORDER BY a.id DESC',(did,))]
+            if viewer['role']=='agent':
+                visible_ids={line['parcel_id'] for line in d['lines']};visible_trackings={line['tracking'].upper() for line in d['lines']}
+                audit_rows=[row for row in audit_rows
+                    if (row['details'].get('parcel_id') is None or (type(row['details'].get('parcel_id')) is int and row['details']['parcel_id'] in visible_ids))
+                    and (row['details'].get('tracking') is None or (isinstance(row['details'].get('tracking'),str) and row['details']['tracking'].upper() in visible_trackings))]
+                for row in audit_rows:
+                    details=row['details']
+                    if details.get('parcel_id') is None and details.get('tracking') is None:
+                        row['details']={key:details[key] for key in ('count','source_hub_id','destination_hub_id') if key in details}
+            d['audit']=audit_rows
             return jsonify(d)
 
-    @app.post(P+'/documents/<int:did>/<action>')
+    @app.post(P+'/documents/<int:did>/departure-scan')
+    @auth('admin','agent')
+    def ops_document_departure_scan(did):
+        d=body();u=user();tracking=text(d,'tracking',maxlen=80).upper()
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            doc=document_data(c,allowed_doc(c,did,u))
+            if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):
+                raise Error('Document introuvable.',404)
+            if doc['kind']!='transfer' or not doc['departure_scan_required']:
+                raise Error('Ce document ne requiert pas les scans de sortie.',409)
+            line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking and l['active']),None)
+            if not line:raise Error('Ce colis ne figure pas dans ce document actif.',404)
+            if line['departure_scanned_at']:
+                return jsonify(ok=True,already_scanned=True,departure_scanned=doc['departure_scanned'],count=doc['count'],dispatched=bool(doc['dispatched_at']))
+            if doc['status'] not in ['Préparé','Départ partiel']:
+                raise Error('Le scan de sortie exige un transfert encore en préparation.',409)
+            p=parcel(c,line['parcel_id'],u);guard(c,p,False)
+            if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
+                raise Error('Le colis n’est plus enregistré physiquement au Hub de départ.',409)
+            scanned_at=now()
+            c.execute('UPDATE ops_document_lines SET departure_scanned_at=?,departure_scanned_by=? WHERE id=? AND departure_scanned_at IS NULL',(scanned_at,u['id'],line['id']))
+            if c.rowcount!=1:raise Error('Le scan vient d’être enregistré. Rechargez le manifeste.',409)
+            c.execute("UPDATE parcels SET status='Transit',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
+            event(c,p['id'],'Transit',doc['reference']+' · scan de sortie du Hub',u)
+            departure_scanned=doc['departure_scanned']+1;complete=departure_scanned==doc['count']
+            next_status=('Reçu' if doc['received']==doc['count'] else 'Partiellement reçu' if doc['received'] else 'En transit') if complete else 'Départ partiel'
+            completed_at=scanned_at if next_status=='Reçu' else None
+            c.execute('UPDATE ops_documents SET status=?,dispatched_at=?,completed_at=?,revision=revision+1 WHERE id=?',(next_status,scanned_at if complete else None,completed_at,did))
+            audit(c,did,u,'Scan de sortie enregistré',{'tracking':tracking,'parcel_id':p['id'],'source_hub_id':doc['source_hub_id']})
+            if complete:audit(c,did,u,'Départ physique confirmé',{'count':doc['count'],'source_hub_id':doc['source_hub_id'],'destination_hub_id':doc['destination_hub_id']})
+            return jsonify(ok=True,already_scanned=False,departure_scanned=departure_scanned,count=doc['count'],dispatched=complete)
+
+    @app.post(P+'/documents/<int:did>/reconcile-departure')
     @auth('admin')
+    def ops_document_reconcile_departure(did):
+        d=body();u=user()
+        if set(d)!={'line_ids','reason','revision','confirmed'}:raise Error('Lignes, motif, confirmation et version du manifeste sont requis.')
+        if d.get('confirmed') is not True:raise Error('Confirmez que les colis sélectionnés sont restés au Hub de départ.')
+        raw_ids=d.get('line_ids')
+        if not isinstance(raw_ids,list) or not 1<=len(raw_ids)<=100:raise Error('Sélectionnez de 1 à 100 lignes non parties.')
+        line_ids=[integer(value,'Ligne') for value in raw_ids]
+        if len(line_ids)!=len(set(line_ids)):raise Error('Une ligne ne peut être réconciliée qu’une fois.')
+        reason=text(d,'reason',maxlen=600)
+        if type(d.get('revision')) is not int:raise Error('Version du manifeste invalide.',409)
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            doc=document_data(c,allowed_doc(c,did,u))
+            if doc['kind']!='transfer' or not doc['departure_scan_required']:
+                raise Error('La réconciliation concerne uniquement les transferts avec scan de sortie.',409)
+            if doc['status']!='Départ partiel' or doc['departure_scanned']<=0:
+                raise Error('La réconciliation exige un départ partiel encore ouvert.',409)
+            if d['revision']!=doc['revision']:raise Error('Le manifeste a changé. Rechargez-le.',409)
+            by_id={line['id']:line for line in doc['lines']}
+            selected=[]
+            for line_id in line_ids:
+                line=by_id.get(line_id)
+                if (not line or not line['active'] or line['departure_scanned_at'] or line['received_at']
+                        or line['departure_reconciled_at']):
+                    raise Error('Une ligne sélectionnée n’est plus éligible à la réconciliation.',409)
+                p=parcel(c,line['parcel_id'],u);guard(c,p,False)
+                if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
+                    raise Error('Chaque colis retiré doit être physiquement enregistré au Hub de départ.',409)
+                selected.append((line,p))
+            reconciled_at=now()
+            for line,p in selected:
+                c.execute('''UPDATE ops_document_lines SET active=0,departure_reconciled_at=?,
+                    departure_reconciled_by=?,departure_reconciliation_reason=?
+                    WHERE id=? AND active=1 AND departure_scanned_at IS NULL AND received_at IS NULL
+                    AND departure_reconciled_at IS NULL''',(reconciled_at,u['id'],reason,line['id']))
+                if c.rowcount!=1:raise Error('Une ligne vient de changer. Rechargez le manifeste.',409)
+                c.execute('UPDATE parcels SET ops_revision=ops_revision+1 WHERE id=?',(p['id'],))
+            after=document_data(c,doc)
+            if after['count']<=0:raise Error('Un manifeste doit garder au moins une ligne active.',409)
+            try:next_status=manifest_status_from_counts(after['count'],after['departure_scanned'],after['received'])
+            except ValueError:raise Error('Les compteurs du manifeste sont incohérents; aucune réconciliation appliquée.',409)
+            completed_at=reconciled_at if next_status=='Reçu' else None
+            if next_status!='Départ partiel':
+                dispatched_at=c.execute('''SELECT max(departure_scanned_at) FROM ops_document_lines
+                    WHERE document_id=? AND departure_reconciled_at IS NULL''',(did,)).fetchone()[0] or reconciled_at
+            else:dispatched_at=doc['dispatched_at']
+            if next_status=='Reçu':c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,))
+            c.execute('''UPDATE ops_documents SET status=?,dispatched_at=?,completed_at=?,revision=revision+1
+                WHERE id=? AND revision=?''',(next_status,dispatched_at,completed_at,did,doc['revision']))
+            if c.rowcount!=1:raise Error('Le manifeste vient de changer. Rechargez-le.',409)
+            audit(c,did,u,'Colis non partis réconciliés',{'count':len(selected),'reason':reason,
+                'remaining_manifest_count':after['count'],'departure_scanned':after['departure_scanned']})
+            return jsonify(ok=True,reconciled=len(selected),count=after['count'],
+                departure_scanned=after['departure_scanned'],status=next_status,revision=doc['revision']+1)
+
+    @app.post(P+'/documents/<int:did>/<action>')
+    @auth('admin','agent')
     def ops_document_action(did,action):
         d=body();u=user()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE');doc=document_data(c,allowed_doc(c,did,u))
+            if u['role']=='agent' and (action!='receive' or not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'arrival')):
+                raise Error('Document introuvable.',404)
             if doc['kind']=='partner_palette':raise Error('Utilisez la réception dédiée Palettes partenaires.',409)
+            if action=='dispatch' and doc['kind']=='transfer' and doc['departure_scan_required']:
+                raise Error('Le départ de ce transfert est confirmé par le scan de chaque colis.',409)
             if action in ['dispatch','cancel']:
                 if type(d.get('revision')) is not int or d['revision']!=doc['revision']:raise Error('Le document a changé. Rechargez-le.',409)
                 if doc['status']!='Préparé':raise Error('Cette action exige un document encore préparé.',409)
@@ -329,14 +607,45 @@ def register_logistics(app, services):
             elif action=='receive':
                 tracking=text(d,'tracking',maxlen=80).upper()
                 line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking),None)
-                if not line:raise Error('Ce colis ne figure pas dans ce document.',404)
-                if line['received_at']:return jsonify(ok=True,already_received=True)
-                if doc['status'] not in ['En transit','Partiellement reçu']:raise Error('Confirmez le départ du document avant réception.',409)
-                p=parcel(c,line['parcel_id'],u)
-                if doc['kind']!='return':guard(c,p,False)
-                c.execute('UPDATE ops_document_lines SET received_at=?,received_by=? WHERE id=?',(now(),u['id'],line['id']))
-                complete=doc['received']+1==doc['count']
-                c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Reçu' if complete else 'Partiellement reçu',now() if complete else None,did))
+                if line and line['departure_reconciled_at']:
+                    if u['role']=='agent':raise Error('Colis non disponible pour réception à ce Hub.',404)
+                    raise Error('Cette ligne a été retirée du manifeste de départ.',409)
+                if u['role']=='agent':
+                    unavailable='Colis non disponible pour réception à ce Hub.'
+                    if not line:raise Error(unavailable,404)
+                    p=c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
+                    if not p:raise Error(unavailable,404)
+                    if line['received_at']:
+                        if p['current_hub_id']==u.get('agent_hub_id'):return jsonify(ok=True,already_received=True)
+                        raise Error(unavailable,404)
+                    if doc['status'] not in ['En transit','Partiellement reçu','Départ partiel']:
+                        raise Error(unavailable,404)
+                    if p['current_hub_id'] is not None or p['status']!='Transit':raise Error(unavailable,404)
+                    if doc['departure_scan_required'] and not line['departure_scanned_at']:
+                        raise Error(unavailable,404)
+                else:
+                    if not line:raise Error('Ce colis ne figure pas dans ce document.',404)
+                    if doc['kind']=='transfer' and doc['departure_scan_required'] and not line['departure_scanned_at']:
+                        raise Error('Le scan de sortie de ce colis est requis avant sa réception.',409)
+                    if line['received_at']:return jsonify(ok=True,already_received=True)
+                    if doc['status'] not in ['En transit','Partiellement reçu','Départ partiel']:
+                        raise Error('Confirmez le départ du document avant réception.',409)
+                    p=parcel(c,line['parcel_id'],u)
+                if not p:raise Error('Document introuvable.',404)
+                if u['role']!='agent' and doc['kind']=='transfer' and doc['departure_scan_required'] and (p['current_hub_id'] is not None or p['status']!='Transit'):
+                    raise Error('Le colis n’est pas en transit vers ce Hub ou a déjà été localisé ailleurs.',409)
+                if doc['kind']!='return':
+                    if u['role']=='agent':
+                        try:guard(c,p,False)
+                        except Error:raise Error('Colis non disponible pour réception à ce Hub.',404)
+                    else:guard(c,p,False)
+                received_at=now()
+                c.execute('UPDATE ops_document_lines SET received_at=?,received_by=? WHERE id=?',(received_at,u['id'],line['id']))
+                received_count=doc['received']+1
+                departures_complete=(not doc['departure_scan_required'] or doc['departure_scanned']==doc['count'])
+                complete=departures_complete and received_count==doc['count']
+                next_status='Reçu' if complete else 'Partiellement reçu' if departures_complete else 'Départ partiel'
+                c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',(next_status,received_at if complete else None,did))
                 c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1 WHERE id=?',(doc['destination_hub_id'],p['id']))
                 received_status='Réceptionné' if doc['kind']=='transfer' else 'Au hub'
                 if doc['kind']!='return':c.execute("UPDATE parcels SET status=?,next_attempt_at=NULL,reason_code=NULL,updated_at=? WHERE id=?",(received_status,now(),p['id']))
@@ -425,6 +734,67 @@ def register_logistics(app, services):
             c.execute('UPDATE ops_ticket_links SET priority=?,assigned_to=? WHERE ticket_id=?',(priority,assignee['id'],tid));notify(c,assignee['id'],'Réclamation affectée','TKT-'+str(tid))
         return jsonify(ok=True)
 
+    @app.get(P+'/hub-dashboard')
+    @auth('agent')
+    def ops_hub_dashboard():
+        u=user();hub_id=u.get('agent_hub_id')
+        if type(hub_id) is not int or hub_id<=0:raise Error('Ce compte n’est pas rattaché à un Hub actif.',403)
+        end=request.args.get('to') or datetime.now().date().isoformat()
+        start=request.args.get('from') or (datetime.now()-timedelta(days=6)).date().isoformat()
+        try:
+            a,b=datetime.strptime(start,'%Y-%m-%d'),datetime.strptime(end,'%Y-%m-%d')
+            if a.strftime('%Y-%m-%d')!=start or b.strftime('%Y-%m-%d')!=end or a>b or (b-a).days>365:raise ValueError()
+        except ValueError:raise Error('Période invalide (366 jours maximum).')
+        with conn() as c:
+            hub_row=c.execute('''SELECT h.id,h.name,ci.name city FROM ops_hubs h
+                JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1''',(hub_id,)).fetchone()
+            if not hub_row:raise Error('Le Hub de ce compte est inactif ou introuvable.',403)
+            parcels_here=c.execute('SELECT count(*) FROM parcels WHERE current_hub_id=?',(hub_id,)).fetchone()[0]
+            expected_arrivals=c.execute('''SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
+                WHERE d.kind='transfer' AND d.destination_hub_id=? AND l.active=1 AND l.received_at IS NULL AND (
+                    (d.departure_scan_required=1 AND l.departure_scanned_at IS NOT NULL AND d.status IN ('Départ partiel','En transit','Partiellement reçu'))
+                    OR (d.departure_scan_required=0 AND d.status IN ('En transit','Partiellement reçu'))
+                )''',(hub_id,)).fetchone()[0]
+            inbound_documents=c.execute('''SELECT count(DISTINCT d.id) FROM ops_documents d JOIN ops_document_lines l ON l.document_id=d.id
+                WHERE d.kind='transfer' AND d.destination_hub_id=? AND l.active=1 AND l.received_at IS NULL AND (
+                    (d.departure_scan_required=1 AND l.departure_scanned_at IS NOT NULL AND d.status IN ('Départ partiel','En transit','Partiellement reçu'))
+                    OR (d.departure_scan_required=0 AND d.status IN ('En transit','Partiellement reçu'))
+                )''',(hub_id,)).fetchone()[0]
+            outbound_documents=c.execute('''SELECT count(*) FROM ops_documents d WHERE d.kind='transfer'
+                AND d.source_hub_id=? AND d.status IN ('Préparé','Départ partiel')''',(hub_id,)).fetchone()[0]
+            pending_departure_scans=c.execute('''SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
+                JOIN parcels p ON p.id=l.parcel_id WHERE d.kind='transfer' AND d.source_hub_id=?
+                AND d.departure_scan_required=1 AND d.status IN ('Préparé','Départ partiel')
+                AND l.active=1 AND l.departure_scanned_at IS NULL AND p.current_hub_id=?''',(hub_id,hub_id)).fetchone()[0]
+            departure_events=c.execute('''SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
+                WHERE d.kind='transfer' AND d.source_hub_id=? AND (
+                    (d.departure_scan_required=1 AND substr(l.departure_scanned_at,1,10) BETWEEN ? AND ?)
+                    OR (d.departure_scan_required=0 AND substr(d.dispatched_at,1,10) BETWEEN ? AND ?)
+                )''',(hub_id,start,end,start,end)).fetchone()[0]
+            receipt_events=c.execute('''SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
+                WHERE d.kind='transfer' AND d.destination_hub_id=? AND substr(l.received_at,1,10) BETWEEN ? AND ?''',(hub_id,start,end)).fetchone()[0]
+            daily=[dict(r) for r in c.execute('''SELECT day,sum(departures) departures,sum(receipts) receipts FROM (
+                    SELECT substr(l.departure_scanned_at,1,10) day,1 departures,0 receipts
+                    FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
+                    WHERE d.kind='transfer' AND d.source_hub_id=? AND d.departure_scan_required=1
+                      AND substr(l.departure_scanned_at,1,10) BETWEEN ? AND ?
+                    UNION ALL
+                    SELECT substr(d.dispatched_at,1,10) day,1 departures,0 receipts
+                    FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
+                    WHERE d.kind='transfer' AND d.source_hub_id=? AND d.departure_scan_required=0
+                      AND substr(d.dispatched_at,1,10) BETWEEN ? AND ?
+                    UNION ALL
+                    SELECT substr(l.received_at,1,10) day,0 departures,1 receipts
+                    FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
+                    WHERE d.kind='transfer' AND d.destination_hub_id=?
+                      AND substr(l.received_at,1,10) BETWEEN ? AND ?
+                ) GROUP BY day ORDER BY day DESC''',
+                (hub_id,start,end,hub_id,start,end,hub_id,start,end)).fetchall()]
+            return jsonify(hub={'name':hub_row['name'],'city':hub_row['city']},period_from=start,period_to=end,
+                parcels_here=parcels_here,expected_arrivals=expected_arrivals,inbound_documents=inbound_documents,
+                outbound_documents=outbound_documents,pending_departure_scans=pending_departure_scans,
+                departures=departure_events,receipts=receipt_events,daily=daily)
+
     @app.get(P+'/analytics')
     @auth('admin')
     def ops_analytics():
@@ -442,10 +812,10 @@ def register_logistics(app, services):
             unknown=c.execute("SELECT count(*) total,COALESCE(sum(outcome='Livré'),0) delivered FROM ops_attempts WHERE driver_id IS NULL AND substr(created_at,1,10) BETWEEN ? AND ?",(start,end)).fetchone()
             if unknown['total']:drivers.append(dict(id=None,name='Sans livreur affecté',active=0,assignment_events=0,attempts=unknown['total'],delivered_attempts=unknown['delivered']))
             daily=[dict(r) for r in c.execute("SELECT substr(a.created_at,1,10) day,a.driver_id,u.name driver,count(*) attempts,sum(a.outcome='Livré') delivered FROM ops_attempts a LEFT JOIN users u ON u.id=a.driver_id WHERE substr(a.created_at,1,10) BETWEEN ? AND ? GROUP BY day,a.driver_id ORDER BY day DESC,driver",(start,end))]
-            hubs=[{**dict(h),'parcels_here':c.execute('SELECT count(*) FROM parcels WHERE current_hub_id=?',(h['id'],)).fetchone()[0],'expected':c.execute("SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id WHERE d.destination_hub_id=? AND l.active=1 AND l.received_at IS NULL AND d.status IN ('En transit','Partiellement reçu')",(h['id'],)).fetchone()[0]} for h in c.execute('SELECT * FROM ops_hubs ORDER BY name').fetchall()]
+            hubs=[{**dict(h),'parcels_here':c.execute('SELECT count(*) FROM parcels WHERE current_hub_id=?',(h['id'],)).fetchone()[0],'expected':c.execute("SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id WHERE d.destination_hub_id=? AND l.active=1 AND l.received_at IS NULL AND (d.status IN ('En transit','Partiellement reçu') OR (d.status='Départ partiel' AND l.departure_scanned_at IS NOT NULL))",(h['id'],)).fetchone()[0]} for h in c.execute('SELECT * FROM ops_hubs ORDER BY name').fetchall()]
             hub_activity=[]
             for h in hubs:
-                departed=c.execute("SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id WHERE d.source_hub_id=? AND substr(d.dispatched_at,1,10) BETWEEN ? AND ?",(h['id'],start,end)).fetchone()[0]
+                departed=c.execute("SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id WHERE d.source_hub_id=? AND ((d.departure_scan_required=1 AND l.departure_scanned_at IS NOT NULL AND substr(l.departure_scanned_at,1,10) BETWEEN ? AND ?) OR (d.departure_scan_required=0 AND substr(d.dispatched_at,1,10) BETWEEN ? AND ?))",(h['id'],start,end,start,end)).fetchone()[0]
                 received=c.execute("SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id WHERE d.destination_hub_id=? AND d.kind!='return' AND substr(l.received_at,1,10) BETWEEN ? AND ?",(h['id'],start,end)).fetchone()[0]
                 hub_activity.append(dict(id=h['id'],name=h['name'],departed=departed,received=received))
             daily_assignments=[dict(r) for r in c.execute("SELECT substr(a.created_at,1,10) day,a.new_driver_id driver_id,u.name driver,count(*) assignment_events FROM ops_assignments a JOIN users u ON u.id=a.new_driver_id WHERE substr(a.created_at,1,10) BETWEEN ? AND ? GROUP BY day,a.new_driver_id ORDER BY day DESC,driver",(start,end))]
