@@ -11,6 +11,8 @@ from hub_access import (
     resolve_routing_hub,
     central_hub_transfer_allowed,
     parcel_physically_at_hub,
+    driver_dispatch_allowed,
+    driver_team_member_ids,
     hub_document_lines_at_hub,
     hub_manager_transfer_scope,
     ops_manifest_counts,
@@ -28,6 +30,14 @@ class HubManagerRoutePolicyTests(unittest.TestCase):
             ('GET', '/api/logistics/documents'),
             ('GET', '/api/logistics/documents/18'),
             ('GET', '/api/logistics/hub-dashboard'),
+            ('GET', '/api/logistics/hub/drivers'),
+            ('POST', '/api/logistics/hub/drivers'),
+            ('PATCH', '/api/logistics/hub/drivers/17'),
+            ('POST', '/api/logistics/hub/assignments'),
+            ('GET', '/api/logistics/hub/invoices'),
+            ('GET', '/api/logistics/hub/driver-statements'),
+            ('GET', '/api/logistics/cod/hub'),
+            ('POST', '/api/logistics/cod/hub/handoffs'),
             ('POST', '/api/logistics/documents/18/departure-scan'),
             ('POST', '/api/logistics/documents/18/receive'),
             ('GET', '/api/partner-palettes/18'),
@@ -55,6 +65,14 @@ class HubManagerRoutePolicyTests(unittest.TestCase):
             ('GET', '/api/audit'),
             ('POST', '/api/logistics/documents/24'),
             ('POST', '/api/logistics/hub-dashboard'),
+            ('POST', '/api/logistics/cod/admin/receipts'),
+            ('POST', '/api/logistics/cod/admin/receipts/1/settlements'),
+            ('GET', '/api/logistics/cod/admin/handoffs/1/settlement-options'),
+            ('POST', '/api/logistics/cod/admin/adjustments'),
+            ('GET', '/api/logistics/cod/admin'),
+            ('POST', '/api/logistics/hubs/10/manager'),
+            ('POST', '/api/logistics/hubs/10/manager/replace'),
+            ('PATCH', '/api/logistics/cod/hub'),
             ('POST', '/api/logistics/documents/24/reconcile-departure'),
             ('POST', '/api/logistics/documents/24/dispatch'),
             ('POST', '/api/logistics/documents/24/cancel'),
@@ -84,6 +102,11 @@ class HubManagerRoutePolicyTests(unittest.TestCase):
             '/api/logistics/documents',
             '/api/logistics/documents/123/receive',
             '/api/logistics/hub-dashboard',
+            '/api/logistics/hub/drivers',
+            '/api/logistics/hub/assignments',
+            '/api/logistics/hub/invoices',
+            '/api/logistics/cod/hub',
+            '/api/logistics/cod/hub/handoffs',
             '/api/logistics/notifications',
             '/api/partner-palettes/18',
             '/api/partner-palette-incidents/3/photo',
@@ -171,6 +194,35 @@ class ParcelDepartureLocationTests(unittest.TestCase):
         self.assertFalse(parcel_physically_at_hub(None, 10))
         self.assertFalse(parcel_physically_at_hub(20, 10))
         self.assertFalse(parcel_physically_at_hub(True, 10))
+
+
+class DriverDispatchHubTests(unittest.TestCase):
+    def test_team_scope_excludes_unmapped_cross_hub_and_inactive_members(self):
+        db=sqlite3.connect(':memory:')
+        db.executescript('''
+            CREATE TABLE ops_hubs(id INTEGER PRIMARY KEY,active INTEGER NOT NULL);
+            CREATE TABLE users(id INTEGER PRIMARY KEY,role TEXT,active INTEGER,driver_hub_id INTEGER,team_lead_id INTEGER);
+            INSERT INTO ops_hubs(id,active) VALUES(10,1),(20,1),(30,0);
+            INSERT INTO users(id,role,active,driver_hub_id,team_lead_id) VALUES
+                (1,'livreur',1,10,NULL),(2,'livreur',1,10,1),(3,'livreur',1,20,1),
+                (4,'livreur',1,NULL,1),(5,'livreur',0,10,1),(6,'livreur',1,30,NULL);
+        ''')
+        self.assertEqual(driver_team_member_ids(db,1),[2])
+        self.assertEqual(driver_team_member_ids(db,6),[])
+        self.assertEqual(driver_team_member_ids(db,True),[])
+        db.close()
+
+    def test_dispatch_requires_parcel_at_the_same_active_hub(self):
+        db=sqlite3.connect(':memory:')
+        db.execute('CREATE TABLE ops_hubs(id INTEGER PRIMARY KEY,active INTEGER NOT NULL)')
+        db.executemany('INSERT INTO ops_hubs(id,active) VALUES(?,?)',[(10,1),(20,0)])
+        self.assertTrue(driver_dispatch_allowed(db,10,10))
+        self.assertFalse(driver_dispatch_allowed(db,None,10))
+        self.assertFalse(driver_dispatch_allowed(db,20,10))
+        self.assertFalse(driver_dispatch_allowed(db,20,20))
+        self.assertFalse(driver_dispatch_allowed(db,10,True))
+        self.assertFalse(driver_dispatch_allowed(db,10,None))
+        db.close()
 
 
 class CentralHubRoutingFallbackTests(unittest.TestCase):

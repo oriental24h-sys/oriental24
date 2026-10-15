@@ -2,8 +2,11 @@ import sqlite3
 import unittest
 
 from audit_guard import (
+    install_audit_log_guards,
     install_departure_reconciliation_guard,
     install_driver_workspace_audit_guards,
+    install_hub_cod_audit_guards,
+    install_hub_invoice_audit_guards,
     install_ops_audit_guards,
 )
 
@@ -12,6 +15,7 @@ class AppendOnlyAuditTests(unittest.TestCase):
     AUDITS = (
         ('ops_audit', install_ops_audit_guards),
         ('driver_workspace_audit', install_driver_workspace_audit_guards),
+        ('audit_log', install_audit_log_guards),
     )
 
     def setUp(self):
@@ -43,6 +47,22 @@ class AppendOnlyAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(sqlite3.IntegrityError, 'append-only'):
                     self.db.execute(f'DELETE FROM {table} WHERE id=1')
                 self.assertEqual(self.db.execute(f'SELECT action FROM {table} WHERE id=1').fetchone()[0], 'original')
+
+    def test_hub_cod_custody_tables_are_all_append_only(self):
+        tables=('hub_cod_handoffs','hub_cod_handoff_lines','hub_cod_admin_receipts',
+                'hub_cod_admin_receipt_lines','hub_cod_adjustments','hub_cod_settlement_links',
+                'hub_invoice_lines','hub_invoice_settlement_links','hub_invoice_adjustments')
+        for table in tables:
+            self.db.execute(f'CREATE TABLE {table}(id INTEGER PRIMARY KEY, action TEXT NOT NULL)')
+        install_hub_cod_audit_guards(self.db)
+        install_hub_invoice_audit_guards(self.db)
+        for table in tables:
+            with self.subTest(table=table):
+                self.db.execute(f"INSERT INTO {table}(action) VALUES('event')")
+                with self.assertRaisesRegex(sqlite3.IntegrityError, 'append-only'):
+                    self.db.execute(f"UPDATE {table} SET action='changed' WHERE id=1")
+                with self.assertRaisesRegex(sqlite3.IntegrityError, 'append-only'):
+                    self.db.execute(f'DELETE FROM {table} WHERE id=1')
 
     def test_reconciliation_marker_can_be_set_once_but_not_rewritten(self):
         self.db.execute('INSERT INTO ops_document_lines(id) VALUES(1)')
