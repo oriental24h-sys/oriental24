@@ -23,6 +23,12 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('GET', r'/api/logistics/config'),
     ('GET', r'/api/logistics/documents'), ('GET', r'/api/logistics/documents/\d+'),
     ('GET', r'/api/logistics/hub-dashboard'),
+    ('GET', r'/api/logistics/hub/drivers'), ('POST', r'/api/logistics/hub/drivers'),
+    ('PATCH', r'/api/logistics/hub/drivers/\d+'),
+    ('POST', r'/api/logistics/hub/assignments'), ('GET', r'/api/logistics/hub/invoices'),
+    ('GET', r'/api/logistics/hub/driver-statements'),
+    ('GET', r'/api/logistics/cod/hub'),
+    ('POST', r'/api/logistics/cod/hub/handoffs'),
     ('POST', r'/api/logistics/documents/\d+/departure-scan'),
     ('POST', r'/api/logistics/documents/\d+/receive'),
     ('GET', r'/api/logistics/notifications'), ('PATCH', r'/api/logistics/notifications'),
@@ -51,7 +57,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
 )
 
 HUB_OPERATIONAL_PREFIXES = (
-    '/api/parcels/', '/api/logistics/parcels/', '/api/logistics/config', '/api/logistics/documents', '/api/logistics/hub-dashboard', '/api/logistics/notifications', '/api/partner-palettes',
+    '/api/parcels/', '/api/logistics/parcels/', '/api/logistics/config', '/api/logistics/documents', '/api/logistics/hub-dashboard', '/api/logistics/hub/', '/api/logistics/hub/drivers', '/api/logistics/cod/', '/api/logistics/notifications', '/api/partner-palettes',
     '/api/partner-palette-incidents', '/api/return-palettes', '/api/alerts',
 )
 
@@ -96,6 +102,34 @@ def central_hub_transfer_allowed(source_hub_id, destination_hub_id, central_hub_
 def parcel_physically_at_hub(current_hub_id, hub_id):
     """Require an explicit current-location record before treating a parcel as a Hub's stock."""
     return type(current_hub_id) is int and current_hub_id>0 and type(hub_id) is int and hub_id>0 and current_hub_id==hub_id
+
+
+def driver_dispatch_allowed(connection, current_hub_id, driver_hub_id):
+    """Allow a new handoff only at the courier's explicitly assigned active Hub."""
+    if not parcel_physically_at_hub(current_hub_id,driver_hub_id):
+        return False
+    try:
+        return bool(connection.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(driver_hub_id,)).fetchone())
+    except sqlite3.Error:
+        return False
+
+
+def driver_team_member_ids(connection, lead_id):
+    """Return active team members only when lead and members share one active Hub."""
+    if type(lead_id) is not int or lead_id<=0:
+        return []
+    try:
+        lead=connection.execute('''SELECT u.driver_hub_id FROM users u JOIN ops_hubs h
+            ON h.id=u.driver_hub_id AND h.active=1
+            WHERE u.id=? AND u.role='livreur' AND u.active=1''',(lead_id,)).fetchone()
+        if not lead or type(lead[0]) is not int or lead[0]<=0:
+            return []
+        return [row[0] for row in connection.execute('''SELECT u.id FROM users u JOIN ops_hubs h
+            ON h.id=u.driver_hub_id AND h.active=1
+            WHERE u.team_lead_id=? AND u.role='livreur' AND u.active=1 AND u.driver_hub_id=? ORDER BY u.id''',
+            (lead_id,lead[0]))]
+    except sqlite3.Error:
+        return []
 
 
 def hub_document_lines_at_hub(lines, hub_id):

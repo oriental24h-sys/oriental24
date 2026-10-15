@@ -138,6 +138,7 @@
         ${window.o24HelpButton('da-app-control')}
       </header>
       <button class="da-update" id="da-update" hidden>${icon('alert')} Une nouvelle version est prête — touchez pour mettre à jour</button>
+      ${!S.user.driver_hub_id?`<div class="form-hint orange" role="status">Les tâches colis sont suspendues : votre compte n’est pas encore rattaché à un Hub. Contactez l’Admin pour examiner votre affectation.</div>`:''}
       ${(st.plan || st.retards) ? `<div class="da-banner" role="alert">
         ${st.plan ? `<button class="seg" onclick="daQuick('plan')">${icon('calendar')} ${st.plan} programmé(s) aujourd’hui</button>` : ''}
         ${st.retards ? `<button class="seg warn" onclick="daQuick('retards')">${icon('clock')} ${st.retards} colis en retard (+48 h)</button>` : ''}
