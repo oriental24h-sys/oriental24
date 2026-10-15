@@ -33,8 +33,9 @@ def register_driver_finance(app, services):
             delivered_cents INTEGER NOT NULL CHECK(delivered_cents>=0), returned_cents INTEGER NOT NULL CHECK(returned_cents>=0),
             refused_cents INTEGER NOT NULL CHECK(refused_cents>=0), PRIMARY KEY(driver_id,city_id));
         CREATE TABLE IF NOT EXISTS driver_statements (
-            id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL REFERENCES users(id), driver_name TEXT NOT NULL,
-            driver_email TEXT NOT NULL, mode TEXT NOT NULL CHECK(mode IN ('net','gross')), revision INTEGER NOT NULL,
+            id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL REFERENCES users(id), hub_id INTEGER,
+            driver_name TEXT NOT NULL, driver_email TEXT NOT NULL,
+            mode TEXT NOT NULL CHECK(mode IN ('net','gross')), revision INTEGER NOT NULL,
             period_from TEXT, period_to TEXT, parcel_count INTEGER NOT NULL,
             cod_cents INTEGER NOT NULL, commission_cents INTEGER NOT NULL, retained_cents INTEGER NOT NULL,
             cash_due_cents INTEGER NOT NULL, commission_due_cents INTEGER NOT NULL,
@@ -65,6 +66,10 @@ def register_driver_finance(app, services):
         CREATE INDEX IF NOT EXISTS idx_driver_statements_driver ON driver_statements(driver_id,id);
         CREATE INDEX IF NOT EXISTS idx_driver_tx_statement ON driver_transactions(statement_id);
         ''')
+        statement_columns={r['name'] for r in c.execute('PRAGMA table_info(driver_statements)')}
+        if 'hub_id' not in statement_columns:
+            c.execute('ALTER TABLE driver_statements ADD COLUMN hub_id INTEGER')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_driver_statements_hub ON driver_statements(hub_id,id)')
 
     def cents(value, field='Montant', maximum=1000000000, allow_zero=True):
         try:
@@ -91,7 +96,7 @@ def register_driver_finance(app, services):
     def driver(c, did, active=False):
         if isinstance(did, bool) or not re.fullmatch(r'[1-9][0-9]{0,9}',str(did)): raise Error('Livreur invalide.')
         did = int(did)
-        row = c.execute("SELECT id,name,email,phone,active FROM users WHERE id=? AND role='livreur'", (did,)).fetchone()
+        row = c.execute("SELECT id,name,email,phone,active,driver_hub_id FROM users WHERE id=? AND role='livreur'", (did,)).fetchone()
         if not row or (active and not row['active']):
             raise Error('Choisissez un livreur actif.', 400)
         return dict(row)
@@ -176,7 +181,8 @@ def register_driver_finance(app, services):
                           'closed_at':r['updated_at']})
         cod, commission = sum(r['cod_cents'] for r in lines), sum(r['commission_cents'] for r in lines)
         retained = min(cod, commission) if terms['mode']=='net' else 0
-        data = {'driver_id':dr['id'], 'driver_name':dr['name'], 'driver_email':dr['email'], 'mode':terms['mode'],
+        data = {'driver_id':dr['id'], 'hub_id':dr.get('driver_hub_id'),
+                'driver_name':dr['name'], 'driver_email':dr['email'], 'mode':terms['mode'],
                 'revision':terms['revision'], 'period_from':period_from, 'period_to':period_to,
                 'parcel_count':len(lines), 'cod_cents':cod, 'commission_cents':commission, 'retained_cents':retained,
                 'cash_due_cents':cod-retained, 'commission_due_cents':commission-retained, 'lines':lines, 'print_snapshot':print_snapshot(c,dr['id'],rows)}
@@ -280,7 +286,7 @@ def register_driver_finance(app, services):
             snapshot=build_preview(c,draft['driver_id'],draft['period_from'],draft['period_to'])
             if digest(snapshot)!=draft['fingerprint']:
                 raise Error('Les colis, le barème ou les coordonnées ont changé. Vérifiez un nouvel aperçu avant de confirmer.',409)
-            keys=('driver_id','driver_name','driver_email','mode','revision','period_from','period_to','parcel_count','cod_cents','commission_cents','retained_cents','cash_due_cents','commission_due_cents')
+            keys=('driver_id','hub_id','driver_name','driver_email','mode','revision','period_from','period_to','parcel_count','cod_cents','commission_cents','retained_cents','cash_due_cents','commission_due_cents')
             cur=c.execute(f'INSERT INTO driver_statements({",".join(keys)},created_by,created_at) VALUES({",".join("?" for _ in range(len(keys)+2))})',
                           [snapshot[k] for k in keys]+[u['id'],now()])
             sid=cur.lastrowid

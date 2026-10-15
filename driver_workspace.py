@@ -2,6 +2,8 @@
 import json,re,hashlib
 from flask import request,jsonify
 from audit_guard import install_driver_workspace_audit_guards
+from hub_access import driver_dispatch_allowed
+from hub_analytics import install_driver_receipt_arrival_trigger
 from werkzeug.security import generate_password_hash
 
 CLOSED=['Livré','Refusé','Retourné']
@@ -17,9 +19,10 @@ def register_driver_workspace(app,s):
         CREATE TABLE IF NOT EXISTS driver_workspace_audit(id INTEGER PRIMARY KEY,driver_id INTEGER NOT NULL REFERENCES users(id),actor_id INTEGER NOT NULL REFERENCES users(id),action TEXT NOT NULL,parcel_id INTEGER REFERENCES parcels(id),details TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS driver_scan_keys(actor_id INTEGER NOT NULL REFERENCES users(id),request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(actor_id,request_key));
         ''')
+        install_driver_receipt_arrival_trigger(c)
         install_driver_workspace_audit_guards(c)
     def driver(c,uid):
-        r=c.execute("SELECT id,name,email,phone,company,active,created_at,driver_city_id,driver_address,driver_revision,driver_blocked,driver_archived FROM users WHERE id=? AND role='livreur'",(uid,)).fetchone()
+        r=c.execute("SELECT id,name,email,phone,company,active,created_at,driver_hub_id,team_lead_id,driver_city_id,driver_address,driver_revision,driver_blocked,driver_archived FROM users WHERE id=? AND role='livreur'",(uid,)).fetchone()
         if not r:raise Error('Livreur introuvable.',404)
         return dict(r)
     def body():
@@ -51,16 +54,25 @@ def register_driver_workspace(app,s):
             old=driver(c,uid)
             if request.method=='PATCH':
                 d=body()
-                if set(d)!={'name','phone','city_id','address','password','revision'}:raise Error('Champs de la fiche invalides.')
+                old_fields={'name','phone','city_id','address','password','revision'}
+                if set(d) not in (old_fields,old_fields|{'driver_hub_id'}):raise Error('Champs de la fiche invalides.')
                 rev(d,old['driver_revision']);name=text(d,'name',120);phone=text(d,'phone',40);address=text(d,'address',500,False);pw=text(d,'password',128,False);cid=d['city_id']
+                new_driver_hub=s['driver_hub_value'](c,d.get('driver_hub_id',old['driver_hub_id']),allow_existing_inactive=old['driver_hub_id'])
+                if new_driver_hub!=old['driver_hub_id']:
+                    s['validate_driver_hub_mapping'](c,uid,new_driver_hub)
+                    s['validate_driver_team_hub'](c,uid,new_driver_hub,lead_id=old['team_lead_id'])
                 if not re.fullmatch(r'\+?[0-9]{9,15}',re.sub(r'[ ()-]','',phone)):raise Error('Téléphone invalide.')
                 if cid is not None and (type(cid) is not int or not c.execute('SELECT 1 FROM cities WHERE id=?',(cid,)).fetchone()):raise Error('Ville invalide.')
                 if pw and len(pw)<10:raise Error('Mot de passe : 10 caractères minimum.')
-                if not pw and (name,phone,cid,address)==(old['name'],old['phone'],old['driver_city_id'],old['driver_address']):return jsonify(ok=True,changed=False)
-                c.execute('UPDATE users SET name=?,phone=?,driver_city_id=?,driver_address=?,driver_revision=driver_revision+1 WHERE id=?',(name,phone,cid,address,uid))
+                if not pw and (name,phone,cid,address,new_driver_hub)==(old['name'],old['phone'],old['driver_city_id'],old['driver_address'],old['driver_hub_id']):return jsonify(ok=True,changed=False)
+                c.execute('UPDATE users SET name=?,phone=?,driver_city_id=?,driver_address=?,driver_hub_id=?,driver_revision=driver_revision+1 WHERE id=?',(name,phone,cid,address,new_driver_hub,uid))
+                if new_driver_hub!=old['driver_hub_id']:
+                    s['append_audit_log'](c,actor_id=u['id'],actor_name=u['name'],action='driver_hub_reassigned',
+                        entity_type='driver_hub_assignment',entity_id=uid,old_value={'driver_hub_id':old['driver_hub_id']},
+                        new_value={'driver_hub_id':new_driver_hub},metadata={'source':'driver_workspace_admin_edit'},created_at=now())
                 if pw:
                     c.execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash(pw),uid));s['security_revoke_user'](c,uid,'Mot de passe réinitialisé par Admin',u['id'])
-                record(c,uid,u,'informations modifiées',dict(name=name,phone=phone,city_id=cid,address=address,password_reset=bool(pw)))
+                record(c,uid,u,'informations modifiées',dict(name=name,phone=phone,city_id=cid,address=address,driver_hub_id=new_driver_hub,password_reset=bool(pw)))
                 return jsonify(ok=True,changed=True)
             ps=[p for p in s['list_parcels'](c,u) if p['driver_id']==uid and not p.get('driver_returned')]
             audit=[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM driver_workspace_audit a JOIN users u ON u.id=a.actor_id WHERE driver_id=? ORDER BY a.id DESC LIMIT 200',(uid,))]
@@ -95,7 +107,12 @@ def register_driver_workspace(app,s):
             if not dr['active'] or dr['driver_archived']:raise Error('Livreur bloqué ou archivé : affectation impossible.',409)
             if p['status'] in CLOSED or p['invoice_id'] or p['financial_locked']:raise Error('Colis clôturé ou verrouillé : affectation impossible.',409)
             if p['driver_id'] and p['driver_id']!=dr['id']:raise Error('Récupérez d’abord ce colis auprès de son livreur actuel.',409)
-            return p['driver_id']==dr['id'] and p['status'] in ['Reçu par le livreur','En livraison'] and not received
+            if type(dr.get('driver_hub_id')) is not int or dr['driver_hub_id']<=0:raise Error('Rattachez ce livreur à un Hub actif avant toute affectation.',409)
+            already=p['driver_id']==dr['id'] and p['status'] in ['Reçu par le livreur','En livraison'] and not received
+            if already:return True
+            if not driver_dispatch_allowed(c,p.get('current_hub_id'),dr.get('driver_hub_id')):
+                raise Error('Le colis doit être physiquement au Hub actif rattaché à ce livreur avant sa remise.',409)
+            return False
         if p['driver_id']!=dr['id']:raise Error('Ce colis n’est pas affecté à ce livreur.',409)
         if p['status'] not in CLOSED and (p['invoice_id'] or p['financial_locked']):raise Error('Colis ouvert verrouillé financièrement : régularisez le relevé.',409)
         return False

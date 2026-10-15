@@ -13,7 +13,6 @@ DB = configure(app, BASE)
 from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, policy as status_policy
 from billing import driver_paid_sql
 import client_types
-from hub_access import hub_manager_route_allowed, hub_manager_requires_active_hub, hub_parcel_scope
 
 def now(): return datetime.now().isoformat(timespec='seconds')
 @contextmanager
@@ -35,8 +34,7 @@ def init_db():
         c.executescript('''
         CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT NOT NULL,email TEXT UNIQUE NOT NULL,password TEXT NOT NULL,role TEXT NOT NULL,phone TEXT DEFAULT '',company TEXT DEFAULT '',active INTEGER DEFAULT 1,team_lead_id INTEGER REFERENCES users(id),portal_token TEXT,created_at TEXT);
         CREATE TABLE IF NOT EXISTS cities(id INTEGER PRIMARY KEY,name TEXT UNIQUE NOT NULL,region TEXT NOT NULL,delivery INTEGER DEFAULT 1,pickup INTEGER DEFAULT 1,fee REAL NOT NULL,return_fee REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS support_cities(city_id INTEGER PRIMARY KEY REFERENCES cities(id) ON DELETE CASCADE,support_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,assigned_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS parcels(id INTEGER PRIMARY KEY,tracking TEXT,client_id INTEGER REFERENCES users(id),driver_id INTEGER REFERENCES users(id),recipient TEXT,phone TEXT,address TEXT,city_id INTEGER REFERENCES cities(id),amount REAL,fee REAL,return_fee REAL,status TEXT DEFAULT 'Créé',product TEXT DEFAULT '',note TEXT DEFAULT '',created_at TEXT,updated_at TEXT,status_updated_at TEXT,invoice_id INTEGER,time_window TEXT DEFAULT '',cod_ack_at TEXT,open_allowed INTEGER NOT NULL DEFAULT 1,is_exchange INTEGER NOT NULL DEFAULT 0,support_id INTEGER REFERENCES users(id));
+        CREATE TABLE IF NOT EXISTS parcels(id INTEGER PRIMARY KEY,tracking TEXT,client_id INTEGER REFERENCES users(id),driver_id INTEGER REFERENCES users(id),recipient TEXT,phone TEXT,address TEXT,city_id INTEGER REFERENCES cities(id),amount REAL,fee REAL,return_fee REAL,status TEXT DEFAULT 'Créé',product TEXT DEFAULT '',note TEXT DEFAULT '',created_at TEXT,updated_at TEXT,invoice_id INTEGER,time_window TEXT DEFAULT '',cod_ack_at TEXT);
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,parcel_id INTEGER REFERENCES parcels(id),actor_id INTEGER REFERENCES users(id),status TEXT,note TEXT,created_at TEXT);
         CREATE TABLE IF NOT EXISTS tickets(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),subject TEXT,category TEXT,status TEXT DEFAULT 'Ouvert',created_at TEXT);
         CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,ticket_id INTEGER REFERENCES tickets(id),user_id INTEGER REFERENCES users(id),body TEXT,created_at TEXT);
@@ -53,34 +51,7 @@ def init_db():
         if 'portal_token' not in {r['name'] for r in c.execute('PRAGMA table_info(users)')}:c.execute('ALTER TABLE users ADD COLUMN portal_token TEXT')
         if 'time_window' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute("ALTER TABLE parcels ADD COLUMN time_window TEXT DEFAULT ''")
         if 'cod_ack_at' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN cod_ack_at TEXT')
-        parcel_columns={r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
-        if 'status_updated_at' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN status_updated_at TEXT')
-        if 'open_allowed' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN open_allowed INTEGER NOT NULL DEFAULT 1')
-        if 'is_exchange' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN is_exchange INTEGER NOT NULL DEFAULT 0')
         client_types.migrate(c)
-        if 'support_id' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN support_id INTEGER REFERENCES users(id)')
-        # Every new command (web, import, partner API, fulfillment) is routed by its city.
-        # A city has one support owner; this snapshot stays on the parcel if mappings change.
-        c.executescript('''
-        CREATE INDEX IF NOT EXISTS idx_parcels_support_created ON parcels(support_id,created_at DESC,id DESC);
-        CREATE TRIGGER IF NOT EXISTS parcels_auto_support_insert AFTER INSERT ON parcels
-        WHEN NEW.support_id IS NULL
-        BEGIN
-          UPDATE parcels SET support_id=(SELECT sc.support_id FROM support_cities sc JOIN users su ON su.id=sc.support_id
-            WHERE sc.city_id=NEW.city_id AND su.role='support' AND su.active=1) WHERE id=NEW.id;
-        END;
-        CREATE TRIGGER IF NOT EXISTS parcels_auto_support_city_update AFTER UPDATE OF city_id ON parcels
-        WHEN NEW.city_id IS NOT OLD.city_id
-        BEGIN
-          UPDATE parcels SET support_id=(SELECT sc.support_id FROM support_cities sc JOIN users su ON su.id=sc.support_id
-            WHERE sc.city_id=NEW.city_id AND su.role='support' AND su.active=1) WHERE id=NEW.id;
-        END;
-        CREATE TRIGGER IF NOT EXISTS parcels_status_updated_at AFTER UPDATE OF status ON parcels
-        WHEN NEW.status IS NOT OLD.status
-        BEGIN
-          UPDATE parcels SET status_updated_at=COALESCE(NULLIF(NEW.updated_at,''),strftime('%Y-%m-%dT%H:%M:%S','now')) WHERE id=NEW.id;
-        END;
-        ''')
         c.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',('dataset_kind','demo' if app.config['DEMO_MODE'] else 'production'))
         if not app.config['DEMO_MODE'] or c.execute('SELECT count(*) FROM users').fetchone()[0]: return
         
@@ -151,38 +122,13 @@ def user():
         if not u or not u['active']:
             session.clear();raise APIError('Connectez-vous pour continuer.',401)
         security_check_session(c,u['id'])
-        result=dict(u)
-        # Persist hub_manager while retaining the old internal alias for legacy module checks.
-        # New route scopes still need to be migrated to explicit Hub Manager policies.
-        if result['role'] in ('agent','hub_manager'):
-            result['role_display']='Responsable de hub'
-            result['role']='agent'
-        if result['role']=='support':
-            result['city_ids']=[r['city_id'] for r in c.execute('SELECT city_id FROM support_cities WHERE support_id=? ORDER BY city_id',(u['id'],))]
-        return result
+        return dict(u)
 def auth(*roles):
     def deco(fn):
         @wraps(fn)
         def wrapped(*a,**kw):
             u=user()
             if roles and u['role'] not in roles: raise APIError('Accès non autorisé.',403)
-            if u.get('role_display')=='Responsable de hub':
-                if not hub_manager_route_allowed(request.method,request.path):
-                    raise APIError('Accès refusé : cette route n’est pas encore validée pour le Hub.',403)
-                if hub_manager_requires_active_hub(request.path):
-                    with conn() as hc:
-                        active_hub=hc.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone()
-                    if not active_hub:raise APIError('Le Hub de ce compte est inactif ou introuvable.',403)
-            if u['role']=='support':
-                path=request.path
-                read_only=(request.method in ('GET','HEAD') and (
-                    path in ('/api/bootstrap','/api/announcements') or
-                    re.fullmatch(r'/api/parcels/\d+',path) or
-                    re.fullmatch(r'/api/parcels/\d+/media/\d+',path)))
-                own_profile=request.method=='PATCH' and path=='/api/profile'
-                logout=request.method=='POST' and path=='/api/logout'
-                if not (read_only or own_profile or logout):
-                    raise APIError('Le compte Support peut uniquement suivre les commandes qui lui sont affectées.',403)
             if request.method not in ('GET','HEAD'):
                 supplied=request.headers.get('X-CSRF-Token','');expected=session.get('csrf')
                 if not isinstance(expected,str) or not expected or not supplied or not secrets.compare_digest(supplied.encode(),expected.encode()):
@@ -207,8 +153,7 @@ def number(d,k,minimum=0,maximum=1000000,integer=False):
 def team_member_ids(c,lead_id):
     return [r[0] for r in c.execute("SELECT id FROM users WHERE team_lead_id=? AND role='livreur' AND active=1",(lead_id,))]
 def scope(u,alias='p',c=None):
-    if u['role']=='support': return f'{alias}.support_id=?',[u['id']]
-    if u['role']=='agent': return hub_parcel_scope(c,alias,u.get('agent_hub_id')) if c is not None else ('1=0',[])
+    if u['role']=='agent': return '1=0',[]  # Agents travaillent via les palettes, jamais la liste globale des colis.
     if u['role']=='client': return f'{alias}.client_id=?',[u['id']]
     if u['role']=='livreur':
         # v1.5.0 : un chef d'équipe voit (et pilote via les transitions livreur) les colis de ses livreurs actifs.
@@ -219,13 +164,7 @@ def scope(u,alias='p',c=None):
 
 def parcel(c,pid,u):
     cond,args=scope(u,c=c)
-    p=c.execute(f'''SELECT p.*,su.name city_support_name,su.phone city_support_phone,su.active city_support_active,
-        i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,
-        EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,
-        EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,
-        EXISTS(SELECT 1 FROM driver_statement_lines dl WHERE dl.parcel_id=p.id AND dl.active=1) financial_locked
-        FROM parcels p LEFT JOIN users su ON su.id=p.support_id LEFT JOIN invoices i ON i.id=p.invoice_id
-        WHERE p.id=? AND {cond}''',[pid]+args).fetchone()
+    p=c.execute(f'SELECT p.*,EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,EXISTS(SELECT 1 FROM driver_statement_lines dl WHERE dl.parcel_id=p.id AND dl.active=1) financial_locked FROM parcels p WHERE p.id=? AND {cond}',[pid]+args).fetchone()
     if not p: raise APIError('Colis introuvable.',404)
     return dict(p)
 def event(c,pid,status,note,u):
@@ -234,30 +173,8 @@ def event(c,pid,status,note,u):
     if 'tech_notify_event' in globals(): tech_notify_event(c,pid,status,u)
 def list_parcels(c,u):
     cond,args=scope(u,c=c)
-    return [dict(r) for r in c.execute(f'''SELECT p.*,
-    COALESCE(sc.name,su.name) city_support_name,COALESCE(sc.phone,su.phone) city_support_phone,
-    COALESCE(sc.active,su.active) city_support_active,
-    i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,
-    EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,
-    EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,
-    EXISTS(SELECT 1 FROM driver_statement_lines dl WHERE dl.parcel_id=p.id AND dl.active=1) financial_locked,
-    ci.name city,cl.name client,cl.company company,
-    CASE WHEN EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) THEN NULL ELSE dr.name END driver,
-    CASE WHEN EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) THEN NULL ELSE dr.phone END driver_phone,
-    CASE WHEN EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) THEN NULL ELSE dr.active END driver_active,
-    (SELECT stars FROM client_service_ratings rr WHERE rr.parcel_id=p.id AND rr.client_id=p.client_id AND rr.target='driver' LIMIT 1) driver_rating,
-    (SELECT stars FROM client_service_ratings rr WHERE rr.parcel_id=p.id AND rr.client_id=p.client_id AND rr.target='support' LIMIT 1) support_rating,
-    (SELECT status FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_status,
-    (SELECT requested_recipient FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_name,
-    (SELECT COALESCE(NULLIF(rc.requested_phone,''),p.phone) FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_phone,
-    (SELECT COALESCE(NULLIF(rc.requested_address,''),p.address) FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_address,
-    (SELECT COALESCE(ci.name,(SELECT name FROM cities WHERE id=p.city_id)) FROM recipient_change_requests rc LEFT JOIN cities ci ON ci.id=rc.requested_city_id WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_city,
-    (SELECT label FROM ops_reasons WHERE code=p.reason_code) reason_label
-    FROM parcels p JOIN cities ci ON ci.id=p.city_id JOIN users cl ON cl.id=p.client_id
-    LEFT JOIN users dr ON dr.id=p.driver_id LEFT JOIN users su ON su.id=p.support_id
-    LEFT JOIN parcel_support ps ON ps.parcel_id=p.id LEFT JOIN support_contacts sc ON sc.id=ps.contact_id
-    LEFT JOIN invoices i ON i.id=p.invoice_id
-    WHERE {cond} ORDER BY p.created_at DESC,p.id DESC''',args)]
+    return [dict(r) for r in c.execute(f'''SELECT p.*,EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,EXISTS(SELECT 1 FROM driver_statement_lines dl WHERE dl.parcel_id=p.id AND dl.active=1) financial_locked,ci.name city,cl.name client,cl.company company,CASE WHEN EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) THEN NULL ELSE dr.name END driver,(SELECT label FROM ops_reasons WHERE code=p.reason_code) reason_label
+    FROM parcels p JOIN cities ci ON ci.id=p.city_id JOIN users cl ON cl.id=p.client_id LEFT JOIN users dr ON dr.id=p.driver_id WHERE {cond} ORDER BY p.created_at DESC,p.id DESC''',args)]
 
 @app.route('/')
 @app.route('/login')
@@ -313,29 +230,9 @@ def bootstrap():
         elif u['role']=='livreur':
             users=[dict(r) for r in c.execute("SELECT id,name,email,role,phone,active,team_lead_id FROM users WHERE team_lead_id=? AND role='livreur' ORDER BY name",(u['id'],))]
         else:users=[]
-        for account in users:
-            if account.get('role')=='support':
-                account['city_ids']=[r['city_id'] for r in c.execute('SELECT city_id FROM support_cities WHERE support_id=? ORDER BY city_id',(account['id'],))]
         cities=[dict(r) for r in c.execute('SELECT * FROM cities ORDER BY name')]
-        if u['role']=='support':
-            assigned=set(u.get('city_ids',[]));cities=[city for city in cities if city['id'] in assigned]
-        elif u['role']=='agent':
-            active_hub=c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone()
-            if active_hub:
-                assigned={r['city_id'] for r in c.execute('SELECT city_id FROM hub_cities WHERE hub_id=? AND active=1',(u.get('agent_hub_id'),))}
-                cities=[city for city in cities if city['id'] in assigned]
-            else:
-                cities=[]
-        safe_setting_keys=('announcement','company')+PUBLIC_CONTACT_KEYS
-        if u['role']=='admin':
-            settings={r['key']:r['value'] for r in c.execute('SELECT * FROM settings')}
-        else:
-            settings={r['key']:r['value'] for r in c.execute('SELECT key,value FROM settings WHERE key IN (%s)'%','.join('?'*len(safe_setting_keys)),safe_setting_keys)}
-        if u['role']=='admin':
-            hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')]
-        elif u['role']=='agent' and u.get('agent_hub_id'):
-            hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1',(u['agent_hub_id'],))]
-        else:hubs=[]
+        settings={r['key']:r['value'] for r in c.execute('SELECT * FROM settings')}
+        hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')] if u['role'] in ('admin','agent') else []
         return jsonify(user=u,csrf=session['csrf'],cities=cities,users=users,parcels=list_parcels(c,u),statuses=STATUSES,status_policy=status_policy(),settings=settings,hubs=hubs)
 @app.get('/api/parcels/<int:pid>')
 @auth()
@@ -349,12 +246,7 @@ def detail(pid):
 @app.post('/api/parcels')
 @auth('admin','client')
 def create_parcel():
-    d=request.get_json(silent=True);u=user()
-    if not isinstance(d,dict):raise APIError('Données de colis invalides.')
-    for flag in ('not_allowed_to_open','is_exchange'):
-        if flag in d and type(d[flag]) is not bool:raise APIError('Les options d’ouverture et d’échange doivent être cochées ou décochées.')
-    open_allowed=0 if d.get('not_allowed_to_open',False) else 1
-    is_exchange=int(d.get('is_exchange',False))
+    d=request.get_json() or {};u=user()
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         city=c.execute('SELECT * FROM cities WHERE id=? AND delivery=1',(d.get('city_id'),)).fetchone()
@@ -365,33 +257,16 @@ def create_parcel():
         if not re.fullmatch(r'\+?[\d\s-]{9,18}',phone): raise APIError('Numéro de téléphone invalide.')
         track=client_types.tracking_for(c,cid,d.get('tracking'),APIError);t=now()
         fee,ret=globals()['tariff_fees_for'](c,int(cid),dict(city)) if 'tariff_fees_for' in globals() else (city['fee'],city['return_fee'])
-        cur=c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,open_allowed,is_exchange,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(track,cid,text(d,'recipient'),phone,text(d,'address'),city['id'],number(d,'amount'),fee,ret,text(d,'product',False),text(d,'note',False),open_allowed,is_exchange,t,t))
-        flags=[]
-        if not open_allowed:flags.append('ouverture du colis interdite')
-        if is_exchange:flags.append('échange demandé')
-        event_note='Colis enregistré'+(' · '+' · '.join(flags) if flags else '')
-        event(c,cur.lastrowid,'Créé',event_note,u)
-        assigned=c.execute('SELECT su.id,su.name,su.phone FROM parcels p LEFT JOIN users su ON su.id=p.support_id WHERE p.id=?',(cur.lastrowid,)).fetchone()
-        city_support=dict(assigned) if assigned and assigned['id'] else None
-    return jsonify(ok=True,tracking=track,city_support=city_support)
+        cur=c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(track,cid,text(d,'recipient'),phone,text(d,'address'),city['id'],number(d,'amount'),fee,ret,text(d,'product',False),text(d,'note',False),t,t))
+        event(c,cur.lastrowid,'Créé','Colis enregistré',u)
+    return jsonify(ok=True,tracking=track)
 @app.patch('/api/parcels/<int:pid>')
-@auth('admin','livreur','client')
+@auth('admin','livreur')
 def update_parcel(pid):
     d=request.get_json() or {};u=user()
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         p=parcel(c,pid,u)
-        if u['role']=='client':
-            # Clients may only flag their own still-open, non-invoiced parcel as interested.
-            # Delivery, returns, refusals, cancellations and all financial/operations locks stay immutable.
-            if not isinstance(d,dict) or set(d)-{'status','revision'} or d.get('status')!='Intéressé' or type(d.get('revision')) is not int:
-                raise APIError('Le client peut uniquement marquer la commande comme « Intéressé ».',403)
-            if p['status'] in ('Intéressé','Livré','Retourné','Refusé','Annulé') or p['invoice_id'] or p['financial_locked'] or p['operations_locked'] or p['invoice_status'] in ('Réglée','Soldé','Paid'):
-                raise APIError('Seules les commandes encore ouvertes et non clôturées peuvent être marquées « Intéressé ».',409)
-            ops_change(c,p,d,u)
-            c.execute('UPDATE parcels SET status=?,updated_at=? WHERE id=?',('Intéressé',now(),pid))
-            event(c,pid,'Intéressé','Le client a marqué la commande comme intéressée.',u)
-            return jsonify(ok=True)
         if c.execute('SELECT 1 FROM driver_statement_lines WHERE parcel_id=? AND active=1',(pid,)).fetchone():
             raise APIError('Ce colis est figé dans un relevé livreur. Annulez le relevé avant toute correction.',409)
         if p['invoice_id']: raise APIError('Ce colis est facturé et ne peut plus être modifié.')
@@ -539,24 +414,21 @@ def update_parcel_city(pid):
         if not city:raise APIError('Choisissez une ville ouverte à la livraison.')
         if cid==p['city_id']:return jsonify(ok=True,changed=False)
         previous=c.execute('SELECT name FROM cities WHERE id=?',(p['city_id'],)).fetchone()['name']
-        fee,return_fee=globals()['tariff_fees_for'](c,p['client_id'],dict(city)) if 'tariff_fees_for' in globals() else (city['fee'],city['return_fee'])
-        old_fee,old_return_fee=p['fee'],p['return_fee']
         ops_change(c,p,{'revision':d['revision']},u)
-        # A destination correction recalculates the parcel's delivery and return fees
-        # from the customer's active city tariff; locked parcels are refused above.
-        c.execute('UPDATE parcels SET city_id=?,fee=?,return_fee=?,updated_at=? WHERE id=?',(cid,fee,return_fee,now(),pid))
-        event(c,pid,p['status'],f'Ville de livraison modifiée : {previous} → {city["name"]} · frais recalculés : livraison {old_fee:.2f} → {fee:.2f} MAD, retour {old_return_fee:.2f} → {return_fee:.2f} MAD',u)
-        return jsonify(ok=True,changed=True,city=city['name'],fee=fee,return_fee=return_fee)
+        # Existing parcel fees are frozen amounts, not the destination city's current tariff.
+        c.execute('UPDATE parcels SET city_id=?,updated_at=? WHERE id=?',(cid,now(),pid))
+        event(c,pid,p['status'],'Ville de livraison modifiée : '+previous+' → '+city['name']+' · montant et frais du colis conservés',u)
+        return jsonify(ok=True,changed=True)
 
 @app.get('/api/export')
 @auth()
 def export():
     with conn() as c: rows=list_parcels(c,user())
-    out=io.StringIO(); w=csv.writer(out,delimiter=';'); w.writerow(['Suivi','Destinataire','Téléphone','Ville','COD (MAD)','Frais (MAD)','Statut','Livreur','Support','Téléphone support'])
+    out=io.StringIO(); w=csv.writer(out,delimiter=';'); w.writerow(['Suivi','Destinataire','Téléphone','Ville','COD (MAD)','Frais (MAD)','Statut','Livreur'])
     def safe(v):
         v=str(v if v is not None else '')
         return "'"+v if v.startswith(('=','+','-','@','\t','\r')) else v
-    for r in rows:w.writerow([safe(r[k]) for k in ['tracking','recipient','phone','city','amount','fee','status','driver','city_support_name','city_support_phone']])
+    for r in rows:w.writerow([safe(r[k]) for k in ['tracking','recipient','phone','city','amount','fee','status','driver']])
     return Response('\ufeff'+out.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="ORIENTAL24-colis.csv"'})
 @app.route('/api/cities',methods=['POST'])
 @auth('admin')
@@ -588,60 +460,33 @@ def settings():
                 if v:c.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(k,v))
                 else:c.execute('DELETE FROM settings WHERE key=?',(k,))   # vide = masqué (en démonstration : coordonnées fictives par défaut)
         # Seuils des alertes de retard, en heures ; 0 désactive la catégorie.
-        # v1.22.0 · ancienneté minimale (jours) d'un colis chez nous avant retour au vendeur.
-        if 'return_week_days' in d:
-            v=d['return_week_days']
-            if type(v) is not int or not 1<=v<=90:raise APIError('Seuil invalide : return_week_days (1 à 90 jours).')
-            c.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',('return_week_days',str(v)))
         for k in ('alert_transit_hours','alert_partial_hours','alert_unassigned_hours'):
             if k in d:
                 v=d[k]
                 if type(v) is not int or not 0<=v<=720:raise APIError('Seuil invalide : '+k+' (0 à 720 heures).')
                 c.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',(k,str(v)))
     return jsonify(ok=True)
-def validate_support_cities(c,raw,support_id=None):
-    if not isinstance(raw,list) or not raw or len(raw)>500 or any(type(x) is not int or x<=0 for x in raw):
-        raise APIError('Choisissez au moins une ville valide pour ce support.')
-    ids=list(dict.fromkeys(raw))
-    if len(ids)!=len(raw):raise APIError('Une ville ne peut apparaître qu’une seule fois.')
-    names={r['id']:r['name'] for r in c.execute('SELECT id,name FROM cities WHERE id IN (%s)'%','.join('?'*len(ids)),ids)}
-    missing=[x for x in ids if x not in names]
-    if missing:raise APIError('Une ville choisie n’existe plus. Rechargez la page.')
-    for city_id in ids:
-        row=c.execute('''SELECT u.id,u.name FROM support_cities sc JOIN users u ON u.id=sc.support_id
-            WHERE sc.city_id=? AND sc.support_id!=?''',(city_id,support_id or -1)).fetchone()
-        if row:raise APIError('La ville '+names[city_id]+' est déjà suivie par '+row['name']+'. Retirez-la de cet autre compte avant de la réaffecter.',409)
-    return ids
-
-def save_support_cities(c,support_id,ids):
-    c.execute('DELETE FROM support_cities WHERE support_id=?',(support_id,))
-    for city_id in ids:c.execute('INSERT INTO support_cities(city_id,support_id,assigned_at) VALUES(?,?,?)',(city_id,support_id,now()))
-
 @app.route('/api/users',methods=['POST'])
 @auth('admin')
 def add_user():
     d=request.get_json() or {}; role=d.get('role')
-    if role=='agent':role='hub_manager'  # compatibility for an old admin screen during rollout
-    if role not in ['client','livreur','hub_manager','support']:raise APIError('Rôle invalide.')
+    if role not in ['client','livreur','agent']:raise APIError('Rôle invalide.')
     pw=text(d,'password',maxlen=128)
     if len(pw)<10:raise APIError('10 caractères minimum pour le mot de passe.')
     email=text(d,'email').lower()
     if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):raise APIError('Adresse e-mail invalide.')
     kind=client_types.parse_type(d.get('client_type','vendeur'),role,APIError)
     with conn() as c:
-        c.execute('BEGIN IMMEDIATE')
-        city_ids=validate_support_cities(c,d.get('city_ids')) if role=='support' else []
         hub_id=None
-        if role=='hub_manager':
+        if role=='agent':
             hub_id=d.get('agent_hub_id')
-            if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez le Hub actif de ce responsable.')
+            if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez le hub de réception actif de cet agent.')
         lead=None
         if role=='livreur':
             lead=d.get('team_lead_id')
             if lead:
                 if type(lead) is not int or lead<=0 or not c.execute("SELECT 1 FROM users WHERE id=? AND role='livreur' AND active=1 AND team_lead_id IS NULL",(lead,)).fetchone():raise APIError('Chef d’équipe invalide : choisissez un livreur actif non rattaché.')
         uid=c.execute('INSERT INTO users(name,email,password,role,company,phone,created_at,client_type,agent_hub_id,team_lead_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(text(d,'name'),email,generate_password_hash(pw),role,text(d,'company',False),text(d,'phone'),now(),kind,hub_id,lead)).lastrowid
-        if role=='support':save_support_cities(c,uid,city_ids)
         if role=='client':client_types.audit(c,uid,session['uid'],None,kind,'Création administrative',now)
     return jsonify(ok=True,id=uid)
 @app.patch('/api/users/<int:uid>')
@@ -653,14 +498,13 @@ def edit_user(uid):
         v=c.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
         if not v or v['role']=='admin':raise APIError('Ce compte ne peut pas être modifié ici.')
         if 'client_type' in d:client_types.change_type(c,v,d['client_type'],session['uid'],APIError,now)
-        support_city_ids=validate_support_cities(c,d['city_ids'],uid) if v['role']=='support' and 'city_ids' in d else None
         if v['role']=='livreur':
             if v['driver_archived'] and d.get('active'):raise APIError('Désarchivez le livreur depuis sa fiche.',409)
             c.execute('UPDATE users SET driver_blocked=?,driver_revision=driver_revision+1 WHERE id=?',(int(not bool(d.get('active'))),uid))
         hub_id=v['agent_hub_id']
-        if v['role'] in ('agent','hub_manager'):
+        if v['role']=='agent':
             hub_id=d.get('agent_hub_id',hub_id)
-            if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez un Hub actif pour ce responsable.')
+            if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez un hub de réception actif pour cet agent.')
         if v['role']=='livreur' and 'team_lead_id' in d:
             lead=d['team_lead_id'] or None
             if lead==uid:raise APIError('Un livreur ne peut pas être son propre chef d’équipe.')
@@ -668,7 +512,6 @@ def edit_user(uid):
             if c.execute('SELECT 1 FROM users WHERE team_lead_id=? AND active=1',(uid,)).fetchone() and lead:raise APIError('Ce livreur est lui-même chef d’équipe : détachez d’abord son équipe.')
             c.execute('UPDATE users SET team_lead_id=? WHERE id=?',(lead,uid))
         c.execute('UPDATE users SET name=?,phone=?,company=?,active=?,agent_hub_id=? WHERE id=?',(text(d,'name'),text(d,'phone'),text(d,'company',False),int(bool(d.get('active'))),hub_id,uid))
-        if support_city_ids is not None:save_support_cities(c,uid,support_city_ids)
         if not d.get('active') or d.get('password'):
             security_revoke_user(c,uid,'Sessions révoquées par modification administrative',session['uid'])
         if d.get('password'):
@@ -754,16 +597,8 @@ def invoices():
             if u['role']!='admin':raise APIError('Action réservée à l’administration.',403)
             cid=(request.get_json() or {}).get('client_id')
             # BEGIN IMMEDIATE prevents concurrent generation of the same parcel invoice.
-            # An active return-palette reservation holds an unbilled refusal until physical vendor receipt is confirmed.
             c.execute('BEGIN IMMEDIATE')
-            ps=c.execute("""SELECT p.* FROM parcels p
-                WHERE p.client_id=? AND p.invoice_id IS NULL
-                  AND p.status IN ('Livré','Retourné','Refusé')
-                  AND NOT EXISTS (
-                    SELECT 1 FROM ops_document_lines l
-                    JOIN ops_documents d ON d.id=l.document_id
-                    WHERE l.parcel_id=p.id AND l.active=1 AND d.kind='return_palette'
-                  )""",(cid,)).fetchall()
+            ps=c.execute("SELECT * FROM parcels WHERE client_id=? AND invoice_id IS NULL AND status IN ('Livré','Retourné','Refusé')",(cid,)).fetchall()
             if not ps:raise APIError('Aucun colis clôturé non facturé pour ce client.')
             cod=round(sum(p['amount'] for p in ps if p['status']=='Livré'),2)
             fees=round(sum(p['fee'] if p['status']=='Livré' else p['return_fee'] for p in ps),2)
@@ -771,7 +606,7 @@ def invoices():
             client_invoice_info(c,c.execute('SELECT * FROM invoices WHERE id=?',(cur.lastrowid,)).fetchone())
             for p in ps:
                 c.execute('UPDATE parcels SET invoice_id=? WHERE id=?',(cur.lastrowid,p['id']))
-                event(c,p['id'],'Invoice',f'Invoice Created N° : FAC-{cur.lastrowid:04d} · Facture client générée',u)
+                event(c,p['id'],p['status'],f'Facture FAC-{cur.lastrowid:04d} générée',u)
             return jsonify(ok=True)
         cond='1=1' if u['role']=='admin' else 'i.client_id=?';args=[] if u['role']=='admin' else [u['id']]
         return jsonify([client_invoice_info(c,r) for r in c.execute(f'SELECT i.*,u.name client,u.company company FROM invoices i JOIN users u ON u.id=i.client_id WHERE {cond} ORDER BY i.id DESC',args)])
@@ -882,8 +717,6 @@ from security import register_security
 register_security(app, globals())
 from parcel_contacts import register_parcel_contacts
 register_parcel_contacts(app, globals())
-from client_feedback import register_client_feedback
-register_client_feedback(app, globals())
 
 from claims import register_claims,claim_attachments
 register_claims(app, globals())
@@ -904,9 +737,6 @@ from partner_palettes import register_partner_palettes
 register_partner_palettes(app, globals())
 from return_palettes import register_return_palettes
 register_return_palettes(app, globals())
-
-from return_scan import register_return_scan
-register_return_scan(app, globals())
 from fusion_reception import register_fusion_reception
 register_fusion_reception(app, globals())
 from palette_console import register_palette_console
@@ -917,8 +747,6 @@ from advanced_tech import register_advanced_tech
 register_advanced_tech(app, globals())
 from smart_delivery import register_smart_delivery
 register_smart_delivery(app, globals())
-from ramassage_tower import register_ramassage_tower
-register_ramassage_tower(app, globals())
 from smart_warehouse import register_smart_warehouse
 register_smart_warehouse(app, globals())
 from connected_ops import register_connected_ops
@@ -930,12 +758,6 @@ register_reception_extras(app, globals())
 from partner_api import register_partner_api
 register_partner_api(app, globals())
 
-from mobile_app import register_mobile_app
-register_mobile_app(app, globals())
-
-from contact_log import register_contact_log
-register_contact_log(app, globals())
-
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.
 if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':
@@ -946,12 +768,8 @@ if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':
         else:
             city=c.execute('SELECT id FROM cities ORDER BY id LIMIT 1').fetchone()
             hid=c.execute("INSERT INTO ops_hubs(name,city_id,address,active,created_at) VALUES(?,?,?,1,?)",('Hub Oujda · démo',city['id'],'Zone logistique — données fictives',t)).lastrowid
-        home_city=c.execute('SELECT city_id FROM ops_hubs WHERE id=?',(hid,)).fetchone()['city_id']
-        if not c.execute('SELECT 1 FROM hub_cities WHERE hub_id=? AND city_id=?',(hid,home_city)).fetchone():
-            # Demo coverage never auto-designates a city primary; Central Hub fallback is configured by Admin.
-            c.execute('INSERT INTO hub_cities(hub_id,city_id,active,is_primary,created_at) VALUES(?,?,1,0,?)',(hid,home_city,t))
         if not c.execute("SELECT 1 FROM users WHERE email='agent@oriental24.ma'").fetchone():
-            c.execute('INSERT INTO users(name,email,password,role,company,phone,active,client_type,agent_hub_id,created_at) VALUES(?,?,?,?,?,?,1,?,?,?)',('Nadia Réception','agent@oriental24.ma',generate_password_hash('Oriental24!Demo'),'hub_manager','ORIENTAL24','0600000000','vendeur',hid,t))
+            c.execute('INSERT INTO users(name,email,password,role,company,phone,active,client_type,agent_hub_id,created_at) VALUES(?,?,?,?,?,?,1,?,?,?)',('Nadia Réception','agent@oriental24.ma',generate_password_hash('Oriental24!Demo'),'agent','ORIENTAL24','0600000000','vendeur',hid,t))
 
 
 # — v1.6.2 « Portail vendeur » : suivi public en lecture seule, sécurisé par un lien à clé.

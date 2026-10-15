@@ -9,7 +9,10 @@ from flask import request, jsonify
 from claims import prepare_claim
 from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES
 from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
-from hub_access import resolve_routing_hub, central_hub_transfer_allowed, parcel_physically_at_hub, hub_document_lines_at_hub, hub_manager_transfer_scope, ops_manifest_counts, manifest_status_from_counts
+from hub_schema import migrate_city_hub_id, assign_cities_to_hub
+from hub_cod import resolve_cod_hub
+from hub_analytics import install_hub_analytics_schema, hub_operational_metrics, hub_daily_metrics
+from hub_access import resolve_routing_hub, central_hub_transfer_allowed, parcel_physically_at_hub, driver_dispatch_allowed, hub_document_lines_at_hub, hub_manager_transfer_scope, ops_manifest_counts, manifest_status_from_counts
 
 P='/api/logistics'
 REASONS=[('absent','Destinataire absent'),('unreachable','Destinataire injoignable'),('address','Adresse à corriger'),('appointment','Rendez-vous demandé'),('refused','Refus du destinataire'),('return','Retour demandé')]
@@ -26,6 +29,8 @@ REASONS += [('no_answer','Pas de réponse'),('postponed','Reporté'),
 
 def register_logistics(app, services):
     conn,auth,user,now,text,Error,event,parcel = (services[k] for k in ['conn','auth','user','now','text','APIError','event','parcel'])
+    generate_password_hash=services['generate_password_hash']
+    append_audit_log=services['append_audit_log']
     with conn() as c:
         c.executescript('''
         CREATE TABLE IF NOT EXISTS ops_hubs(id INTEGER PRIMARY KEY,name TEXT NOT NULL,city_id INTEGER NOT NULL REFERENCES cities(id),address TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
@@ -43,8 +48,8 @@ def register_logistics(app, services):
         CREATE INDEX IF NOT EXISTS hub_cities_hub_active ON hub_cities(hub_id,active,city_id);
         CREATE UNIQUE INDEX IF NOT EXISTS hub_cities_one_primary_per_city ON hub_cities(city_id) WHERE is_primary=1;
         CREATE TABLE IF NOT EXISTS ops_reasons(code TEXT PRIMARY KEY,label TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
-        CREATE TABLE IF NOT EXISTS ops_assignments(id INTEGER PRIMARY KEY,parcel_id INTEGER NOT NULL REFERENCES parcels(id),old_driver_id INTEGER,new_driver_id INTEGER,actor_id INTEGER NOT NULL,created_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS ops_attempts(id INTEGER PRIMARY KEY,parcel_id INTEGER NOT NULL REFERENCES parcels(id),driver_id INTEGER,actor_id INTEGER NOT NULL,outcome TEXT NOT NULL,reason_code TEXT,reason_label TEXT,next_attempt_at TEXT,note TEXT NOT NULL,receiver TEXT,amount_cents INTEGER,request_key TEXT NOT NULL UNIQUE,payload_hash TEXT NOT NULL,created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS ops_assignments(id INTEGER PRIMARY KEY,parcel_id INTEGER NOT NULL REFERENCES parcels(id),old_driver_id INTEGER,new_driver_id INTEGER,actor_id INTEGER NOT NULL,created_at TEXT NOT NULL,hub_id INTEGER REFERENCES ops_hubs(id));
+        CREATE TABLE IF NOT EXISTS ops_attempts(id INTEGER PRIMARY KEY,parcel_id INTEGER NOT NULL REFERENCES parcels(id),driver_id INTEGER,actor_id INTEGER NOT NULL,outcome TEXT NOT NULL,reason_code TEXT,reason_label TEXT,next_attempt_at TEXT,note TEXT NOT NULL,receiver TEXT,amount_cents INTEGER,request_key TEXT NOT NULL UNIQUE,payload_hash TEXT NOT NULL,created_at TEXT NOT NULL,cod_hub_id INTEGER REFERENCES ops_hubs(id),operational_hub_id INTEGER REFERENCES ops_hubs(id));
         CREATE TABLE IF NOT EXISTS ops_documents(id INTEGER PRIMARY KEY,reference TEXT UNIQUE,kind TEXT NOT NULL,client_id INTEGER REFERENCES users(id),driver_id INTEGER REFERENCES users(id),source_hub_id INTEGER REFERENCES ops_hubs(id),destination_hub_id INTEGER REFERENCES ops_hubs(id),client_name TEXT,driver_name TEXT,source_name TEXT,destination_name TEXT,status TEXT NOT NULL DEFAULT 'Préparé',revision INTEGER NOT NULL DEFAULT 1,note TEXT NOT NULL,created_by INTEGER NOT NULL,created_at TEXT NOT NULL,dispatched_at TEXT,completed_at TEXT,cancel_reason TEXT,departure_scan_required INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS ops_document_lines(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES ops_documents(id),parcel_id INTEGER NOT NULL REFERENCES parcels(id),tracking TEXT NOT NULL,recipient TEXT NOT NULL,city TEXT NOT NULL,initial_status TEXT NOT NULL,departure_scanned_at TEXT,departure_scanned_by INTEGER REFERENCES users(id),departure_reconciled_at TEXT,departure_reconciled_by INTEGER REFERENCES users(id),departure_reconciliation_reason TEXT,received_at TEXT,received_by INTEGER,active INTEGER NOT NULL DEFAULT 1);
         CREATE UNIQUE INDEX IF NOT EXISTS ops_one_active_document ON ops_document_lines(parcel_id) WHERE active=1;
@@ -55,11 +60,14 @@ def register_logistics(app, services):
         CREATE INDEX IF NOT EXISTS ops_assignment_date ON ops_assignments(created_at,new_driver_id);
         CREATE TABLE IF NOT EXISTS ops_ticket_links(ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id),parcel_id INTEGER NOT NULL REFERENCES parcels(id),priority TEXT NOT NULL,assigned_to INTEGER REFERENCES users(id),first_response_at TEXT);
         CREATE TABLE IF NOT EXISTS ops_batch_previews(token TEXT PRIMARY KEY,owner_id INTEGER NOT NULL,driver_id INTEGER NOT NULL,parcel_ids TEXT NOT NULL,snapshot TEXT NOT NULL,created_at TEXT NOT NULL,committed_at TEXT);
+        CREATE TABLE IF NOT EXISTS ops_hub_assignment_keys(actor_id INTEGER NOT NULL REFERENCES users(id),request_key TEXT NOT NULL,payload_hash TEXT NOT NULL,result TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(actor_id,request_key));
         ''')
+        # Add the direct single-Hub city key. NULL is intentional where no active primary was
+        # explicitly selected; route resolution keeps using the Admin-designated Central Hub.
+        migrate_city_hub_id(c)
         install_ops_audit_guards(c)
-        # Multi-hub coverage is many-to-many. Keep each Hub's physical city in ops_hubs.city_id,
-        # and seed it as secondary coverage. Never infer a city primary from creation order; routing
-        # without an explicitly selected primary will use the Admin-designated Central Hub.
+        # Legacy many-to-many rows remain for compatibility during the staged rollout. Keep each
+        # Hub's physical city as secondary coverage only; never infer city ownership from creation order.
         for legacy_hub in c.execute('SELECT id,city_id,active FROM ops_hubs ORDER BY id').fetchall():
             if c.execute('SELECT 1 FROM hub_cities WHERE hub_id=? AND city_id=?',(legacy_hub['id'],legacy_hub['city_id'])).fetchone():
                 continue
@@ -78,6 +86,7 @@ def register_logistics(app, services):
         columns={r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
         for key,definition in [('reason_code','TEXT'),('next_attempt_at','TEXT'),('ops_revision','INTEGER NOT NULL DEFAULT 0'),('current_hub_id','INTEGER REFERENCES ops_hubs(id)')]:
             if key not in columns:c.execute(f'ALTER TABLE parcels ADD COLUMN {key} {definition}')
+        install_hub_analytics_schema(c,now())
         c.executemany('INSERT OR IGNORE INTO ops_reasons(code,label) VALUES(?,?)',REASONS)
         c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('ops_started_at',?)",(now(),))
 
@@ -102,6 +111,12 @@ def register_logistics(app, services):
         h=c.execute('SELECT * FROM ops_hubs WHERE id=?',(integer(hid,'Hub'),)).fetchone()
         if not h or (active and not h['active']):raise Error('Hub actif introuvable.')
         return h
+    def local_manager_hub(c,u):
+        hub_id=u.get('agent_hub_id')
+        if type(hub_id) is not int or hub_id<=0:raise Error('Ce compte n’est pas rattaché à un Hub actif.',403)
+        row=c.execute('SELECT h.id,h.name,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1',(hub_id,)).fetchone()
+        if not row:raise Error('Le Hub de ce compte est inactif ou introuvable.',403)
+        return dict(row)
     def ensure_home_city_coverage(c,hub_id,city_id,actor_id=None):
         exists=c.execute('SELECT 1 FROM hub_cities WHERE hub_id=? AND city_id=?',(hub_id,city_id)).fetchone()
         if exists:return
@@ -109,10 +124,34 @@ def register_logistics(app, services):
         c.execute('INSERT INTO hub_cities(hub_id,city_id,active,is_primary,created_by,created_at) VALUES(?,?,?,?,?,?)',
                   (hub_id,city_id,1,0,actor_id,now()))
     def hub_coverage(c,hub_id):
-        return [dict(r) for r in c.execute('''SELECT hc.hub_id,hc.city_id,hc.active,hc.is_primary,hc.created_at,
+        return [dict(r) for r in c.execute('''SELECT ci.hub_id,ci.id city_id,1 active,1 is_primary,
                     ci.name city,ci.region,ci.delivery,ci.pickup
-             FROM hub_cities hc JOIN cities ci ON ci.id=hc.city_id
-             WHERE hc.hub_id=? ORDER BY hc.is_primary DESC,ci.name COLLATE NOCASE''',(hub_id,)).fetchall()]
+             FROM cities ci WHERE ci.hub_id=? ORDER BY ci.name COLLATE NOCASE''',(hub_id,)).fetchall()]
+    def create_hub_manager_account(c,hub_id,d,actor):
+        name=text(d,'manager_name',maxlen=150)
+        email=text(d,'manager_email',maxlen=254).lower()
+        phone=text(d,'manager_phone',False,maxlen=40)
+        password=text(d,'manager_password',maxlen=128)
+        if len(password)<10:raise Error('10 caractères minimum pour le mot de passe du responsable.')
+        if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):raise Error('Adresse e-mail invalide pour le responsable.')
+        if c.execute('SELECT 1 FROM users WHERE lower(email)=lower(?)',(email,)).fetchone():raise Error('Cette adresse e-mail est déjà utilisée.',409)
+        existing=c.execute("SELECT id,name FROM users WHERE agent_hub_id=? AND role IN ('hub_manager','agent') AND active=1 ORDER BY id LIMIT 1",(hub_id,)).fetchone()
+        if existing:raise Error('Ce Hub possède déjà un responsable actif ('+existing['name']+').',409)
+        uid=c.execute('''INSERT INTO users(name,email,password,role,company,phone,active,agent_hub_id,created_at)
+                         VALUES(?,?,?,'hub_manager','ORIENTAL24',?,1,?,?)''',
+                      (name,email,generate_password_hash(password),phone,hub_id,now())).lastrowid
+        append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='hub_manager_created',
+                         entity_type='hub_manager',entity_id=uid,old_value=None,
+                         new_value={'id':uid,'name':name,'email':email,'phone':phone,'hub_id':hub_id,'active':True},
+                         metadata={'hub_id':hub_id},created_at=now())
+        return uid
+    def city_ids_from_body(d):
+        raw=d.get('city_ids')
+        if raw is None:return None
+        if not isinstance(raw,list) or len(raw)>500:raise Error('La liste des villes de couverture est invalide.')
+        values=[integer(x,'Ville') for x in raw]
+        if len(values)!=len(set(values)):raise Error('Une ville ne peut apparaître qu’une fois.')
+        return values
     def current_central_hub(c):
         setting=c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
         if not setting:return None,None
@@ -156,12 +195,16 @@ def register_logistics(app, services):
             next_at=planned(d.get('next_attempt_at'))
         if d.get('status')=='Reçu par le livreur':
             did=d.get('driver_id',p['driver_id'])
-            if not did or not c.execute("SELECT 1 FROM users WHERE id=? AND role='livreur' AND active=1",(did,)).fetchone():raise Error('Affectez un livreur actif avant de déclarer la prise en charge.')
+            target=c.execute("SELECT driver_hub_id FROM users WHERE id=? AND role='livreur' AND active=1",(did,)).fetchone() if did else None
+            if not target:raise Error('Affectez un livreur actif avant de déclarer la prise en charge.')
+            if type(target['driver_hub_id']) is not int or target['driver_hub_id']<=0 or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(target['driver_hub_id'],)).fetchone():raise Error('Le livreur doit être rattaché à un Hub actif avant sa prise en charge.',409)
+            if (p['status']!='Reçu par le livreur' or did!=p['driver_id']) and not driver_dispatch_allowed(c,p.get('current_hub_id'),target['driver_hub_id']):
+                raise Error('Le colis doit être physiquement enregistré au Hub du livreur avant sa prise en charge.',409)
         if 'driver_id' in d:
             did=integer(d['driver_id']) if d['driver_id'] else None
             if did!=p['driver_id'] and p['status']=='Reçu par le livreur' and d.get('status',p['status'])=='Reçu par le livreur':raise Error('Prise en charge déjà déclarée. Indiquez d’abord l’état réel de remise avant de changer le livreur.',409)
             if did!=p['driver_id']:
-                c.execute('INSERT INTO ops_assignments(parcel_id,old_driver_id,new_driver_id,actor_id,created_at) VALUES(?,?,?,?,?)',(p['id'],p['driver_id'],did,u['id'],now()))
+                c.execute('INSERT INTO ops_assignments(parcel_id,old_driver_id,new_driver_id,actor_id,created_at,hub_id) VALUES(?,?,?,?,?,?)',(p['id'],p['driver_id'],did,u['id'],now(),p.get('current_hub_id')))
         if d.get('status') in ['Transit','Reçu par le livreur']:
             c.execute('UPDATE parcels SET current_hub_id=NULL WHERE id=?',(p['id'],))
         if 'status' in d:
@@ -201,35 +244,36 @@ def register_logistics(app, services):
             central_hub_id,central_hub_row=current_central_hub(c)
             if u['role']=='admin':
                 hubs=[dict(r) for r in c.execute('SELECT h.*,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')]
-                cities=[dict(r) for r in c.execute('SELECT id,name,region,delivery,pickup FROM cities ORDER BY name COLLATE NOCASE')]
+                cities=[dict(r) for r in c.execute('''SELECT ci.id,ci.name,ci.region,ci.delivery,ci.pickup,
+                    ci.hub_id,h.name hub_name FROM cities ci LEFT JOIN ops_hubs h ON h.id=ci.hub_id
+                    ORDER BY ci.name COLLATE NOCASE''')]
             else:
                 hub_id=u.get('agent_hub_id')
                 if not hub_id:raise Error('Ce compte n’est pas rattaché à un Hub actif.',403)
                 hubs=[dict(r) for r in c.execute('SELECT h.*,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1',(hub_id,))]
                 if not hubs:raise Error('Le Hub de ce responsable est inactif ou introuvable.',403)
-                cities=[dict(r) for r in c.execute('''SELECT ci.id,ci.name,ci.region,ci.delivery,ci.pickup
-                    FROM hub_cities hc JOIN cities ci ON ci.id=hc.city_id
-                    WHERE hc.hub_id=? AND hc.active=1 ORDER BY ci.name COLLATE NOCASE''',(hub_id,))]
+                cities=[dict(r) for r in c.execute('''SELECT ci.id,ci.name,ci.region,ci.delivery,ci.pickup,
+                    ci.hub_id,h.name hub_name FROM cities ci JOIN ops_hubs h ON h.id=ci.hub_id
+                    WHERE ci.hub_id=? AND h.active=1 ORDER BY ci.name COLLATE NOCASE''',(hub_id,))]
             for h in hubs:
                 coverage=hub_coverage(c,h['id']);h['coverage']=coverage
                 h['covered_city_ids']=[x['city_id'] for x in coverage]
-                h['primary_city_id']=next((x['city_id'] for x in coverage if x['is_primary']),None)
-            for city in cities:
+                h['primary_city_id']=None
                 if u['role']=='admin':
-                    mappings=[dict(r) for r in c.execute('''SELECT hc.hub_id,h.name hub_name,hc.is_primary
-                        FROM hub_cities hc JOIN ops_hubs h ON h.id=hc.hub_id
-                        WHERE hc.city_id=? AND hc.active=1 AND h.active=1 ORDER BY hc.is_primary DESC,h.name''',(city['id'],))]
-                else:
-                    mappings=[dict(r) for r in c.execute('''SELECT hc.hub_id,h.name hub_name,hc.is_primary
-                        FROM hub_cities hc JOIN ops_hubs h ON h.id=hc.hub_id
-                        WHERE hc.city_id=? AND hc.hub_id=? AND hc.active=1 AND h.active=1''',(city['id'],u['agent_hub_id']))]
-                city['hub_ids']=[x['hub_id'] for x in mappings]
-                primary=c.execute('''SELECT hc.hub_id FROM hub_cities hc JOIN ops_hubs h ON h.id=hc.hub_id
-                    WHERE hc.city_id=? AND hc.active=1 AND hc.is_primary=1 AND h.active=1''',(city['id'],)).fetchone()
-                city['primary_hub_id']=primary['hub_id'] if primary else None
+                    managers=[dict(r) for r in c.execute('''SELECT id,name,email,phone,active FROM users
+                        WHERE agent_hub_id=? AND role IN ('hub_manager','agent') ORDER BY active DESC,id''',(h['id'],))]
+                    active_managers=[m for m in managers if m['active']]
+                    h['manager']=active_managers[0] if active_managers else (managers[0] if managers else None)
+                    h['active_manager_count']=len(active_managers)
+            for city in cities:
+                city['hub_ids']=[city['hub_id']] if city.get('hub_id') else []
+                city['primary_hub_id']=None
+                if city.get('hub_id'):
+                    assigned_hub=c.execute('SELECT id FROM ops_hubs WHERE id=? AND active=1',(city['hub_id'],)).fetchone()
+                    if assigned_hub:city['primary_hub_id']=assigned_hub['id']
                 city['routing_hub_id'],city['routing_hub_source']=resolve_routing_hub(
                     city['primary_hub_id'],central_hub_id,bool(central_hub_row and central_hub_row['active']))
-                city['hub_names']=[x['hub_name'] for x in mappings]
+                city['hub_names']=[city['hub_name']] if city.get('hub_name') else []
             return jsonify(reasons=[dict(r) for r in c.execute('SELECT * FROM ops_reasons ORDER BY label')],hubs=hubs,cities=cities,central_hub_id=central_hub_id,central_hub=central_hub_row,started_at=c.execute("SELECT value FROM settings WHERE key='ops_started_at'").fetchone()[0])
 
     @app.patch(P+'/central-hub')
@@ -241,71 +285,134 @@ def register_logistics(app, services):
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
             selected=hub(c,hid,True)
-            previous_id,_=current_central_hub(c)
+            previous_id,previous_hub=current_central_hub(c)
             if previous_id==hid:return jsonify(ok=True,changed=False,central_hub_id=hid)
             c.execute("INSERT INTO settings(key,value) VALUES('central_hub_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(hid),))
             city=c.execute('SELECT name FROM cities WHERE id=?',(selected['city_id'],)).fetchone()
+            new_hub={'id':hid,'name':selected['name'],'city':city['name'] if city else None,'active':bool(selected['active'])}
             audit(c,None,u,'Hub Central modifié',{'before_hub_id':previous_id,'after_hub_id':hid,'name':selected['name'],'city':city['name'] if city else None})
+            append_audit_log(c,actor_id=u['id'],actor_name=u['name'],action='central_hub_changed',
+                             entity_type='setting',entity_id='central_hub_id',old_value=previous_hub,
+                             new_value=new_hub,created_at=now())
         return jsonify(ok=True,changed=True,central_hub_id=hid)
 
     @app.route(P+'/hubs',methods=['POST'])
     @app.route(P+'/hubs/<int:hid>',methods=['PATCH'])
     @auth('admin')
     def ops_hub(hid=None):
-        d=body();u=user();name=text(d,'name',maxlen=100);address=text(d,'address',maxlen=300);cid=integer(d.get('city_id'))
+        d=body();actor=user();name=text(d,'name',maxlen=100);address=text(d,'address',maxlen=300);cid=integer(d.get('city_id'))
+        city_ids=city_ids_from_body(d)
+        manager_fields=('manager_name','manager_email','manager_password','manager_phone')
+        manager_payload_present=any(key in d for key in manager_fields)
+        if not hid and not manager_payload_present:raise Error('Créez le compte du responsable en même temps que le nouveau Hub.')
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
             if not c.execute('SELECT 1 FROM cities WHERE id=?',(cid,)).fetchone():raise Error('Ville inconnue.')
+            previous=None;previous_city_ids=[]
             if hid:
-                previous=c.execute('SELECT city_id,address FROM ops_hubs WHERE id=?',(hid,)).fetchone()
+                row=c.execute('SELECT name,city_id,address,active FROM ops_hubs WHERE id=?',(hid,)).fetchone()
                 hub(c,hid,False)
+                previous=dict(row) if row else None
+                previous_city_ids=[r['id'] for r in c.execute('SELECT id FROM cities WHERE hub_id=? ORDER BY id',(hid,))]
                 if not bool(d.get('active')):
                     central_id,_=current_central_hub(c)
-                    if central_id==hid:
-                        raise Error('Désignez un autre Hub Central avant de désactiver celui-ci.',409)
+                    if central_id==hid:raise Error('Désignez un autre Hub Central avant de désactiver celui-ci.',409)
                 if previous and (previous['city_id']!=cid or previous['address']!=address):
                     # A saved map pin may belong to its former address; require fresh placement after relocation.
                     c.execute('UPDATE ops_hubs SET lat=NULL,lng=NULL WHERE id=?',(hid,))
+                if previous and not previous['active'] and bool(d.get('active')):
+                    manager_count=c.execute("SELECT count(*) FROM users WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','agent')",(hid,)).fetchone()[0]
+                    if manager_count!=1:raise Error('Un Hub ne peut être réactivé qu’avec exactement un responsable actif.',409)
                 c.execute('UPDATE ops_hubs SET name=?,city_id=?,address=?,active=? WHERE id=?',(name,cid,address,int(bool(d.get('active'))),hid))
-                ensure_home_city_coverage(c,hid,cid,u['id'])
             else:
                 hid=c.execute('INSERT INTO ops_hubs(name,city_id,address,created_at) VALUES(?,?,?,?)',(name,cid,address,now())).lastrowid
-                ensure_home_city_coverage(c,hid,cid,u['id'])
-            audit(c,None,u,'Hub configuré',{'hub_id':hid,'name':name,'home_city_id':cid})
-        return jsonify(ok=True,id=hid)
+            selected_city_owners_before=[]
+            if city_ids:
+                marks=','.join('?'*len(city_ids))
+                selected_city_owners_before=[dict(r) for r in c.execute(f'''SELECT ci.id city_id,ci.name city,ci.hub_id,
+                    h.name hub_name FROM cities ci LEFT JOIN ops_hubs h ON h.id=ci.hub_id
+                    WHERE ci.id IN ({marks})''',city_ids)]
+            if city_ids is not None:
+                try:assign_cities_to_hub(c,hid,city_ids,actor['id'],now())
+                except ValueError as exc:raise Error(str(exc))
+            elif not previous:
+                # Compatibility for an older admin screen that still saves coverage separately.
+                ensure_home_city_coverage(c,hid,cid,actor['id'])
+            manager_id=None
+            if manager_payload_present:
+                hub(c,hid,True)
+                manager_id=create_hub_manager_account(c,hid,d,actor)
+            assigned_after=[r['id'] for r in c.execute('SELECT id FROM cities WHERE hub_id=? ORDER BY id',(hid,))]
+            current={'id':hid,'name':name,'city_id':cid,'address':address,'active':bool(d.get('active',True)),
+                     'assigned_city_ids':assigned_after}
+            old_snapshot={'hub':previous,'assigned_city_ids':previous_city_ids,
+                          'selected_city_owners':selected_city_owners_before}
+            audit(c,None,actor,'Hub configuré',{'hub_id':hid,'name':name,'home_city_id':cid,
+                  'city_ids_before':previous_city_ids,'assigned_city_ids':assigned_after,
+                  'selected_city_owners_before':selected_city_owners_before})
+            append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='hub_configured',
+                             entity_type='hub',entity_id=hid,old_value=old_snapshot,new_value=current,
+                             metadata={'manager_id':manager_id},created_at=now())
+        return jsonify(ok=True,id=hid,manager_id=manager_id)
+
+    @app.post(P+'/hubs/<int:hid>/manager')
+    @auth('admin')
+    def ops_hub_manager_create(hid):
+        d=body();actor=user()
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE');hub(c,hid,False)
+            manager_id=create_hub_manager_account(c,hid,d,actor)
+            audit(c,None,actor,'Responsable de Hub créé',{'hub_id':hid,'manager_id':manager_id})
+        return jsonify(ok=True,id=manager_id)
+
+    @app.post(P+'/hubs/<int:hid>/manager/replace')
+    @auth('admin')
+    def ops_hub_manager_replace(hid):
+        d=body();actor=user()
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE');hub(c,hid,False)
+            previous=[dict(r) for r in c.execute("""SELECT id,name,email FROM users
+                WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','agent') ORDER BY id""",(hid,)).fetchall()]
+            if not previous:raise Error('Aucun responsable actif à remplacer. Utilisez l’ajout de responsable.',409)
+            c.execute("UPDATE users SET active=0 WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','agent')",(hid,))
+            revoke=services.get('security_revoke_user')
+            for manager in previous:
+                if revoke:revoke(c,manager['id'],'Compte remplacé comme responsable de Hub',actor['id'])
+            manager_id=create_hub_manager_account(c,hid,d,actor)
+            for manager in previous:
+                append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='hub_manager_replaced',
+                    entity_type='hub_manager',entity_id=manager['id'],
+                    old_value={'id':manager['id'],'name':manager['name'],'email':manager['email'],'hub_id':hid,'active':True},
+                    new_value={'id':manager['id'],'name':manager['name'],'email':manager['email'],'hub_id':hid,
+                               'active':False,'replaced_by':manager_id},
+                    metadata={'hub_id':hid,'replacement_manager_id':manager_id},created_at=now())
+            audit(c,None,actor,'Responsable de Hub remplacé',
+                  {'hub_id':hid,'old_manager_ids':[m['id'] for m in previous],'new_manager_id':manager_id})
+        return jsonify(ok=True,id=manager_id,replaced=[m['id'] for m in previous])
 
     @app.patch(P+'/hubs/<int:hid>/coverage')
     @auth('admin')
     def ops_hub_coverage_update(hid):
-        d=body();u=user();raw=d.get('city_ids');primary_raw=d.get('primary_city_id')
-        if not isinstance(raw,list) or len(raw)>500:raise Error('La liste des villes de couverture est invalide.')
-        city_ids=[integer(x,'Ville') for x in raw]
-        if len(city_ids)!=len(set(city_ids)):raise Error('Une ville ne peut apparaître qu’une fois.')
-        primary=integer(primary_raw,'Ville principale') if primary_raw not in (None,'') else None
-        if primary is not None and primary not in city_ids:raise Error('La ville principale doit aussi être dans la couverture.')
-        # primary_city_id may be empty for a secondary hub that shares another hub's city coverage.
+        d=body();actor=user();city_ids=city_ids_from_body(d)
+        if city_ids is None:raise Error('La liste des villes attribuées est requise.')
         with conn() as c:
-            c.execute('BEGIN IMMEDIATE');h=hub(c,hid,False)
-            if city_ids:
-                marks=','.join('?'*len(city_ids))
-                found={r['id'] for r in c.execute(f'SELECT id FROM cities WHERE id IN ({marks})',city_ids)}
-                if found!=set(city_ids):raise Error('Une ou plusieurs villes sont introuvables.')
-            if primary:
-                other=c.execute('''SELECT h.name FROM hub_cities hc JOIN ops_hubs h ON h.id=hc.hub_id
-                    WHERE hc.city_id=? AND hc.is_primary=1 AND hc.hub_id<>?''',(primary,hid)).fetchone()
-                if other:raise Error('Cette ville a déjà un Hub principal : '+other['name']+'. Vous pouvez quand même l’ajouter comme couverture secondaire.')
+            c.execute('BEGIN IMMEDIATE');hub(c,hid,False)
             before=hub_coverage(c,hid)
-            c.execute('UPDATE hub_cities SET is_primary=0 WHERE hub_id=?',(hid,))
             if city_ids:
                 marks=','.join('?'*len(city_ids))
-                c.execute(f'DELETE FROM hub_cities WHERE hub_id=? AND city_id NOT IN ({marks})',[hid]+city_ids)
-            else:c.execute('DELETE FROM hub_cities WHERE hub_id=?',(hid,))
-            for city_id in city_ids:
-                c.execute('''INSERT INTO hub_cities(hub_id,city_id,active,is_primary,created_by,created_at)
-                    VALUES(?,?,1,?,?,?) ON CONFLICT(hub_id,city_id) DO UPDATE SET
-                    active=1,is_primary=excluded.is_primary''',(hid,city_id,int(city_id==primary),u['id'],now()))
+                transfers=[dict(r) for r in c.execute(f'''SELECT ci.id city_id,ci.name city,ci.hub_id,
+                    h.name hub_name FROM cities ci LEFT JOIN ops_hubs h ON h.id=ci.hub_id
+                    WHERE ci.id IN ({marks})''',city_ids)]
+            else:transfers=[]
+            try:assign_cities_to_hub(c,hid,city_ids,actor['id'],now())
+            except ValueError as exc:raise Error(str(exc))
             after=hub_coverage(c,hid)
-            audit(c,None,u,'Couverture Hub modifiée',{'hub_id':hid,'before':before,'after':after})
+            old_value={'hub_id':hid,'cities_before':before,'selected_city_owners_before':transfers}
+            new_value={'hub_id':hid,'cities_after':after,'city_ids':city_ids}
+            audit(c,None,actor,'Villes attribuées au Hub',{'hub_id':hid,'before':before,'after':after,'previous_owners':transfers})
+            append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='hub_city_assignments_changed',
+                             entity_type='hub',entity_id=hid,old_value=old_value,new_value=new_value,
+                             created_at=now())
             return jsonify(ok=True,hub_id=hid,coverage=after)
 
     @app.route(P+'/reasons',methods=['POST'])
@@ -381,7 +488,17 @@ def register_logistics(app, services):
                     cents=int(val*100)
                 except (ValueError,InvalidOperation):raise Error('Le COD déclaré doit correspondre au montant du colis. Pas d’encaissement partiel dans ce parcours.')
             reason,next_at=change(c,p,{**d,'status':outcome},u)
-            aid=c.execute('INSERT INTO ops_attempts(parcel_id,driver_id,actor_id,outcome,reason_code,reason_label,next_attempt_at,note,receiver,amount_cents,request_key,payload_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(pid,p['driver_id'],u['id'],outcome,reason['code'] if reason else None,reason['label'] if reason else None,next_at,note,receiver,cents,key,hashed,now())).lastrowid
+            cod_hub_id=resolve_cod_hub(c,p['city_id']) if outcome=='Livré' else None
+            driver_hub=c.execute("SELECT driver_hub_id FROM users WHERE id=? AND role='livreur' AND active=1",(p['driver_id'],)).fetchone() if p['driver_id'] else None
+            operational_hub_id=driver_hub['driver_hub_id'] if driver_hub and type(driver_hub['driver_hub_id']) is int and c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(driver_hub['driver_hub_id'],)).fetchone() else None
+            aid=c.execute('''INSERT INTO ops_attempts(parcel_id,driver_id,actor_id,outcome,reason_code,reason_label,
+                next_attempt_at,note,receiver,amount_cents,request_key,payload_hash,created_at,cod_hub_id,operational_hub_id)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(pid,p['driver_id'],u['id'],outcome,reason['code'] if reason else None,
+                reason['label'] if reason else None,next_at,note,receiver,cents,key,hashed,now(),cod_hub_id,operational_hub_id)).lastrowid
+            if outcome=='Livré':
+                append_audit_log(c,actor_id=u['id'],actor_name=u['name'],action='cod_delivery_declared',
+                    entity_type='parcel',entity_id=pid,old_value={'cod_cents':None},
+                    new_value={'cod_cents':cents,'cod_hub_id':cod_hub_id},metadata={'attempt_id':aid},created_at=now())
             c.execute('UPDATE parcels SET status=?,note=?,updated_at=? WHERE id=?',(outcome,note or p['note'],now(),pid))
             event(c,pid,outcome,('Tentative : '+(reason['label'] if reason else 'livraison déclarée'))+(' · Rendez-vous '+next_at if next_at else '')+(' · '+note if note else ''),u)
             return jsonify(ok=True,id=aid,already_recorded=False)
@@ -660,12 +777,15 @@ def register_logistics(app, services):
     def ops_assignment_preview():
         d=body();pids=ids(d);u=user()
         with conn() as c:
-            c.execute('BEGIN IMMEDIATE');dr=enabled_user(c,d.get('driver_id'),'livreur');rows=[]
+            c.execute('BEGIN IMMEDIATE');dr=enabled_user(c,d.get('driver_id'),'livreur');driver_hub=c.execute('SELECT driver_hub_id FROM users WHERE id=?',(dr['id'],)).fetchone()['driver_hub_id']
+            if type(driver_hub) is not int or driver_hub<=0 or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(driver_hub,)).fetchone():raise Error('Le livreur doit être rattaché à un Hub actif avant l’affectation.',409)
+            rows=[]
             for pid in pids:
                 p=parcel(c,pid,u);guard(c,p)
                 if p['status'] in ['Livré','Retourné','Refusé']:raise Error('Affectation groupée réservée aux colis non clôturés.')
                 if p['status']=='Reçu par le livreur' and p['driver_id']!=dr['id']:raise Error('Prise en charge déjà déclarée. Indiquez l’état réel de remise avant la réaffectation.',409)
-                rows.append({'id':pid,'tracking':p['tracking'],'old_driver_id':p['driver_id'],'revision':p['ops_revision'],'status':p['status']})
+                if p['driver_id']!=dr['id'] and not driver_dispatch_allowed(c,p.get('current_hub_id'),driver_hub):raise Error('Le colis '+p['tracking']+' n’est pas physiquement au Hub du livreur.',409)
+                rows.append({'id':pid,'tracking':p['tracking'],'old_driver_id':p['driver_id'],'revision':p['ops_revision'],'status':p['status'],'current_hub_id':p.get('current_hub_id')})
             token=secrets.token_hex(16)
             c.execute('INSERT INTO ops_batch_previews(token,owner_id,driver_id,parcel_ids,snapshot,created_at) VALUES(?,?,?,?,?,?)',(token,u['id'],dr['id'],json.dumps(pids),json.dumps(rows),now()))
             return jsonify(token=token,driver=dict(dr),parcels=rows)
@@ -679,10 +799,12 @@ def register_logistics(app, services):
             if not draft:raise Error('Aperçu introuvable.',404)
             if draft['committed_at']:return jsonify(ok=True,already_created=True)
             if datetime.fromisoformat(draft['created_at'])<datetime.now()-timedelta(minutes=30):raise Error('Aperçu expiré.',409)
-            dr=enabled_user(c,draft['driver_id'],'livreur')
+            dr=enabled_user(c,draft['driver_id'],'livreur');driver_hub=c.execute('SELECT driver_hub_id FROM users WHERE id=?',(dr['id'],)).fetchone()['driver_hub_id']
+            if type(driver_hub) is not int or driver_hub<=0 or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(driver_hub,)).fetchone():raise Error('Le livreur doit être rattaché à un Hub actif avant l’affectation.',409)
             for item in json.loads(draft['snapshot']):
                 p=parcel(c,item['id'],u)
-                if p['ops_revision']!=item['revision'] or p['status']!=item['status']:raise Error('Un colis a changé. Recréez un aperçu.',409)
+                if p['ops_revision']!=item['revision'] or p['status']!=item['status'] or p['driver_id']!=item['old_driver_id'] or p.get('current_hub_id')!=item.get('current_hub_id'):raise Error('Un colis a changé. Recréez un aperçu.',409)
+                if p['driver_id']!=dr['id'] and not driver_dispatch_allowed(c,p.get('current_hub_id'),driver_hub):raise Error('Le colis '+p['tracking']+' n’est plus physiquement au Hub du livreur.',409)
                 if 'damage_hold_open' in services and services['damage_hold_open'](c,p['id']):raise Error('Colis '+p['tracking']+' : incident endommagé à traiter avant affectation.',409)
                 change(c,p,{'driver_id':dr['id']},u)
                 c.execute('UPDATE parcels SET driver_id=?,updated_at=? WHERE id=?',(dr['id'],now(),p['id']))
@@ -790,10 +912,177 @@ def register_logistics(app, services):
                       AND substr(l.received_at,1,10) BETWEEN ? AND ?
                 ) GROUP BY day ORDER BY day DESC''',
                 (hub_id,start,end,hub_id,start,end,hub_id,start,end)).fetchall()]
+            daily=hub_daily_metrics(c,hub_id,start,end,daily)
+            metrics=hub_operational_metrics(c,hub_id,start,end)
+            metrics_started_at=c.execute("SELECT value FROM settings WHERE key='hub_metrics_started_at'").fetchone()[0]
+            today=datetime.now().date()
+            windows={}
+            for days in (7,30):
+                window_from=(today-timedelta(days=days-1)).isoformat();window_to=today.isoformat()
+                win_departures=c.execute('''SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
+                    WHERE d.kind='transfer' AND d.source_hub_id=? AND (
+                        (d.departure_scan_required=1 AND substr(l.departure_scanned_at,1,10) BETWEEN ? AND ?)
+                        OR (d.departure_scan_required=0 AND substr(d.dispatched_at,1,10) BETWEEN ? AND ?)
+                    )''',(hub_id,window_from,window_to,window_from,window_to)).fetchone()[0]
+                win_receipts=c.execute('''SELECT count(*) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
+                    WHERE d.kind='transfer' AND d.destination_hub_id=? AND substr(l.received_at,1,10) BETWEEN ? AND ?''',
+                    (hub_id,window_from,window_to)).fetchone()[0]
+                windows[str(days)]={'from':window_from,'to':window_to,'departures':win_departures,'receipts':win_receipts,
+                    'metrics':hub_operational_metrics(c,hub_id,window_from,window_to)}
             return jsonify(hub={'name':hub_row['name'],'city':hub_row['city']},period_from=start,period_to=end,
                 parcels_here=parcels_here,expected_arrivals=expected_arrivals,inbound_documents=inbound_documents,
                 outbound_documents=outbound_documents,pending_departure_scans=pending_departure_scans,
-                departures=departure_events,receipts=receipt_events,daily=daily)
+                departures=departure_events,receipts=receipt_events,daily=daily,metrics=metrics,
+                metrics_started_at=metrics_started_at,windows=windows)
+
+    @app.get(P+'/hub/drivers')
+    @auth('agent')
+    def ops_hub_drivers():
+        actor=user()
+        with conn() as c:
+            local_hub=local_manager_hub(c,actor)
+            rows=[dict(r) for r in c.execute('''SELECT u.id,u.name,u.email,u.phone,u.active,u.created_at,u.driver_hub_id,u.team_lead_id,
+                    (SELECT count(*) FROM parcels p WHERE p.driver_id=u.id
+                        AND p.status NOT IN ('Livré','Retourné','Refusé','Annulé')
+                        AND (p.current_hub_id IS NULL OR p.current_hub_id=u.driver_hub_id)
+                        AND NOT EXISTS(SELECT 1 FROM driver_receipts dr WHERE dr.parcel_id=p.id AND dr.driver_id=p.driver_id)
+                    ) assigned_open_count
+                FROM users u WHERE u.role='livreur' AND u.driver_hub_id=?
+                ORDER BY u.active DESC,u.name COLLATE NOCASE,u.id''',(local_hub['id'],))]
+            return jsonify(hub=local_hub,drivers=rows)
+
+    @app.post(P+'/hub/drivers')
+    @auth('agent')
+    def ops_hub_driver_create():
+        d=body();actor=user()
+        allowed={'name','email','phone','password'}
+        if not isinstance(d,dict) or set(d)-allowed or not {'name','email','password'}.issubset(d):raise Error('Champs du compte livreur invalides.')
+        name=text(d,'name',maxlen=120)
+        email=text(d,'email',maxlen=254).lower()
+        phone=text(d,'phone',False,maxlen=40)
+        password=text(d,'password',maxlen=128)
+        if len(password)<10:raise Error('10 caractères minimum pour le mot de passe du livreur.')
+        if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):raise Error('Adresse e-mail invalide.')
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            local_hub=local_manager_hub(c,actor)
+            if c.execute('SELECT 1 FROM users WHERE lower(email)=lower(?)',(email,)).fetchone():raise Error('Cette adresse e-mail est déjà utilisée.',409)
+            uid=c.execute('''INSERT INTO users(name,email,password,role,company,phone,active,created_at,client_type,agent_hub_id,driver_hub_id)
+                VALUES(?,?,?,'livreur','ORIENTAL24',?,1,?,'vendeur',NULL,?)''',
+                (name,email,generate_password_hash(password),phone,now(),local_hub['id'])).lastrowid
+            append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='hub_driver_created',
+                entity_type='driver_hub_assignment',entity_id=uid,old_value=None,
+                new_value={'driver_id':uid,'name':name,'email':email,'phone':phone,'driver_hub_id':local_hub['id']},
+                metadata={'hub_id':local_hub['id']},created_at=now())
+            return jsonify(ok=True,id=uid,hub=local_hub)
+
+    @app.patch(P+'/hub/drivers/<int:driver_id>')
+    @auth('agent')
+    def ops_hub_driver_update(driver_id):
+        d=body();actor=user()
+        allowed={'name','email','phone','active','password'}
+        required={'name','email','phone','active'}
+        if set(d)-allowed or not required.issubset(d):raise Error('Champs du compte livreur invalides.')
+        name=text(d,'name',maxlen=120);email=text(d,'email',maxlen=254).lower();phone=text(d,'phone',False,maxlen=40)
+        active=d.get('active')
+        if type(active) is not bool:raise Error('Statut actif invalide.')
+        password=d.get('password','')
+        if not isinstance(password,str) or len(password)>128 or (password and len(password)<10):raise Error('Un nouveau mot de passe doit contenir au moins 10 caractères.')
+        if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):raise Error('Adresse e-mail invalide.')
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE');local_hub=local_manager_hub(c,actor)
+            driver=c.execute("SELECT id,name,email,phone,active,driver_hub_id,team_lead_id FROM users WHERE id=? AND role='livreur' AND driver_hub_id=?",(driver_id,local_hub['id'])).fetchone()
+            if not driver:raise Error('Livreur introuvable dans votre Hub.',404)
+            if c.execute('SELECT 1 FROM users WHERE lower(email)=lower(?) AND id!=?',(email,driver_id)).fetchone():raise Error('Cette adresse e-mail est déjà utilisée.',409)
+            assigned=c.execute("SELECT count(*) FROM parcels WHERE driver_id=? AND status NOT IN ('Livré','Retourné','Refusé','Annulé')",(driver_id,)).fetchone()[0]
+            if driver['active'] and not active and assigned:
+                raise Error('Réaffectez ou clôturez les colis ouverts avant de désactiver ce livreur.',409)
+            before={key:driver[key] for key in ('name','email','phone','active','driver_hub_id','team_lead_id')}
+            if password:
+                c.execute('''UPDATE users SET name=?,email=?,phone=?,active=?,password=?,driver_revision=driver_revision+1 WHERE id=?''',
+                    (name,email,phone,int(active),generate_password_hash(password),driver_id))
+            else:
+                c.execute('''UPDATE users SET name=?,email=?,phone=?,active=?,driver_revision=driver_revision+1 WHERE id=?''',
+                    (name,email,phone,int(active),driver_id))
+            after={'name':name,'email':email,'phone':phone,'active':active,'driver_hub_id':local_hub['id'],'team_lead_id':driver['team_lead_id']}
+            append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='hub_driver_updated',
+                entity_type='driver_hub_assignment',entity_id=driver_id,old_value=before,new_value=after,
+                metadata={'hub_id':local_hub['id']},created_at=now())
+            return jsonify(ok=True,id=driver_id,hub=local_hub)
+
+    @app.post(P+'/hub/assignments')
+    @auth('agent')
+    def ops_hub_assignments():
+        d=body();actor=user();required={'driver_id','parcel_ids','request_key','confirmed'}
+        if set(d)!=required or d.get('confirmed') is not True:raise Error('Confirmez explicitement l’affectation des colis sélectionnés.')
+        pids=ids(d);driver_id=integer(d.get('driver_id'),'Livreur');key=text(d,'request_key',maxlen=80)
+        if not re.fullmatch('[A-Za-z0-9_-]{20,80}',key):raise Error('Clé de saisie invalide.')
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE');local_hub=local_manager_hub(c,actor)
+            payload={'hub_id':local_hub['id'],'driver_id':driver_id,'parcel_ids':pids}
+            fingerprint=hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            prior=c.execute('SELECT * FROM ops_hub_assignment_keys WHERE actor_id=? AND request_key=?',(actor['id'],key)).fetchone()
+            if prior:
+                if prior['payload_hash']!=fingerprint:raise Error('Cette clé de saisie correspond à une autre affectation.',409)
+                return jsonify(**json.loads(prior['result']),replayed=True)
+            target=c.execute("SELECT id,name,driver_hub_id FROM users WHERE id=? AND role='livreur' AND active=1",(driver_id,)).fetchone()
+            if not target or target['driver_hub_id']!=local_hub['id']:
+                raise Error('Choisissez un livreur actif de votre Hub.',409)
+            selected=[]
+            for pid in pids:
+                p=parcel(c,pid,actor);guard(c,p)
+                if not parcel_physically_at_hub(p.get('current_hub_id'),local_hub['id']):
+                    raise Error('Un colis sélectionné n’est pas physiquement présent dans votre Hub.',409)
+                if p['status'] in ['Livré','Retourné','Refusé','Annulé','Transit','Reçu par le livreur']:
+                    raise Error('L’affectation concerne uniquement les colis ouverts et non remis physiquement à un livreur.',409)
+                if p['driver_id']!=driver_id and not driver_dispatch_allowed(c,p.get('current_hub_id'),target['driver_hub_id']):
+                    raise Error('Le colis doit être physiquement présent dans le Hub actif du livreur.',409)
+                selected.append(p)
+            changed=[];already=[]
+            for p in selected:
+                has_receipt=c.execute('SELECT 1 FROM driver_receipts WHERE parcel_id=? AND driver_id=?',(p['id'],driver_id)).fetchone()
+                if p['driver_id']==driver_id and not has_receipt:
+                    already.append(p['id']);continue
+                old_driver=p['driver_id']
+                if old_driver!=driver_id:
+                    change(c,p,{'driver_id':driver_id},actor)
+                    c.execute('UPDATE parcels SET driver_id=?,updated_at=? WHERE id=?',(driver_id,now(),p['id']))
+                    c.execute('DELETE FROM driver_receipts WHERE parcel_id=?',(p['id'],))
+                else:
+                    c.execute('''INSERT INTO ops_assignments(parcel_id,old_driver_id,new_driver_id,actor_id,created_at,hub_id)
+                        VALUES(?,?,?,?,?,?)''',(p['id'],old_driver,driver_id,actor['id'],now(),local_hub['id']))
+                    c.execute('UPDATE parcels SET ops_revision=ops_revision+1,updated_at=? WHERE id=?',(now(),p['id']))
+                    c.execute('DELETE FROM driver_receipts WHERE parcel_id=?',(p['id'],))
+                event(c,p['id'],p['status'],'Affectation locale au livreur '+target['name'],actor)
+                notify_event(c,p['id'],p['status'],actor)
+                append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='hub_parcel_assigned',
+                    entity_type='parcel',entity_id=p['id'],old_value={'driver_id':old_driver},
+                    new_value={'driver_id':driver_id,'hub_id':local_hub['id']},
+                    metadata={'hub_id':local_hub['id'],'source':'hub_manager'},created_at=now())
+                changed.append(p['id'])
+            result={'ok':True,'assigned':len(changed),'already_assigned':len(already),
+                    'parcel_ids':changed,'already_ids':already,'driver_id':driver_id,'hub_id':local_hub['id']}
+            c.execute('INSERT INTO ops_hub_assignment_keys(actor_id,request_key,payload_hash,result,created_at) VALUES(?,?,?,?,?)',
+                (actor['id'],key,fingerprint,json.dumps(result,ensure_ascii=False),now()))
+            return jsonify(**result)
+
+    @app.get(P+'/hub/driver-statements')
+    @auth('agent')
+    def ops_hub_driver_statements():
+        actor=user()
+        with conn() as c:
+            local_hub=local_manager_hub(c,actor)
+            rows=[];totals={'cod_cents':0,'commission_cents':0,'cash_remaining_cents':0,'commission_remaining_cents':0}
+            for raw in c.execute('SELECT * FROM driver_statements WHERE hub_id=? ORDER BY id DESC LIMIT 500',(local_hub['id'],)).fetchall():
+                statement=services['driver_finance_balances'](c,raw)
+                item={key:statement.get(key) for key in ('id','driver_id','driver_name','mode','period_from','period_to','parcel_count',
+                    'cod_cents','commission_cents','retained_cents','cash_due_cents','commission_due_cents',
+                    'cash_received_cents','commission_paid_cents','cash_remaining_cents','commission_remaining_cents',
+                    'status','reference','created_at','cancelled_at')}
+                rows.append(item)
+                if not item['cancelled_at']:
+                    for key in totals:totals[key]+=int(item.get(key) or 0)
+            return jsonify(hub=local_hub,rows=rows,count=len(rows),totals=totals,read_only=True)
 
     @app.get(P+'/analytics')
     @auth('admin')

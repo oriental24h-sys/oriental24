@@ -5,6 +5,7 @@ import base64, binascii, hashlib, io, json, re, warnings
 from PIL import Image, UnidentifiedImageError
 from flask import request, jsonify, send_file
 from werkzeug.utils import secure_filename
+from hub_schema import install_one_active_hub_manager_guards, migrate_driver_hub_id
 
 KIND = 'partner_palette'
 INCIDENTS = ('missing', 'extra', 'damaged')
@@ -20,6 +21,8 @@ def register_reception_extras(app, s):
         # One-time idempotent conversion. Keep the legacy column name during this rollout so
         # currently deployed palette/receipt modules do not lose hub assignments.
         c.execute("UPDATE users SET role='hub_manager' WHERE role='agent'")
+        install_one_active_hub_manager_guards(c)
+        migrate_driver_hub_id(c,created_at=now(),append_audit=s['append_audit_log'])
         if 'missing_at' not in {r[1] for r in c.execute('PRAGMA table_info(ops_document_lines)')}:
             c.execute('ALTER TABLE ops_document_lines ADD COLUMN missing_at TEXT')
             c.execute('ALTER TABLE ops_document_lines ADD COLUMN missing_by INTEGER REFERENCES users(id)')
