@@ -451,6 +451,7 @@ const menu = [
       ["invoices", "wallet", "Facturation", ["admin", "client", "livreur"]],
       ["driver-finance", "wallet", "Caisse livreurs", ["admin", "livreur"]],
       ["drivers", "users", "Livreurs", ["admin"]],
+      ["hub-drivers", "users", "Livreurs de mon Hub", ["agent"]],
       ["clients", "user", "Clients", ["admin"]],
       ["supports", "headset", "Supports", ["admin"]],
       ["support-orders", "headset", "Suivre les commandes", ["support"]],
@@ -477,6 +478,7 @@ const titles = {
   print: "Centre d’impression",
   invoices: "Facturation",
   drivers: "Livreurs",
+  "hub-drivers": "Livreurs de mon Hub",
   clients: "Clients",
   supports: "Comptes Support",
   "support-orders": "Suivi des commandes",
@@ -493,7 +495,7 @@ function shell() {
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','hub-dashboard','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
           ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${t}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
@@ -505,7 +507,7 @@ function shell() {
 async function navigate(v) {
   if (!S) return;
   // Responsable de hub : navigation limitée aux tâches et vues explicitement sûres.
-  if (S.user.role==='agent'&&!['parcels','documents','hub-dashboard','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
+  if (S.user.role==='agent'&&!['parcels','documents','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
   if (S.user.role==='support'&&!['support-orders','profile'].includes(v)) v='support-orders';
   if (S.user.role === "livreur" && ["parcels","dashboard","print"].includes(v)) { try { const owner=S.user.id,fresh=await api("/bootstrap"); if(S?.user?.id!==owner||fresh.user.id!==owner)return; S=fresh; } catch(e) {toast(e.message,true);return;} }
   view = v;
@@ -617,6 +619,20 @@ async function renderView(background = false) {
         break;
       case "hub-dashboard":
         html = hubDashboardView(await api('/logistics/hub-dashboard?'+new URLSearchParams(opsPeriod)));
+        break;
+      case "hub-drivers":
+        html = hubDriversView(await api('/logistics/hub/drivers'));
+        break;
+      case "hub-invoices":
+        html = S.user.role==='admin'
+          ? hubInvoicesAdminView(await api('/logistics/hub-invoices'))
+          : hubInvoicesView(await api('/logistics/hub/invoices'));
+        break;
+      case "hub-driver-statements":
+        html = hubDriverStatementsView(await api('/logistics/hub/driver-statements'));
+        break;
+      case "hub-cod":
+        html = hubCodView(await api(S.user.role==='admin'?'/logistics/cod/admin':'/logistics/cod/hub'));
         break;
       case "ops-settings":
         html = opsSettingsView(await api('/logistics/config'));
@@ -908,11 +924,14 @@ function parcelTable(rows, selectable = true) {
     );
   const isAdmin = S.user.role === "admin";
   const isClient = S.user.role === "client";
-  return `${S.user.role === "livreur" && view !== "print" ? driverCards(rows) : ""}<div class="table-wrap ${S.user.role === "livreur" && view !== "print" ? "driver-desktop-table" : ""}"><table><thead><tr>${selectable ? '<th style="width:30px"><input type="checkbox" style="width:13px" aria-label="Sélectionner tous" onchange="document.querySelectorAll(\'.parcel-select\').forEach(x=>x.checked=this.checked)"></th>' : ""}<th>Référence</th><th>Destinataire</th><th>Destination</th><th>Montant COD</th><th>Statut</th><th>${isClient ? "Livreur" : "Client / Boutique"}</th>${isAdmin ? "<th>Livreur / Agence</th>" : ""}<th></th></tr></thead><tbody>${rows.map((p) => {
+  const isHubManager = S.user.role === "agent";
+  return `${S.user.role === "livreur" && view !== "print" ? driverCards(rows) : ""}<div class="table-wrap ${S.user.role === "livreur" && view !== "print" ? "driver-desktop-table" : ""}"><table><thead><tr>${selectable ? '<th style="width:30px"><input type="checkbox" style="width:13px" aria-label="Sélectionner tous" onchange="document.querySelectorAll(\'.parcel-select\').forEach(x=>x.checked=this.checked)"></th>' : ""}<th>Référence</th><th>Destinataire</th><th>Destination</th><th>Montant COD</th><th>Statut</th><th>${isClient ? "Livreur" : "Client / Boutique"}</th>${isAdmin ? "<th>Livreur / Agence</th>" : isHubManager ? "<th>Livreur local</th>" : ""}<th></th></tr></thead><tbody>${rows.map((p) => {
     const driverCell = p.driver
       ? `<strong>${esc(p.driver)}</strong>`
       : `<span class="tag ${p.driver_returned ? "warn" : "info"}">${p.driver_returned ? "Retourné au hub" : "À l’agence"}</span>`;
-    return `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span>${parcelPolicyBadges(p, true)}</td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${isClient && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(isClient ? p.driver || "Non affecté" : p.company || p.client)}${view==='print'||!p.city_support_name?'':`<span class="sub">Support : ${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}</span>`}</td>${isAdmin ? `<td>${driverCell}</td>` : ""}<td><div class="parcel-row-actions">${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}${view!=='print'&&isAdmin&&p.invoice_status==='Réglée'?`<span class="client-paid-pill" title="Facture ${esc(p.invoice_reference||'')} réglée">Paid</span>`:''}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`;
+    const managerDriverIsLocal=(S.users||[]).some(u=>Number(u.id)===Number(p.driver_id)&&u.role==='livreur'&&Number(u.driver_hub_id)===Number(S.user.agent_hub_id));
+    const managerDriverLabel=p.driver_id?(managerDriverIsLocal?(p.driver||'Livreur local'):'Affectation à examiner par Admin'):'Non affecté';
+    return `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span>${parcelPolicyBadges(p, true)}</td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${isClient && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(isClient ? p.driver || "Non affecté" : p.company || p.client)}${view==='print'||!p.city_support_name?'':`<span class="sub">Support : ${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}</span>`}</td>${isAdmin ? `<td>${driverCell}</td>` : isHubManager ? `<td>${esc(managerDriverLabel)}<span class="sub">${p.driver_returned?'Retourné au Hub':!p.driver_id?'Aucun livreur local':managerDriverIsLocal?'Affectation locale':'À examiner'}</span></td>` : ""}<td><div class="parcel-row-actions">${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}${view!=='print'&&isHubManager&&!['Livré','Retourné','Refusé','Annulé','Transit','Reçu par le livreur'].includes(p.status)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked?`<button class="btn sm" onclick="hubAssignParcel(${p.id})">${icon('user')}Affecter</button>`:''}${view!=='print'&&isAdmin&&p.invoice_status==='Réglée'?`<span class="client-paid-pill" title="Facture ${esc(p.invoice_reference||'')} réglée">Paid</span>`:''}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`;
   }).join("")}</tbody></table></div>`;
 }
 function parcelsView() {
@@ -925,7 +944,7 @@ function parcelsView() {
   const actions = hubManager ? "" : `<a class="btn export-btn" href="/api/export">${icon("download")}Exporter CSV</a>${create ? `<button class="btn import-trigger" onclick="openImports()">${icon("upload")}Importer</button>` : ""}${create ? `<button class="btn primary" onclick="newParcel()">${icon("plus")}Nouveau colis</button>` : ""}`;
   return (
     heading(title, subtitle, actions) +
-    `<section class="card"><div class="tabs"><button class="active">${hubManager ? "Présents dans votre Hub" : S.user.role === "livreur" ? "Mes colis assignés" : "Tous les colis"} <span class="tag" style="margin-left:6px">${S.parcels.length}</span></button><button onclick="filters.status='En livraison';$('#status-filter').value=filters.status;drawParcelTable()">En livraison</button><button onclick="filters.status='Livré';$('#status-filter').value=filters.status;drawParcelTable()">Livrés</button></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="parcel-search" placeholder="Référence, nom, téléphone…" value="${esc(filters.q)}" oninput="filters.q=this.value;listPage=1;drawParcelTable()"></div><select id="status-filter" aria-label="Filtrer par statut" onchange="filters.status=this.value;listPage=1;drawParcelTable()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option value="${esc(s)}" ${s === filters.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select id="treatment-filter" aria-label="Statut de traitement" onchange="filters.treatment=this.value;listPage=1;drawParcelTable()"><option value="">Statut de traitement</option><option value="treated" ${filters.treatment === "treated" ? "selected" : ""}>Traité</option><option value="untreated" ${filters.treatment === "untreated" ? "selected" : ""}>Non traité</option></select><select aria-label="Filtrer par ville" onchange="filters.city=this.value;listPage=1;drawParcelTable()"><option value="">Toutes les villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === filters.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div>${hubManager ? "" : `<button class="btn sm" onclick="openScanner()">${icon("scan")}Scanner</button><button class="btn sm" onclick="printSelected()">${icon("print")}Étiquettes</button>`}${S.user.role === "admin" || (S.user.role === "livreur" && S.users.some((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active)) ? `<button class="btn sm" onclick="bulkAssign()" title="Affectation en masse des colis cochés">${icon("user")}Affecter</button>` : ""}<button class="icon-btn" onclick="filters={q:'',city:'',status:'',from:'',to:'',treatment:''};listPage=1;renderView()" title="Réinitialiser les filtres">${icon("refresh")}</button></div><div id="parcel-table"></div></section>`
+    `<section class="card"><div class="tabs"><button class="active">${hubManager ? "Présents dans votre Hub" : S.user.role === "livreur" ? "Mes colis assignés" : "Tous les colis"} <span class="tag" style="margin-left:6px">${S.parcels.length}</span></button><button onclick="filters.status='En livraison';$('#status-filter').value=filters.status;drawParcelTable()">En livraison</button><button onclick="filters.status='Livré';$('#status-filter').value=filters.status;drawParcelTable()">Livrés</button></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="parcel-search" placeholder="Référence, nom, téléphone…" value="${esc(filters.q)}" oninput="filters.q=this.value;listPage=1;drawParcelTable()"></div><select id="status-filter" aria-label="Filtrer par statut" onchange="filters.status=this.value;listPage=1;drawParcelTable()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option value="${esc(s)}" ${s === filters.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select id="treatment-filter" aria-label="Statut de traitement" onchange="filters.treatment=this.value;listPage=1;drawParcelTable()"><option value="">Statut de traitement</option><option value="treated" ${filters.treatment === "treated" ? "selected" : ""}>Traité</option><option value="untreated" ${filters.treatment === "untreated" ? "selected" : ""}>Non traité</option></select><select aria-label="Filtrer par ville" onchange="filters.city=this.value;listPage=1;drawParcelTable()"><option value="">Toutes les villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === filters.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div>${hubManager ? "" : `<button class="btn sm" onclick="openScanner()">${icon("scan")}Scanner</button><button class="btn sm" onclick="printSelected()">${icon("print")}Étiquettes</button>`}${hubManager ? `<button class="btn sm" onclick="hubBulkAssign()" title="Affecter les colis sélectionnés à un livreur local">${icon("user")}Affecter</button>` : S.user.role === "admin" || (S.user.role === "livreur" && S.users.some((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active)) ? `<button class="btn sm" onclick="bulkAssign()" title="Affectation en masse des colis cochés">${icon("user")}Affecter</button>` : ""}<button class="icon-btn" onclick="filters={q:'',city:'',status:'',from:'',to:'',treatment:''};listPage=1;renderView()" title="Réinitialiser les filtres">${icon("refresh")}</button></div><div id="parcel-table"></div></section>`
   );
 }
 function drawParcelTable() {
@@ -944,7 +963,7 @@ function drawParcelTable() {
   const pages = Math.max(1, Math.ceil(rows.length / 10));
   listPage = Math.min(listPage, pages);
   $("#parcel-table").innerHTML =
-    parcelTable(rows.slice((listPage - 1) * 10, listPage * 10), S.user.role !== "agent") +
+    parcelTable(rows.slice((listPage - 1) * 10, listPage * 10), true) +
     `<div class="table-footer"><span>${rows.length ? (listPage - 1) * 10 + 1 : 0}–${Math.min(rows.length, listPage * 10)} sur ${rows.length} colis</span><div class="pagination"><button onclick="listPage=Math.max(1,listPage-1);drawParcelTable()" aria-label="Page précédente">‹</button>${Array.from({ length: pages }, (_, i) => `<button class="${listPage === i + 1 ? "active" : ""}" onclick="listPage=${i + 1};drawParcelTable()">${i + 1}</button>`).join("")}<button onclick="listPage=Math.min(${pages},listPage+1);drawParcelTable()" aria-label="Page suivante">›</button></div></div>`;
 }
 function clientOptions() {
@@ -1086,21 +1105,22 @@ function auditFilter(q) {
 }
 function assignDriver(id) {
   const p = S.parcels.find((p) => p.id === id);
+  const localHub=(S.hubs||[]).find(h=>h.active&&Number(h.id)===Number(p?.current_hub_id));
   modal(
     "Affecter un livreur",
     form(
-      select(
+      `${localHub?`<div class="full form-hint">Seuls les livreurs du Hub actif ${esc(localHub.name)} sont proposés pour ce colis reçu physiquement.</div>`:`<div class="full form-hint orange">Aucun Hub actif ne correspond à la localisation physique du colis. Réceptionnez-le dans un Hub avant une nouvelle affectation.</div>`}${select(
         "driver_id",
         "Livreur",
         [
           ["", "Sans affectation"],
           ...S.users
-            .filter((u) => u.role === "livreur" && u.active)
-            .map((u) => [u.id, u.name]),
+            .filter((u) => u.role === "livreur" && u.active && (u.id===p?.driver_id || (localHub&&Number(u.driver_hub_id)===Number(localHub.id))))
+            .map((u) => [u.id, `${u.name} · ${(S.hubs||[]).find(h=>Number(h.id)===Number(u.driver_hub_id))?.name||'Hub à examiner'}`]),
         ],
         p.driver_id,
         false,
-      ),
+      )}`,
     ),
   );
   bindForm(async (d) => {
@@ -1354,6 +1374,12 @@ function supportCityPicker(u, id) {
     return `<label class="support-city-option ${occupied ? "locked" : ""}"><input type="checkbox" name="city_ids" value="${city.id}" ${checked ? "checked" : ""} ${occupied ? "disabled" : ""}><span><b>${icon("pin")}${esc(city.name)}</b><small>${occupied ? `Déjà suivie par ${esc(owner.name)}` : checked ? "Affectée à ce compte" : "Disponible"}</small></span></label>`;
   }).join("") || `<p class="form-hint">Aucune ville ouverte à la livraison.</p>`}</div><p class="form-hint">Une ville ne peut appartenir qu’à un seul support. Pour la déplacer, retirez-la d’abord de l’ancien compte puis enregistrez.</p><p class="form-hint">Les commandes déjà créées gardent leur support actuel ; le changement concerne les nouvelles commandes.</p></div>`;
 }
+function driverHubPicker(u,isNew) {
+  const hubs=S.hubs||[],active=hubs.filter(h=>h.active),current=hubs.find(h=>Number(h.id)===Number(u.driver_hub_id));
+  const options=[["","À examiner · aucun Hub associé"],...active.map(h=>[h.id,`${h.name} · ${h.city}`])];
+  if(current&&!current.active)options.push([current.id,`${current.name} · inactif`]);
+  return select("driver_hub_id","Hub local du livreur",options,u.driver_hub_id||"",Boolean(isNew&&active.length));
+}
 function userForm(id, role) {
   const u = S.users.find((u) => u.id === id) || {
     name: "",
@@ -1371,13 +1397,14 @@ function userForm(id, role) {
           ? "Nouveau compte Support"
           : "Nouveau client",
     form(
-      `${role === "client" ? select("client_type", "Type de client", clientTypeOptions, u.client_type || "vendeur") + `<div class="form-hint"><b>Vendeur</b> : tracking ORIENTAL24 automatique.<br><b>Société de livraison</b> : tracking saisi par la société et conservé.${id?"<br>Le type est verrouillé après le premier colis ou la première préparation.":""}</div>` : ""}${input("name", "Nom complet", u.name)}${!id ? input("email", "Adresse e-mail", "", "email") : `<div class="form-hint">${esc(u.email)}<br>L’identifiant du compte est conservé.</div>`}${input("phone", "Téléphone", u.phone, "tel")}${role === "support" ? supportCityPicker(u,id) : input("company", "Entreprise / Boutique", u.company, "text", false)}${role === "livreur" ? select("team_lead_id", "Chef d’équipe (optionnel) — le chef voit et réaffecte les colis de son équipe", [["", "Sans chef d’équipe (compte autonome)"]].concat(S.users.filter((x) => x.role === "livreur" && x.active && x.id !== id && !x.team_lead_id).map((x) => [x.id, x.name])), u.team_lead_id || "", false) : ""}${input("password", id ? "Nouveau mot de passe (facultatif)" : "Mot de passe initial", "", "password", !id, 'minlength="10" autocomplete="new-password"')}${id ? `<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active ? "checked" : ""}><label for="user-active">Compte actif</label></div>` : ""}<div class="full form-hint">Minimum 10 caractères pour le mot de passe. ${id ? "Un compte désactivé ne peut plus accéder à la plateforme." : "Transmettez les identifiants au titulaire par un canal sûr."}</div>`,
+      `${role === "client" ? select("client_type", "Type de client", clientTypeOptions, u.client_type || "vendeur") + `<div class="form-hint"><b>Vendeur</b> : tracking ORIENTAL24 automatique.<br><b>Société de livraison</b> : tracking saisi par la société et conservé.${id?"<br>Le type est verrouillé après le premier colis ou la première préparation.":""}</div>` : ""}${input("name", "Nom complet", u.name)}${!id ? input("email", "Adresse e-mail", "", "email") : `<div class="form-hint">${esc(u.email)}<br>L’identifiant du compte est conservé.</div>`}${input("phone", "Téléphone", u.phone, "tel")}${role === "support" ? supportCityPicker(u,id) : input("company", "Entreprise / Boutique", u.company, "text", false)}${role === "livreur" ? driverHubPicker(u,!id)+`<div class="full form-hint">Un livreur doit être rattaché à un Hub actif avant toute nouvelle affectation. Les affectations historiques ambiguës restent à examiner par l’Admin.</div>` : ""}${role === "livreur" ? select("team_lead_id", "Chef d’équipe (optionnel) — visible et réaffectable uniquement dans le même Hub", [["", "Sans chef d’équipe (compte autonome)"]].concat(S.users.filter((x) => x.role === "livreur" && x.active && x.id !== id && !x.team_lead_id).map((x) => [x.id, x.name])), u.team_lead_id || "", false) : ""}${input("password", id ? "Nouveau mot de passe (facultatif)" : "Mot de passe initial", "", "password", !id, 'minlength="10" autocomplete="new-password"')}${id ? `<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active ? "checked" : ""}><label for="user-active">Compte actif</label></div>` : ""}<div class="full form-hint">Minimum 10 caractères pour le mot de passe. ${id ? "Un compte désactivé ne peut plus accéder à la plateforme." : "Transmettez les identifiants au titulaire par un canal sûr."}</div>`,
     ),
   );
   bindForm(async (d) => {
     await api("/users" + (id ? "/" + id : ""), id ? "PATCH" : "POST", {
       ...d,
       ...(d.team_lead_id !== undefined ? { team_lead_id: d.team_lead_id ? Number(d.team_lead_id) : null } : {}),
+      ...(role === "livreur" ? { driver_hub_id: d.driver_hub_id ? Number(d.driver_hub_id) : null } : {}),
       ...(role === "support" ? { city_ids: [...document.querySelectorAll('#modal-form input[name="city_ids"]:checked')].map((x) => Number(x.value)) } : {}),
       role,
     });
@@ -1828,7 +1855,7 @@ function bulkAssign() {
   }
   const targets =
     S.user.role === "admin"
-      ? [["", "— Désaffecter (retirer le livreur) —"]].concat(S.users.filter((u) => u.role === "livreur" && u.active).map((u) => [u.id, u.name]))
+      ? [["", "— Désaffecter (retirer le livreur) —"]].concat(S.users.filter((u) => u.role === "livreur" && u.active).map((u) => { const h=(S.hubs||[]).find(x=>Number(x.id)===Number(u.driver_hub_id)); return [u.id,`${u.name} · ${h?h.name:'Hub à examiner'}`]; }))
       : [[S.user.id, "Moi — " + S.user.name]].concat(S.users.filter((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active).map((u) => [u.id, u.name]));
   rdvSel = "";
   modal(
