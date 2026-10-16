@@ -6,6 +6,8 @@ invoice is never duplicated and no payment, COD, fee or invoice status is change
 import csv,io,json,hashlib,re
 from flask import request,jsonify,Response
 
+from hub_access import hub_return_palette_lines
+
 KIND='return_palette'
 STATES=('Préparé','En transit','Partiellement remis','Remis','Clôturé (écarts)','Annulé')
 
@@ -49,8 +51,14 @@ def register_return_palettes(app,s):
         return dict(r)
     def lines(c,did):
         return [dict(r) for r in c.execute('SELECT l.*,p.phone,p.amount,p.status current_status,p.current_hub_id FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=? ORDER BY l.id',(did,))]
-    def detail(c,d):
+    def detail(c,d,u=None):
         ls=lines(c,d['id']);received=sum(bool(l['received_at']) for l in ls);missing=sum(bool(l['missing_at']) for l in ls)
+        visible_lines=hub_return_palette_lines(ls,u.get('agent_hub_id'),d['status']) if u and u['role']=='agent' else ls
+        audits=[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE a.document_id=? ORDER BY a.id DESC',(d['id'],))]
+        if u and u['role']=='agent':
+            for entry in audits:
+                safe_details=entry['details'] if isinstance(entry['details'],dict) else {}
+                entry['details']={k:v for k,v in safe_details.items() if k not in ('parcel_ids','parcel_id','tracking','trackings','status_changes')}
         hid=d.get('destination_hub_id')
         h=c.execute('SELECT h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=?',(hid,)).fetchone() if hid else None
         cl=c.execute('''SELECT u.name,u.company,u.phone,u.email,COALESCE(a.legal_name,'') legal_name,
@@ -66,9 +74,9 @@ def register_return_palettes(app,s):
             'client_email':cl['email'] if cl else '',
             'client_legal_name':cl['legal_name'] if cl else '',
             'client_address':cl['billing_address'] if cl else '',
-            'lines':ls,'count':len(ls),'received':received,'missing':missing,
+            'lines':visible_lines,'count':len(ls),'received':received,'missing':missing,
             'remaining':len(ls)-received-missing,
-            'audit':[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE a.document_id=? ORDER BY a.id DESC',(d['id'],))]}
+            'audit':audits}
     def receive_guard(did,u):
         # v1.6.5 · réception par le vendef également — toute tentative illicite est consignée (hors transaction).
         if u['role']=='admin':return
@@ -163,7 +171,14 @@ def register_return_palettes(app,s):
                     if state not in STATES:raise Error('État de palette retour invalide.')
                     where.append('d.status=?');args.append(state)
                 if q:
-                    where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(COALESCE(m.tracking_code,'')),lower(?))>0 OR EXISTS(SELECT 1 FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=d.id AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0 OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0)))");args.extend([q]*5)
+                    if u['role']=='agent':
+                        line_search="EXISTS(SELECT 1 FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=d.id AND d.status IN ('Préparé','Annulé') AND p.current_hub_id=? AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0 OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0))"
+                        search_args=[q,q,q,u.get('agent_hub_id'),q,q]
+                    else:
+                        line_search="EXISTS(SELECT 1 FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=d.id AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0 OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0))"
+                        search_args=[q]*5
+                    where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(COALESCE(m.tracking_code,'')),lower(?))>0 OR "+line_search+")")
+                    args.extend(search_args)
                 try:
                     page=int(request.args.get('page',1));size=int(request.args.get('size',20))
                     if page<1 or size not in [20,50,100]:raise ValueError()
@@ -176,10 +191,22 @@ def register_return_palettes(app,s):
                     r['tracking_matches']=[];r['tracking_match_count']=0
                     if q:
                         found=[];seen_parcels=set()
-                        for match in c.execute('''SELECT l.parcel_id,l.tracking snapshot_tracking,p.tracking current_tracking
-                                                  FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id
-                                                  WHERE l.document_id=? AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0
-                                                    OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0) ORDER BY l.id''',(r['id'],q,q)):
+                        if u['role']=='agent':
+                            if r['status'] in ('Préparé','Annulé'):
+                                matches=c.execute('''SELECT l.parcel_id,l.tracking snapshot_tracking,p.tracking current_tracking
+                                                     FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id
+                                                     WHERE l.document_id=? AND p.current_hub_id=?
+                                                       AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0
+                                                         OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0) ORDER BY l.id''',
+                                                  (r['id'],u.get('agent_hub_id'),q,q)).fetchall()
+                            else:matches=[]
+                        else:
+                            matches=c.execute('''SELECT l.parcel_id,l.tracking snapshot_tracking,p.tracking current_tracking
+                                                 FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id
+                                                 WHERE l.document_id=? AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0
+                                                   OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0) ORDER BY l.id''',
+                                              (r['id'],q,q)).fetchall()
+                        for match in matches:
                             if match['parcel_id'] in seen_parcels:continue
                             seen_parcels.add(match['parcel_id'])
                             current=str(match['current_tracking'] or '');snapshot=str(match['snapshot_tracking'] or '')
@@ -212,14 +239,14 @@ def register_return_palettes(app,s):
     @auth('admin','agent','client')
     def return_detail(did):
         u=user();access(u)
-        with conn() as c:return jsonify(detail(c,get(c,did,u)))
+        with conn() as c:return jsonify(detail(c,get(c,did,u),u))
 
     @app.get('/api/return-palettes/<int:did>/csv')
     @auth('admin','agent','client')
     def return_csv(did):
         u=user();access(u)
         with conn() as c:
-            d=detail(c,get(c,did,u));buf=io.StringIO();w=csv.writer(buf);w.writerow(['Palette','Hub départ','Vendeur','Transport','Code suivi','Lots','État','Tracking','Destinataire','Ville','Statut initial','Remise','Remise le','Statut actuel'])
+            d=detail(c,get(c,did,u),u);buf=io.StringIO();w=csv.writer(buf);w.writerow(['Palette','Hub départ','Vendeur','Transport','Code suivi','Lots','État','Tracking','Destinataire','Ville','Statut initial','Remise','Remise le','Statut actuel'])
             def safe(v):
                 v='' if v is None else str(v)
                 return "'"+v if v[:1] in ('=','+','-','@') else v

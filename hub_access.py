@@ -149,6 +149,16 @@ def hub_document_lines_at_hub(lines, hub_id):
     return [line for line in lines if type(line.get('current_hub_id')) is int and line.get('current_hub_id')==hub_id]
 
 
+def hub_return_palette_lines(lines, hub_id, document_status):
+    """Return-palette line details are visible to a Hub Manager only before dispatch,
+    or after cancellation before dispatch, and only while each parcel remains at that Hub.
+    Once dispatched, fail closed: a pending line may be in transit to the vendor.
+    """
+    if document_status not in ('Préparé', 'Annulé'):
+        return []
+    return hub_document_lines_at_hub(lines, hub_id)
+
+
 def hub_manager_transfer_scope(document, hub_id, direction):
     """Check that a manager is scanning at the transfer's assigned source or destination Hub."""
     field={'departure':'source_hub_id','arrival':'destination_hub_id'}.get(direction)

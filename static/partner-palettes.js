@@ -51,11 +51,63 @@ async function ppCreate(){
 async function openPartnerPalette(id){
  if(!ppAccess(S?.user))return;const ctx=ppContext('Palette partenaire');
  try{const d=await api('/partner-palettes/'+id);if(!ctx.current())return;const canReceive=S.user.role==='admin'||S.user.role==='agent',receiving=canReceive&&['En transit','Partiellement reçu'].includes(d.status);
- ctx.node.querySelector('h2').textContent=d.reference;ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">SOCIÉTÉ → ORIENTAL24</span><h3>${esc(d.client_name)}</h3><p>${esc(d.destination_name)} · ${esc(d.transport||'Transport non renseigné')}</p><p>${d.partner_reference?'Réf. société : '+esc(d.partner_reference)+' · ':''}${date(d.created_at)}</p></div>${ppBadge(d.status)}</div><div class="pp-progress"><strong>${d.received}<small> / ${d.count}</small></strong><div><b>colis physiquement reçus</b><span>${d.status==='Annulé'?'Brouillon annulé ; aucun colis attendu.':(d.remaining?d.remaining+' restant(s) à recevoir':'Aucun colis attendu')+(d.missing?' · '+d.missing+' déclaré(s) manquant(s)':'')}</span></div></div>${d.note?`<p class="form-hint" data-no-translate>${esc(d.note)}</p>`:''}${d.cancel_reason?`<p class="form-hint orange">Annulation : <span data-no-translate>${esc(d.cancel_reason)}</span></p>`:''}<div class="pp-actions">${S.user.role==='admin'&&d.status==='Préparé'?`<button class="btn primary" onclick="ppAction(${id},'dispatch')">${icon('truck')}Confirmer l’envoi</button><button class="btn danger" onclick="ppAction(${id},'cancel')">Annuler le brouillon</button>`:''}${receiving&&S.user.role==='admin'?`<button class="btn" onclick="ppAction(${id},'receive-all')">${icon('checkcircle')}Recevoir tous les ${d.remaining} restants</button>`:''}<button class="btn" onclick="ppPrint(${id})">${icon('print')}Bon de réception / PDF</button><button class="btn" onclick="ppCSV(${id})">${icon('download')}CSV</button><button class="btn" onclick="openPartnerPalette(${id})">${icon('refresh')}Actualiser</button></div>${receiving?`<form id="pp-receive-form" class="pp-scan"><div class="form-error"></div>${input('tracking','Scanner le tracking original du colis reçu','','text',true,'maxlength="80" autocomplete="off" placeholder="Tracking société · lecteur USB ou saisie"')}${ppCameraSlot('pp-recv')}<label class="pp-consent"><input type="checkbox" name="confirmed" required> Je confirme avoir physiquement reçu ce colis au hub ${esc(d.destination_name)}.</label><button class="btn primary" type="submit">${icon('check')}Réceptionner ce colis</button></form>${rxExtrasButtons(id,d)}`:d.status==='Préparé'?'<p class="form-hint">Le brouillon ne vaut pas envoi. Confirmez uniquement lorsque la palette a réellement quitté la société.</p>':d.missing&&!d.remaining?`<p class="form-hint">Palette clôturée avec écarts : ${d.missing} colis déclaré(s) manquant(s), dossiers visibles ci-dessous.</p>`:d.remaining&&d.status!=='Annulé'?`<p class="form-hint">Réception à effectuer par Admin ou l’agent du hub ${esc(d.destination_name)}. Les colis absents restent attendus ; ils ne sont pas considérés comme reçus.</p>`:''}${d.status==='Clôturé (écarts)'||d.missing||receiving?rxIncidentsBlock(d):''}${simpleTable(['Tracking original','Destinataire / Ville','Réception','État actuel'],d.lines.map(l=>[`<button class="tracking" onclick="parcelDetail(${l.parcel_id})">${esc(l.tracking)}</button>`,`${esc(l.recipient)}<span class="sub">${esc(l.city)}</span>`,l.received_at?`<span class="tag good">Reçu</span><span class="sub">${esc(opsDate(l.received_at))}</span>`:l.missing_at?`<span class="tag warn">Manquant déclaré</span><span class="sub">${esc(opsDate(l.missing_at))}</span>`:`<span class="tag ${d.status==='Annulé'?'bad':'warn'}">${d.status==='Annulé'?'Annulé':'À recevoir'}</span>`,tag(l.current_status)]))}<h3 class="ops-subtitle">Historique de la palette</h3><div class="timeline">${d.audit.map(a=>`<div class="timeline-item"><b>${esc(a.action)}</b><small>${esc(a.actor)} · ${esc(opsDate(a.created_at))}</small>${a.details.trackings?`<p>${a.details.trackings.map(esc).join(' · ')}</p>`:''}</div>`).join('')}</div><p class="sub">Les trackings, COD, frais et factures sont conservés. Les colis reçus peuvent être affectés au livreur même si d’autres colis de cette palette restent attendus.</p>`;
- if(receiving){const f=ctx.node.querySelector('#pp-receive-form');ppSubmit(ctx,f,payload=>api409(g=>api('/partner-palettes/'+id+'/receive','POST',{...payload,revision:g?g.revision:d.revision}),async()=>({revision:(await api('/partner-palettes/'+id)).revision})));ppCameraBind('pp-recv',f.elements.tracking,ctx.node);f.elements.tracking.focus()}
+ ctx.node.querySelector('h2').textContent=d.reference;ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">SOCIÉTÉ → ORIENTAL24</span><h3>${esc(d.client_name)}</h3><p>${esc(d.destination_name)} · ${esc(d.transport||'Transport non renseigné')}</p><p>${d.partner_reference?'Réf. société : '+esc(d.partner_reference)+' · ':''}${date(d.created_at)}</p></div>${ppBadge(d.status)}</div><div class="pp-progress"><strong>${d.received}<small> / ${d.count}</small></strong><div><b>colis physiquement reçus</b><span>${d.status==='Annulé'?'Brouillon annulé ; aucun colis attendu.':(d.remaining?d.remaining+' restant(s) à recevoir':'Aucun colis attendu')+(d.missing?' · '+d.missing+' déclaré(s) manquant(s)':'')}</span></div></div>${d.note?`<p class="form-hint" data-no-translate>${esc(d.note)}</p>`:''}${d.cancel_reason?`<p class="form-hint orange">Annulation : <span data-no-translate>${esc(d.cancel_reason)}</span></p>`:''}<div class="pp-actions">${S.user.role==='admin'&&d.status==='Préparé'?`<button class="btn primary" onclick="ppAction(${id},'dispatch')">${icon('truck')}Confirmer l’envoi</button><button class="btn danger" onclick="ppAction(${id},'cancel')">Annuler le brouillon</button>`:''}${receiving&&S.user.role==='admin'?`<button class="btn" onclick="ppAction(${id},'receive-all')">${icon('checkcircle')}Recevoir tous les ${d.remaining} restants</button>`:''}<button class="btn" onclick="ppPrint(${id})">${icon('print')}Bon de réception / PDF</button><button class="btn" onclick="ppCSV(${id})">${icon('download')}CSV</button><button class="btn" onclick="openPartnerPalette(${id})">${icon('refresh')}Actualiser</button></div>${receiving?`<div class="pp-scan"><div id="pp-individual-receive-scan"></div></div>${rxExtrasButtons(id,d)}`:d.status==='Préparé'?'<p class="form-hint">Le brouillon ne vaut pas envoi. Confirmez uniquement lorsque la palette a réellement quitté la société.</p>':d.missing&&!d.remaining?`<p class="form-hint">Palette clôturée avec écarts : ${d.missing} colis déclaré(s) manquant(s), dossiers visibles ci-dessous.</p>`:d.remaining&&d.status!=='Annulé'?`<p class="form-hint">Réception à effectuer par Admin ou l’agent du hub ${esc(d.destination_name)}. Les colis absents restent attendus ; ils ne sont pas considérés comme reçus.</p>`:''}${d.status==='Clôturé (écarts)'||d.missing||receiving?rxIncidentsBlock(d):''}${simpleTable(['Tracking original','Destinataire / Ville','Réception','État actuel'],d.lines.map(l=>[`<button class="tracking" onclick="parcelDetail(${l.parcel_id})">${esc(l.tracking)}</button>`,`${esc(l.recipient)}<span class="sub">${esc(l.city)}</span>`,l.received_at?`<span class="tag good">Reçu</span><span class="sub">${esc(opsDate(l.received_at))}</span>`:l.missing_at?`<span class="tag warn">Manquant déclaré</span><span class="sub">${esc(opsDate(l.missing_at))}</span>`:`<span class="tag ${d.status==='Annulé'?'bad':'warn'}">${d.status==='Annulé'?'Annulé':'À recevoir'}</span>`,tag(l.current_status)]))}<h3 class="ops-subtitle">Historique de la palette</h3><div class="timeline">${d.audit.map(a=>`<div class="timeline-item"><b>${esc(a.action)}</b><small>${esc(a.actor)} · ${esc(opsDate(a.created_at))}</small>${a.details.trackings?`<p>${a.details.trackings.map(esc).join(' · ')}</p>`:''}</div>`).join('')}</div><p class="sub">Les trackings, COD, frais et factures sont conservés. Les colis reçus peuvent être affectés au livreur même si d’autres colis de cette palette restent attendus.</p>`;
+ if(receiving)ppBindIndividualReceive(ctx,id,d)
  if(d.status==='Clôturé (écarts)'||d.missing||receiving)await ppRenderIncidents(ctx,id,d);
  }catch(e){ppError(ctx,e)}
 }
+function ppBindIndividualReceive(ctx,id,d){
+ const root=ctx.node.querySelector('#pp-individual-receive-scan');if(!root||typeof o24ScanCollector!=='function')return;
+ const admin=S?.user?.role==='admin',known=new Map((d.lines||[]).map(l=>[String(l.tracking||'').trim().toUpperCase(),l])),processed=new Set();
+ const collector=o24ScanCollector(root,{
+  id:'pp-individual-receive',label:'Scanner les colis reçus (lecteur USB, clavier ou caméra)',
+  placeholder:'Tracking société puis Entrée',inputMax:80,max:Math.max(1,Math.min(500,Number(d.remaining)||500)),
+  commitLabel:'Valider les réceptions',
+  hint:'Les scans restent en attente jusqu’à la validation. Chaque colis est ensuite réceptionné individuellement.',
+  confirmText:'Je confirme avoir physiquement reçu les colis au hub '+(d.destination_name||'de réception')+'.',
+  confirmRequiredMessage:'Confirmez avoir physiquement reçu ces colis au hub.',
+  renderItem:item=>`<b>${esc(item.tracking)}</b>${item.recipient?`<span class="sub">${esc(item.recipient)} · ${esc(item.city||'')}</span>`:''}`,
+  resolve:async code=>{
+   const tracking=String(code||'').trim(),key=tracking.toUpperCase(),line=known.get(key);
+   if(processed.has(key))throw Error('Ce colis a déjà été réceptionné dans cette session.');
+   if(admin&&!line)throw Error('Ce tracking ne figure pas dans cette palette.');
+   if(line?.missing_at)throw Error('Ce colis est déclaré manquant et ne peut pas être réceptionné.');
+   if(line?.received_at)throw Error('Ce colis est déjà réceptionné.');
+   return {tracking:line?.tracking||tracking,recipient:line?.recipient||'',city:line?.city||''};
+  },
+  onCommit:async(items,control)=>{
+   let received=0,already=0;
+   for(const item of items){
+    if(!ctx.current())return;
+    try{
+     const fresh=await api('/partner-palettes/'+id);
+     const current=(fresh.lines||[]).find(l=>String(l.tracking||'').toUpperCase()===item.tracking.toUpperCase());
+     if(current?.received_at){processed.add(item.tracking.toUpperCase());control.remove(item);already++;continue}
+     if(current?.missing_at)throw Error('Ce colis est déclaré manquant et ne peut pas être réceptionné.');
+     const request_key=financeKey();
+     const result=await api409(revision=>api('/partner-palettes/'+id+'/receive','POST',{
+      tracking:item.tracking,confirmed:true,request_key,revision:revision?revision.revision:fresh.revision
+     }),async()=>({revision:(await api('/partner-palettes/'+id)).revision}));
+     processed.add(item.tracking.toUpperCase());control.remove(item);if(result.already_received)already++;else received++;
+    }catch(error){
+     if(ctx.current()){
+      const done=received+already;
+      control.setMessage('err',(done?`Réception partielle : ${done} colis déjà traités. `:'')+(error.message||'Réception impossible.'));
+      toast((done?`Réception partielle (${done} colis) · `:'')+(error.message||'Réception impossible.'),true);
+     }
+     return;
+    }
+   }
+   if(!ctx.current())return;
+   await refresh();if(!ctx.current())return;
+   await renderView();if(!ctx.current())return;
+   await openPartnerPalette(id);
+   toast(`Réception enregistrée : ${received} colis${already?' · '+already+' déjà reçus':''} ✓`);
+  }
+ });
+ modalCleanup=()=>collector?.destroy();
+}
+
 async function ppAction(id,action){
  const ctx=ppContext(action==='dispatch'?'Confirmer l’envoi':action==='cancel'?'Annuler le brouillon':'Confirmer la réception complète');
  try{const d=await api('/partner-palettes/'+id);if(!ctx.current())return;const all=action==='receive-all';if(all&&S.user.role!=='admin'&&S.user.role!=='agent')throw Error('Réception réservée à Admin et aux agents de réception.');
@@ -92,20 +144,62 @@ async function ppFusionStart(){
  const ctx=ppContext('Fusionner les palettes');
  try{const d=await api('/partner-palettes/fusion','POST',{palette_ids:[...ppFusSel]});if(!ctx.current())return;ppFusSel=new Set();await renderView();await ppFusOpen(d.id)}catch(e){ppError(ctx,e)}
 }
-async function ppFusOpen(bid){
+async function ppFusOpen(bid,initialItems=[],initialBusy=false){
  const ctx=ppContext('Réception du pack fusionné');
- const draw=(d)=>{
+ const draw=(d,staged=[],busy=false)=>{
   ctx.node.querySelector('h2').textContent=d.reference;
-  ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">FUSION · RÉCEPTION GROUPÉE</span><h3>${d.palettes.length} palettes → ${d.palettes.map(p=>esc(p.reference)).join(' · ')}</h3><p>${d.palettes.map(p=>esc(p.client_name)).join(', ')}</p></div><span class="tag ${d.closed?'good':'blue'}">${d.closed?'Pack clôturé':'Scan en cours'}</span></div><div class="pp-progress"><strong>${d.received}<small> / ${d.count}</small></strong><div><b>colis scannés reçus</b><span>${d.remaining?d.remaining+' restant(s) à scanner':'tous les colis contrôlés'}${d.missing?' · '+d.missing+' déclaré(s) non réceptionné(s)':''}</span></div></div>${!d.closed?`<div class="pp-scan2"><label for="pp-fus-track">Scanner chaque colis du pack</label><input id="pp-fus-track" type="text" autocomplete="off" maxlength="160" placeholder="Tracking (lecteur USB ou saisie, Entrée valide)"><p class="sub">Le scan marque le colis Réceptionné dans SA palette d'origine — le pack se met à jour automatiquement.</p></div>`:'<p class="form-hint">Réception terminée : les colis non scannés ont été déclarés non réceptionnés et les sociétés ont été notifiées.</p>'}<div class="pp-actions">${!d.closed&&d.remaining?`<button class="btn danger" id="pp-fus-close">${icon('close')}Clôturer sans les ${d.remaining} restants (déclarer non réceptionnés + notifier)</button>`:''}<button class="btn" onclick="renderView()">${icon('refresh')}Fermer et actualiser</button></div>${simpleTable(['Palette / Société','Tracking','Destinataire / Ville','Réception'],d.lines.map(l=>[`<b>${esc(l.reference)}</b><span class="sub">${esc(l.client_name)}</span>`,`<button class="tracking" onclick="parcelDetail(${l.parcel_id})">${esc(l.tracking)}</button>`,`${esc(l.recipient)}<span class="sub">${esc(l.city)}</span>`,l.received_at?`<span class="tag good">Reçu</span>`:l.missing_at?`<span class="tag warn">Non réceptionné</span>`:`<span class="tag blue">À scanner</span>`]))}`;
+  ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">FUSION · RÉCEPTION GROUPÉE</span><h3>${d.palettes.length} palettes → ${d.palettes.map(p=>esc(p.reference)).join(' · ')}</h3><p>${d.palettes.map(p=>esc(p.client_name)).join(', ')}</p></div><span class="tag ${d.closed?'good':'blue'}">${d.closed?'Pack clôturé':'Scan en cours'}</span></div><div class="pp-progress"><strong>${d.received}<small> / ${d.count}</small></strong><div><b>colis scannés reçus</b><span>${d.remaining?d.remaining+' restant(s) à scanner':'tous les colis contrôlés'}${d.missing?' · '+d.missing+' déclaré(s) non réceptionné(s)':''}</span></div></div>${!d.closed?'<div id="pp-fus-collector"></div>':'<p class="form-hint">Réception terminée : les colis non scannés ont été déclarés non réceptionnés et les sociétés ont été notifiées.</p>'}<div class="pp-actions">${!d.closed&&d.remaining?`<button class="btn danger" id="pp-fus-close">${icon('close')}Clôturer sans les ${d.remaining} restants (déclarer non réceptionnés + notifier)</button>`:''}<button class="btn" onclick="closeModal();renderView()">${icon('refresh')}Fermer et actualiser</button></div>${simpleTable(['Palette / Société','Tracking','Destinataire / Ville','Réception'],d.lines.map(l=>[`<b>${esc(l.reference)}</b><span class="sub">${esc(l.client_name)}</span>`,`<button class="tracking" onclick="parcelDetail(${l.parcel_id})">${esc(l.tracking)}</button>`,`${esc(l.recipient)}<span class="sub">${esc(l.city)}</span>`,l.received_at?`<span class="tag good">Reçu</span>`:l.missing_at?`<span class="tag warn">Non réceptionné</span>`:`<span class="tag blue">À scanner</span>`]))}`;
   if(!d.closed){
-   const inp=ctx.node.querySelector('#pp-fus-track');inp.focus();
-   inp.addEventListener('keydown',async(ev)=>{if(ev.key!=='Enter')return;ev.preventDefault();const t=inp.value.trim();if(!t)return;
-    try{const r=await api('/partner-palettes/fusion/'+bid+'/scan','POST',{tracking:t});if(!ctx.current())return;inp.value='';draw(r)}catch(e){toast(e.message,true)}});
    const closeBtn=ctx.node.querySelector('#pp-fus-close');
+   let collector=null;
+   const root=ctx.node.querySelector('#pp-fus-collector');
+   if(root&&typeof o24ScanCollector==='function'){
+    const admin=S?.user?.role==='admin',known=new Map((d.lines||[]).map(l=>[String(l.tracking||'').trim().toUpperCase(),l]));
+    collector=o24ScanCollector(root,{
+     id:'pp-fusion-receive',label:'Scanner les colis du pack (lecteur USB, clavier ou caméra)',
+     placeholder:'Tracking du colis puis Entrée',inputMax:160,max:Math.max(1,Math.min(500,Number(d.remaining)||500)),
+     commitLabel:'Valider la réception du pack',
+     hint:'Le lot reste local jusqu’à validation. Le serveur enregistre chaque réception dans sa palette d’origine.',
+     initialMessage:'Présentez un colis du pack. Aucun colis n’est réceptionné avant la validation finale.',
+     initialItems:staged,initialBusy:busy,
+     renderItem:item=>`<b>${esc(item.tracking)}</b>${item.recipient?`<span class="sub">${esc(item.reference)} · ${esc(item.recipient)} · ${esc(item.city||'')}</span>`:''}`,
+     resolve:async code=>{
+      const tracking=String(code||'').trim(),line=known.get(tracking.toUpperCase());
+      if(admin&&!line)throw Error('Ce tracking ne figure dans aucune palette du pack.');
+      if(line?.missing_at)throw Error('Ce colis est déjà déclaré non réceptionné.');
+      if(line?.received_at)throw Error('Ce colis est déjà réceptionné.');
+      return {tracking:line?.tracking||tracking,reference:line?.reference||'',recipient:line?.recipient||'',city:line?.city||''};
+     },
+     onChange:(items,state)=>{if(closeBtn)closeBtn.disabled=items.length>0||state.busy},
+     onCommit:async(items,control)=>{
+      let latest=d,done=0;
+      for(const item of items){
+       if(!ctx.current())return;
+       try{latest=await api('/partner-palettes/fusion/'+bid+'/scan','POST',{tracking:item.tracking})}
+       catch(error){
+        let fresh=null;try{fresh=await api('/partner-palettes/fusion/'+bid)}catch(e){}
+        const current=(fresh?.lines||[]).find(l=>String(l.tracking||'').toUpperCase()===item.tracking.toUpperCase());
+        if(current?.received_at){latest=fresh;control.remove(item);done++;continue}
+        const pending=control.items;
+        if(fresh&&ctx.current())draw(fresh,pending,false);
+        else control.setMessage('err',(done?`Réception partielle : ${done} colis déjà traités. `:'')+(error.message||'Réception impossible.'));
+        if(ctx.current())toast((done?`Réception partielle (${done} colis) · `:'')+(error.message||'Réception impossible.'),true);
+        return;
+       }
+       control.remove(item);done++;
+      }
+      if(ctx.current()){
+       draw(latest,[]);
+       toast(`Fusion réceptionnée : ${done} colis confirmé${done===1?'':'s'} ✓`);
+      }
+     }
+    });
+    modalCleanup=()=>collector?.destroy();
+   }
    if(closeBtn)closeBtn.onclick=async()=>{
-    try{const r=await api('/partner-palettes/fusion/'+bid+'/close','POST',{expected_remaining:d.remaining});if(!ctx.current())return;draw(r);toast('Pack clôturé : '+r.missing+' non réceptionné(s), '+r.notified+' société(s) notifiée(s)')}catch(e){toast(e.message,true)};
+    try{const r=await api('/partner-palettes/fusion/'+bid+'/close','POST',{expected_remaining:d.remaining});if(!ctx.current())return;collector?.destroy();draw(r);toast('Pack clôturé : '+r.missing+' non réceptionné(s), '+r.notified+' société(s) notifiée(s)')}catch(e){toast(e.message,true)}
    };
   }
  };
- try{const d=await api('/partner-palettes/fusion/'+bid);if(!ctx.current())return;draw(d)}catch(e){ppError(ctx,e)}
+ try{const d=await api('/partner-palettes/fusion/'+bid);if(!ctx.current())return;draw(d,initialItems,initialBusy)}catch(e){ppError(ctx,e)}
 }

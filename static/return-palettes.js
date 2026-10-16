@@ -44,10 +44,62 @@ function rpParcelTrackingLink(l){
 async function openReturnPalette(id){
  if(!rpAccess(S?.user))return;const ctx=rpContext('Palette retour');
  try{const d=await api('/return-palettes/'+id);if(!ctx.current())return;const remise=['En transit','Partiellement remis'].includes(d.status);const cl=S.user.role==='client';
- ctx.node.querySelector('h2').textContent=d.reference;ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">RETOUR · HUB → VENDEUR</span><h3>${esc(d.client_name)}</h3><p>Départ : ${esc(d.source_name)} · ${esc(d.transport||'Transport non renseigné')}</p><p>${d.tracking_code?'Code suivi : '+esc(d.tracking_code)+' · ':''}${d.lots?d.lots+' lot(s) · ':''}${date(d.created_at)}</p></div>${rpBadge(d.status)}</div><div class="pp-progress"><strong>${d.received}<small> / ${d.count}</small></strong><div><b>colis physiquement remis au vendeur</b><span>${d.status==='Annulé'?'Annulée avant envoi.':(d.remaining?d.remaining+' restant(s) à remettre':'Aucun colis restant')}</span></div></div>${d.note?`<p class="form-hint" data-no-translate>${esc(d.note)}</p>`:''}${d.cancel_reason?`<p class="form-hint orange">Annulation : <span data-no-translate>${esc(d.cancel_reason)}</span></p>`:''}<div class="pp-actions">${!cl&&d.status==='Préparé'?`<button class="btn primary" onclick="rpAction(${id},'dispatch')">${icon('truck')}Confirmer l'envoi</button><button class="btn danger" onclick="rpAction(${id},'cancel')">Annuler le brouillon</button>`:''}${remise&&S.user.role!=='agent'?`<button class="btn" onclick="rpAction(${id},'receive-all')">${icon('checkcircle')}Remettre les ${d.remaining} restants</button>`:''}${((typeof rpCreator==="function"&&rpCreator(S?.user))||cl)&&["Préparé","En transit","Partiellement remis"].includes(d.status)?`<button class="btn danger" onclick="rpRefuseAsk(${id},'${esc(d.reference)}',${d.revision})">${icon('close')}Refuser le retour</button>`:''}<button class="btn" onclick="rpPrint(${id})">${icon('print')}Bon de retour / PDF</button><button class="btn" onclick="rpCSV(${id})">${icon('download')}CSV</button><button class="btn" onclick="openReturnPalette(${id})">${icon('refresh')}Actualiser</button></div>${remise?`<form id="rp-receive-form" class="pp-scan"><div class="form-error"></div>${input('tracking','Scanner le tracking du colis remis au vendeur','','text',true,'maxlength="80" autocomplete="off" placeholder="Tracking ORIENTAL24 · lecteur USB ou saisie"')}<label class="pp-consent"><input type="checkbox" name="confirmed" required> ${cl?'Je confirme avoir physiquement reçu ce colis en retour.':'Je confirme que ce colis a physiquement été remis au vendeur '+esc(d.client_name)+'.'}</label><button class="btn primary" type="submit">${icon('check')}Confirmer la remise de ce colis</button></form>`:d.status==='Préparé'?'<p class="form-hint">Le brouillon ne vaut pas envoi. Confirmez l\'envoi uniquement quand le véhicule a réellement quitté le hub.</p>':d.remaining&&d.status!=='Annulé'?`<p class="form-hint">La remise se confirme ici (Admin ou agent du hub ${esc(d.source_name)}). Les colis non remis restent attendus.</p>`:d.status==='Remis'?'<p class="form-hint">Retour terminé : tous les colis ont été physiquement remis au vendeur.</p>':''}${simpleTable(['Tracking','Destinataire / Ville','Remise','Statut actuel'],d.lines.map(l=>[rpParcelTrackingLink(l),`${esc(l.recipient)}<span class="sub">${esc(l.city)}</span>`,l.received_at?`<span class="tag good">Remis</span><span class="sub">${esc(opsDate(l.received_at))}</span>`:`<span class="tag ${d.status==='Annulé'?'bad':'warn'}">${d.status==='Annulé'?'Annulé':'À remettre'}</span>`,tag(l.current_status)]))}<h3 class="ops-subtitle">Historique de la palette</h3><div class="timeline">${d.audit.map(a=>`<div class="timeline-item"><b>${esc(a.action)}</b><small>${esc(a.actor)} · ${esc(opsDate(a.created_at))}</small>${a.details.trackings?`<p>${a.details.trackings.map(esc).join(' · ')}</p>`:''}</div>`).join('')}</div><p class="sub">À la réception confirmée, le colis passe à Retourné. Le COD et les frais restent inchangés ; un colis non facturé entre dans la prochaine facture, sans créer de règlement automatique. Paid dépend d’un paiement réellement enregistré.</p>`;
- if(remise){const f=ctx.node.querySelector('#rp-receive-form');rpSubmit(ctx,f,payload=>api409(g=>api('/return-palettes/'+id+'/receive','POST',{...payload,revision:g?g.revision:d.revision}),async()=>({revision:(await api('/return-palettes/'+id)).revision})));f.elements.tracking.focus()}
+ ctx.node.querySelector('h2').textContent=d.reference;ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">RETOUR · HUB → VENDEUR</span><h3>${esc(d.client_name)}</h3><p>Départ : ${esc(d.source_name)} · ${esc(d.transport||'Transport non renseigné')}</p><p>${d.tracking_code?'Code suivi : '+esc(d.tracking_code)+' · ':''}${d.lots?d.lots+' lot(s) · ':''}${date(d.created_at)}</p></div>${rpBadge(d.status)}</div><div class="pp-progress"><strong>${d.received}<small> / ${d.count}</small></strong><div><b>colis physiquement remis au vendeur</b><span>${d.status==='Annulé'?'Annulée avant envoi.':(d.remaining?d.remaining+' restant(s) à remettre':'Aucun colis restant')}</span></div></div>${d.note?`<p class="form-hint" data-no-translate>${esc(d.note)}</p>`:''}${d.cancel_reason?`<p class="form-hint orange">Annulation : <span data-no-translate>${esc(d.cancel_reason)}</span></p>`:''}<div class="pp-actions">${!cl&&d.status==='Préparé'?`<button class="btn primary" onclick="rpAction(${id},'dispatch')">${icon('truck')}Confirmer l'envoi</button><button class="btn danger" onclick="rpAction(${id},'cancel')">Annuler le brouillon</button>`:''}${remise&&S.user.role!=='agent'?`<button class="btn" onclick="rpAction(${id},'receive-all')">${icon('checkcircle')}Remettre les ${d.remaining} restants</button>`:''}${((typeof rpCreator==="function"&&rpCreator(S?.user))||cl)&&["Préparé","En transit","Partiellement remis"].includes(d.status)?`<button class="btn danger" onclick="rpRefuseAsk(${id},'${esc(d.reference)}',${d.revision})">${icon('close')}Refuser le retour</button>`:''}<button class="btn" onclick="rpPrint(${id})">${icon('print')}Bon de retour / PDF</button><button class="btn" onclick="rpCSV(${id})">${icon('download')}CSV</button><button class="btn" onclick="openReturnPalette(${id})">${icon('refresh')}Actualiser</button></div>${remise?`<div id="rp-individual-receive-scan"></div>${S.user.role==='agent'&&!d.lines.length?'<p class="form-hint">Pour respecter la séparation des Hubs, le détail des colis expédiés reste masqué. Scannez le tracking du colis physiquement présenté puis validez la remise.</p>':''}`:d.status==='Préparé'?'<p class="form-hint">Le brouillon ne vaut pas envoi. Confirmez l\'envoi uniquement quand le véhicule a réellement quitté le hub.</p>':d.remaining&&d.status!=='Annulé'?`<p class="form-hint">La remise se confirme ici (Admin ou agent du hub ${esc(d.source_name)}). Les colis non remis restent attendus.</p>`:d.status==='Remis'?'<p class="form-hint">Retour terminé : tous les colis ont été physiquement remis au vendeur.</p>':''}${simpleTable(['Tracking','Destinataire / Ville','Remise','Statut actuel'],d.lines.map(l=>[rpParcelTrackingLink(l),`${esc(l.recipient)}<span class="sub">${esc(l.city)}</span>`,l.received_at?`<span class="tag good">Remis</span><span class="sub">${esc(opsDate(l.received_at))}</span>`:`<span class="tag ${d.status==='Annulé'?'bad':'warn'}">${d.status==='Annulé'?'Annulé':'À remettre'}</span>`,tag(l.current_status)]))}<h3 class="ops-subtitle">Historique de la palette</h3><div class="timeline">${d.audit.map(a=>`<div class="timeline-item"><b>${esc(a.action)}</b><small>${esc(a.actor)} · ${esc(opsDate(a.created_at))}</small>${a.details.trackings?`<p>${a.details.trackings.map(esc).join(' · ')}</p>`:''}</div>`).join('')}</div><p class="sub">À la réception confirmée, le colis passe à Retourné. Le COD et les frais restent inchangés ; un colis non facturé entre dans la prochaine facture, sans créer de règlement automatique. Paid dépend d’un paiement réellement enregistré.</p>`;
+ if(remise)rpBindIndividualReceive(ctx,id,d)
  }catch(e){ppError(ctx,e)}
 }
+function rpBindIndividualReceive(ctx,id,d){
+ const root=ctx.node.querySelector('#rp-individual-receive-scan');if(!root||typeof o24ScanCollector!=='function')return;
+ const isClient=S?.user?.role==='client',isAgent=S?.user?.role==='agent',blindAgentScan=isAgent&&['En transit','Partiellement remis'].includes(d.status),known=new Map((d.lines||[]).map(l=>[String(l.tracking||'').trim().toUpperCase(),l])),processed=new Set();
+ const collector=o24ScanCollector(root,{
+  id:'rp-individual-receive',label:'Scanner les colis remis au vendeur (lecteur USB, clavier ou caméra)',
+  placeholder:'Tracking ORIENTAL24 puis Entrée',inputMax:80,max:Math.max(1,Math.min(500,Number(d.remaining)||500)),
+  commitLabel:'Confirmer les remises',
+  hint:'Le lot reste en attente jusqu’à validation. Chaque colis passe à « Retourné » après confirmation physique.',
+  confirmText:isClient?'Je confirme avoir physiquement reçu les colis de ce retour.':'Je confirme avoir physiquement remis ces colis au vendeur '+(d.client_name||'')+'.',
+  confirmRequiredMessage:'Confirmez d’abord la remise ou la réception physique des colis.',
+  renderItem:item=>`<b>${esc(item.tracking)}</b><span class="sub">${esc(item.recipient||'')} · ${esc(item.city||'')}</span>`,
+  resolve:async code=>{
+   const tracking=String(code||'').trim(),key=tracking.toUpperCase(),line=known.get(key);
+   if(processed.has(key))throw Error('Ce colis a déjà été remis dans cette session.');
+   if(!line&&!blindAgentScan)throw Error('Ce tracking ne figure pas dans cette palette retour.');
+   if(line?.received_at)throw Error('Ce colis est déjà marqué remis.');
+   return {tracking:line?.tracking||tracking,recipient:line?.recipient||'',city:line?.city||''};
+  },
+  onCommit:async(items,control)=>{
+   let received=0,already=0;
+   for(const item of items){
+    if(!ctx.current())return;
+    try{
+     const fresh=await api('/return-palettes/'+id);
+     const current=(fresh.lines||[]).find(l=>String(l.tracking||'').toUpperCase()===item.tracking.toUpperCase());
+     if(current?.received_at){processed.add(item.tracking.toUpperCase());control.remove(item);already++;continue}
+     const hiddenAgentLine=isAgent&&['En transit','Partiellement remis','Remis'].includes(fresh.status);
+     if(!current&&!hiddenAgentLine)throw Error('Ce colis ne figure plus dans cette palette. Actualisez la fiche.');
+     const request_key=financeKey();
+     const result=await api409(revision=>api('/return-palettes/'+id+'/receive','POST',{
+      tracking:item.tracking,confirmed:true,request_key,revision:revision?revision.revision:fresh.revision
+     }),async()=>({revision:(await api('/return-palettes/'+id)).revision}));
+     processed.add(item.tracking.toUpperCase());control.remove(item);if(result.already_received)already++;else received++;
+    }catch(error){
+     if(ctx.current()){
+      const done=received+already;
+      control.setMessage('err',(done?`Remise partielle : ${done} colis déjà traités. `:'')+(error.message||'Remise impossible.'));
+      toast((done?`Remise partielle (${done} colis) · `:'')+(error.message||'Remise impossible.'),true);
+     }
+     return;
+    }
+   }
+   if(!ctx.current())return;
+   await refresh();if(!ctx.current())return;
+   await renderView();if(!ctx.current())return;
+   await openReturnPalette(id);
+   toast(`Remise confirmée : ${received} colis passé${received===1?'':'s'} à Retourné${already?' · '+already+' déjà remis':''} ✓`);
+  }
+ });
+ modalCleanup=()=>collector?.destroy();
+}
+
 async function rpAction(id,action){
  const ctx=rpContext(action==='dispatch'?'Confirmer l\'envoi du retour':action==='cancel'?'Annuler le brouillon':'Confirmer la remise complète au vendeur');
  try{const d=await api('/return-palettes/'+id);if(!ctx.current())return;const all=action==='receive-all';
