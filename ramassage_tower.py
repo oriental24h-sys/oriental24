@@ -141,15 +141,16 @@ def _row_dict(row):
 def register_ramassage_tower(app, s):
     conn, auth, user, now, Error = s['conn'], s['auth'], s['user'], s['now'], s['APIError']
 
-    def ensure_default_zones(c):
-        """Seed missing circular geofences for every pickup-enabled city with a known centroid.
+    def ensure_default_zones(c, hub_id=None):
+        """Seed missing circular geofences for pickup cities with a known centroid.
 
         Run this on requests as well as startup: an administrator can enable pickup for a
         city after the process has started, so startup-only seeding leaves the dropdown empty.
         Existing configured zones (including their radius and active flag) are never overwritten.
+        A Hub Manager seeds only cities owned by their Hub.
         """
         stamp = now()
-        for city in c.execute('SELECT id,name FROM cities WHERE pickup=1').fetchall():
+        for city in c.execute('SELECT id,name FROM cities WHERE pickup=1 AND (? IS NULL OR hub_id=?)',(hub_id,hub_id)).fetchall():
             center = _city_centroid(city['name'])
             if center:
                 c.execute('''INSERT OR IGNORE INTO ramassage_zones
@@ -175,7 +176,7 @@ def register_ramassage_tower(app, s):
         CREATE INDEX IF NOT EXISTS ramassage_clients_phone_idx ON ramassage_clients(phone);
         CREATE TABLE IF NOT EXISTS ramassage_jobs(
           id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL REFERENCES ramassage_clients(id),
-          city_id INTEGER NOT NULL REFERENCES cities(id),
+          city_id INTEGER NOT NULL REFERENCES cities(id), hub_id INTEGER REFERENCES ops_hubs(id),
           parcels_count INTEGER NOT NULL DEFAULT 1 CHECK(parcels_count BETWEEN 1 AND 10000),
           status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','assigned','en_route','picked_up','cancelled')),
           driver_id INTEGER REFERENCES users(id), created_by INTEGER REFERENCES users(id),
@@ -198,6 +199,9 @@ def register_ramassage_tower(app, s):
         );
         CREATE INDEX IF NOT EXISTS ramassage_notice_user_idx ON ops_notifications(user_id,id);
         ''')
+        job_columns={r['name'] for r in c.execute('PRAGMA table_info(ramassage_jobs)')}
+        if 'hub_id' not in job_columns:c.execute('ALTER TABLE ramassage_jobs ADD COLUMN hub_id INTEGER REFERENCES ops_hubs(id)')
+        c.execute('CREATE INDEX IF NOT EXISTS ramassage_jobs_hub_status_idx ON ramassage_jobs(hub_id,status,created_at DESC)')
         # The hub table predates the map; keep its existing records and add optional precise pins.
         if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ops_hubs'").fetchone():
             hubcols = {r['name'] for r in c.execute('PRAGMA table_info(ops_hubs)')}
@@ -221,17 +225,46 @@ def register_ramassage_tower(app, s):
                 hits.append((distance, dict(z)))
         return min(hits, key=lambda x: (x[0], x[1]['city_id']))[1] if hits else None
 
-    def zone_by_id(c, city_id):
+    def zone_by_id(c, city_id, hub_id=None):
         if city_id in (None, ''):
             return None
-        ensure_default_zones(c)
+        ensure_default_zones(c,hub_id=hub_id)
         return c.execute('''SELECT z.city_id,z.center_lat,z.center_lng,z.radius_km,ci.name
                             FROM ramassage_zones z JOIN cities ci ON ci.id=z.city_id
-                            WHERE z.city_id=? AND z.active=1 AND ci.pickup=1''', (int(city_id),)).fetchone()
+                            WHERE z.city_id=? AND z.active=1 AND ci.pickup=1
+                              AND (? IS NULL OR ci.hub_id=?)''', (int(city_id),hub_id,hub_id)).fetchone()
 
-    def map_driver_rows(c):
+    def local_hub_id(c, actor):
+        hub_id=actor.get('agent_hub_id')
+        if type(hub_id) is not int or hub_id<=0:raise Error('Ce compte n’est pas rattaché à un Hub actif.',403)
+        if not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():
+            raise Error('Le Hub de ce compte est inactif ou introuvable.',403)
+        return hub_id
+
+    def hub_city_ids(c, hub_id):
+        return [r['id'] for r in c.execute('SELECT id FROM cities WHERE hub_id=? AND pickup=1 ORDER BY id',(hub_id,))]
+
+    def zone_for_hub_point(c, hub_id, lat, lng, requested_city=None):
+        ensure_default_zones(c,hub_id=hub_id)
+        if requested_city not in (None, ''):
+            zone=zone_by_id(c,requested_city,hub_id=hub_id)
+            if not c.execute('SELECT 1 FROM cities WHERE id=? AND hub_id=? AND pickup=1',(zone['city_id'] if zone else requested_city,hub_id)).fetchone():
+                raise Error('La ville sélectionnée est hors de la zone de votre Hub.',403)
+            return zone
+        hits=[]
+        for z in c.execute('''SELECT z.city_id,z.center_lat,z.center_lng,z.radius_km,ci.name
+            FROM ramassage_zones z JOIN cities ci ON ci.id=z.city_id
+            WHERE z.active=1 AND ci.pickup=1 AND ci.hub_id=?''',(hub_id,)):
+            distance=haversine((lat,lng),(z['center_lat'],z['center_lng']))
+            if distance<=float(z['radius_km']):hits.append((distance,dict(z)))
+        return min(hits,key=lambda x:(x[0],x[1]['city_id']))[1] if hits else None
+
+    def map_driver_rows(c, hub_id=None):
         result = []
-        base = c.execute("SELECT id,name,phone,driver_city_id FROM users WHERE role='livreur' AND active=1 ORDER BY name").fetchall()
+        if hub_id is None:
+            base = c.execute("SELECT id,name,phone,driver_city_id FROM users WHERE role='livreur' AND active=1 ORDER BY name").fetchall()
+        else:
+            base = c.execute("SELECT id,name,phone,driver_city_id FROM users WHERE role='livreur' AND active=1 AND driver_hub_id=? ORDER BY name",(hub_id,)).fetchall()
         for d in base:
             p = c.execute('SELECT lat,lng,city_id,created_at FROM driver_positions WHERE driver_id=? ORDER BY id DESC LIMIT 1', (d['id'],)).fetchone()
             state = c.execute('SELECT availability,full_load,gps_enabled,battery_pct,updated_at FROM ramassage_driver_state WHERE driver_id=?', (d['id'],)).fetchone()
@@ -273,8 +306,8 @@ def register_ramassage_tower(app, s):
             })
         return result
 
-    def eligible_candidates(c, city_id, client_lat, client_lng):
-        drivers = map_driver_rows(c)
+    def eligible_candidates(c, city_id, client_lat, client_lng, hub_id=None):
+        drivers = map_driver_rows(c,hub_id=hub_id)
         eligible = []
         for d in drivers:
             if (not d['online'] or d['gps_state'] != 'enabled' or d['status'] != 'available'
@@ -294,18 +327,26 @@ def register_ramassage_tower(app, s):
         c.execute('INSERT INTO ops_notifications(user_id,parcel_id,title,body,created_at) VALUES(?,NULL,?,?,?)',
                   (driver_id, title, body, now()))
 
-    def assign_job(c, job_id, driver_id):
-        job = c.execute('''SELECT j.*,rc.name client_name,rc.phone client_phone,rc.lat,rc.lng,rc.maps_url,rc.city_id client_city_id
-                           FROM ramassage_jobs j JOIN ramassage_clients rc ON rc.id=j.client_id WHERE j.id=?''', (job_id,)).fetchone()
+    def assign_job(c, job_id, driver_id, hub_id=None):
+        job = c.execute('''SELECT j.*,ci.hub_id city_hub_id,rc.name client_name,rc.phone client_phone,rc.lat,rc.lng,rc.maps_url,rc.city_id client_city_id
+                           FROM ramassage_jobs j JOIN ramassage_clients rc ON rc.id=j.client_id
+                           LEFT JOIN cities ci ON ci.id=j.city_id WHERE j.id=?''', (job_id,)).fetchone()
         if not job:
             raise Error('Demande de ramassage introuvable.', 404)
+        assigned_hub=job['hub_id'] or job['city_hub_id']
+        if hub_id is not None and assigned_hub!=hub_id:
+            raise Error('Demande hors de la zone de votre Hub.',404)
+        if hub_id is not None and job['driver_id']:
+            assigned_driver=c.execute("SELECT driver_hub_id FROM users WHERE id=? AND role='livreur'",(job['driver_id'],)).fetchone()
+            if not assigned_driver or assigned_driver['driver_hub_id']!=hub_id:
+                raise Error('Demande introuvable dans votre Hub.',404)
         if job['status'] not in ('pending', 'assigned'):
             raise Error('Cette demande ne peut plus être affectée.', 409)
         if job['status'] == 'assigned' and job['driver_id'] == driver_id:
             return {'already_assigned': True, 'driver_id': driver_id}
         if job['status'] == 'assigned' and job['driver_id'] != driver_id:
             raise Error('Cette demande est déjà affectée à un autre livreur.', 409)
-        candidates = eligible_candidates(c, job['city_id'], job['lat'], job['lng'])
+        candidates = eligible_candidates(c, job['city_id'], job['lat'], job['lng'],hub_id=hub_id)
         target = next((x for x in candidates if x['id'] == int(driver_id)), None)
         if not target:
             raise Error('Livreur non éligible : vérifiez GPS actif, disponibilité, véhicule, charge et zone.', 409)
@@ -318,12 +359,18 @@ def register_ramassage_tower(app, s):
         return {'already_assigned': False, 'driver_id': driver_id,
                 'driver': target['name'], 'distance_km': target['distance_km'], 'eta_min': target['eta_min']}
 
-    def tower_payload():
+    def tower_payload(hub_id=None):
         with conn() as c:
-            ensure_default_zones(c)
+            ensure_default_zones(c,hub_id=hub_id)
+            hub_row=None
+            if hub_id is not None:
+                hub_row=c.execute('''SELECT h.id,h.name,h.city_id,ci.name city FROM ops_hubs h
+                    JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1''',(hub_id,)).fetchone()
+                if not hub_row:raise Error('Le Hub de ce compte est inactif ou introuvable.',403)
             zones = [dict(r) for r in c.execute('''SELECT z.city_id,ci.name city,z.center_lat,z.center_lng,z.radius_km,z.active
-                  FROM ramassage_zones z JOIN cities ci ON ci.id=z.city_id WHERE ci.pickup=1 ORDER BY ci.name''')]
-            cities = [dict(r) for r in c.execute('''SELECT id,name FROM cities WHERE pickup=1 ORDER BY name''')]
+                  FROM ramassage_zones z JOIN cities ci ON ci.id=z.city_id
+                  WHERE ci.pickup=1 AND (? IS NULL OR ci.hub_id=?) ORDER BY ci.name''',(hub_id,hub_id))]
+            cities = [dict(r) for r in c.execute('''SELECT id,name FROM cities WHERE pickup=1 AND (? IS NULL OR hub_id=?) ORDER BY name''',(hub_id,hub_id))]
             for city in cities:
                 zone = next((z for z in zones if z['city_id'] == city['id']), None)
                 city['zone_ready'] = bool(zone and zone['active'])
@@ -332,14 +379,18 @@ def register_ramassage_tower(app, s):
                 city['zone_radius_km'] = zone['radius_km'] if zone else None
             clients = []
             for r in c.execute('''SELECT rc.*,ci.name zone FROM ramassage_clients rc LEFT JOIN cities ci ON ci.id=rc.city_id
-                                  ORDER BY rc.updated_at DESC,rc.id DESC LIMIT 300'''):
+                                  WHERE (? IS NULL OR ci.hub_id=?) ORDER BY rc.updated_at DESC,rc.id DESC LIMIT 300''',(hub_id,hub_id)):
                 clients.append(dict(r))
             jobs = []
-            for r in c.execute('''SELECT j.id,j.client_id,j.city_id,j.parcels_count,j.status,j.driver_id,j.created_at,j.assigned_at,j.picked_up_at,j.updated_at,
-                                         rc.name client_name,rc.phone,rc.lat,rc.lng,rc.maps_url,ci.name zone,d.name driver_name
+            for r in c.execute('''SELECT j.id,j.client_id,j.city_id,j.hub_id,j.parcels_count,j.status,
+                                         CASE WHEN ? IS NULL OR d.driver_hub_id=? THEN j.driver_id ELSE NULL END driver_id,
+                                         j.created_at,j.assigned_at,j.picked_up_at,j.updated_at,
+                                         rc.name client_name,rc.phone,rc.lat,rc.lng,rc.maps_url,ci.name zone,
+                                         CASE WHEN ? IS NULL OR d.driver_hub_id=? THEN d.name ELSE NULL END driver_name
                                   FROM ramassage_jobs j JOIN ramassage_clients rc ON rc.id=j.client_id
                                   LEFT JOIN cities ci ON ci.id=j.city_id LEFT JOIN users d ON d.id=j.driver_id
-                                  ORDER BY CASE WHEN j.status IN ('pending','assigned','en_route') THEN 0 ELSE 1 END,j.created_at DESC,j.id DESC LIMIT 100'''):
+                                  WHERE (? IS NULL OR COALESCE(j.hub_id,ci.hub_id)=?)
+                                  ORDER BY CASE WHEN j.status IN ('pending','assigned','en_route') THEN 0 ELSE 1 END,j.created_at DESC,j.id DESC LIMIT 100''',(hub_id,hub_id,hub_id,hub_id,hub_id,hub_id)):
                 row = dict(r)
                 row['client'] = {'id': row.pop('client_id'), 'name': row.pop('client_name'),
                                  'phone': row.pop('phone'), 'lat': row.pop('lat'), 'lng': row.pop('lng'),
@@ -347,7 +398,8 @@ def register_ramassage_tower(app, s):
                 jobs.append(row)
             hubs = []
             for r in c.execute('''SELECT h.id,h.name,h.city_id,h.address,h.active,h.lat,h.lng,ci.name city
-                                  FROM ops_hubs h LEFT JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 ORDER BY h.name'''):
+                                  FROM ops_hubs h LEFT JOIN cities ci ON ci.id=h.city_id
+                                  WHERE h.active=1 AND (? IS NULL OR h.id=?) ORDER BY h.name''',(hub_id,hub_id)):
                 row = dict(r)
                 exact = row['lat'] is not None and row['lng'] is not None
                 if not exact:
@@ -358,19 +410,22 @@ def register_ramassage_tower(app, s):
                 hubs.append(row)
             setting = c.execute("SELECT value FROM ramassage_settings WHERE key='auto_dispatch'").fetchone()
             auto_dispatch = bool(setting and setting['value'] == '1')
-            drivers = map_driver_rows(c)
+            drivers = map_driver_rows(c,hub_id=hub_id)
             gps_alerts = [d for d in drivers if d['gps_state'] == 'disabled' and d['pos'] and d['pos']['ago_sec'] <= 3600]
         return {'map_drivers': drivers, 'ramassage_clients': clients, 'ramassage_jobs': jobs,
                 'hubs': hubs, 'zones': zones, 'pickup_cities': cities,
                 'auto_dispatch': auto_dispatch, 'gps_alerts': gps_alerts,
-                'map_refresh_seconds': 8}
+                'map_refresh_seconds': 8, 'hub_scope_id': hub_id,
+                'manager_hub': dict(hub_row) if hub_row else None}
 
     app.o24_ramassage_tower_payload = tower_payload
 
     @app.get('/api/control-tower/map-data')
-    @auth('admin')
+    @auth('admin','agent')
     def ramassage_map_data():
-        return jsonify(**tower_payload())
+        actor=user()
+        with conn() as c:hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+        return jsonify(**tower_payload(hub_id))
 
     @app.patch('/api/control-tower/settings')
     @auth('admin')
@@ -422,7 +477,7 @@ def register_ramassage_tower(app, s):
         return jsonify(ok=True, lat=lat, lng=lng)
 
     @app.post('/api/control-tower/ramassage')
-    @auth('admin')
+    @auth('admin','agent')
     def ramassage_create():
         d = request.get_json(silent=True) or {}
         name = str(d.get('name') or '').strip()[:100]
@@ -449,9 +504,12 @@ def register_ramassage_tower(app, s):
         actor = user()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
-            zone = zone_by_id(c, requested_city) if requested_city else zone_for_point(c, lat, lng)
+            manager_hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+            if manager_hub_id is not None:
+                zone=zone_for_hub_point(c,manager_hub_id,lat,lng,requested_city)
+            else:zone = zone_by_id(c, requested_city) if requested_city else zone_for_point(c, lat, lng)
             if not zone:
-                raise Error('Zone introuvable pour ces coordonnées. Choisissez une ville avec une zone configurée.')
+                raise Error('Zone introuvable pour ces coordonnées dans le périmètre autorisé. Choisissez une ville avec une zone configurée.')
             distance_to_zone = haversine((lat, lng), (zone['center_lat'], zone['center_lng']))
             if distance_to_zone > float(zone['radius_km']):
                 raise Error(f"Le point est hors de la zone {zone['name']} ({distance_to_zone:.1f} km du centre, rayon {zone['radius_km']:.0f} km). Ajustez la zone ou choisissez la bonne ville.")
@@ -470,16 +528,16 @@ def register_ramassage_tower(app, s):
                 client_id = c.execute('''INSERT INTO ramassage_clients(name,phone,lat,lng,maps_url,city_id,created_at,updated_at)
                                          VALUES(?,?,?,?,?,?,?,?)''',
                                       (name, phone, lat, lng, normalized_url, zone['city_id'], now(), now())).lastrowid
-            job_id = c.execute('''INSERT INTO ramassage_jobs(client_id,city_id,parcels_count,status,created_by,created_at,updated_at)
-                                  VALUES(?,?,?,'pending',?,?,?)''',
-                               (client_id, zone['city_id'], parcels_count, actor['id'], now(), now())).lastrowid
+            job_id = c.execute('''INSERT INTO ramassage_jobs(client_id,city_id,hub_id,parcels_count,status,created_by,created_at,updated_at)
+                                  VALUES(?,?,?,?, 'pending',?,?,?)''',
+                               (client_id, zone['city_id'], manager_hub_id or c.execute('SELECT hub_id FROM cities WHERE id=?',(zone['city_id'],)).fetchone()['hub_id'], parcels_count, actor['id'], now(), now())).lastrowid
             setting = c.execute("SELECT value FROM ramassage_settings WHERE key='auto_dispatch'").fetchone()
             auto = bool(setting and setting['value'] == '1')
             assignment = None
             if auto:
-                choices = eligible_candidates(c, zone['city_id'], lat, lng)
+                choices = eligible_candidates(c, zone['city_id'], lat, lng,hub_id=manager_hub_id)
                 if choices:
-                    assignment = assign_job(c, job_id, choices[0]['id'])
+                    assignment = assign_job(c, job_id, choices[0]['id'],hub_id=manager_hub_id)
                 # If there is no suitable driver, keep the request pending for manual follow-up.
         return jsonify(ok=True, job_id=job_id, client_id=client_id, city=zone['name'],
                        lat=lat, lng=lng, maps_url=normalized_url,
@@ -487,27 +545,31 @@ def register_ramassage_tower(app, s):
                        warning=None if assignment or not auto else 'Aucun livreur en ligne, disponible et adapté dans cette zone; demande conservée sans affectation.')
 
     @app.get('/api/control-tower/ramassage/<int:job_id>/candidates')
-    @auth('admin')
+    @auth('admin','agent')
     def ramassage_candidates(job_id):
+        actor=user()
         with conn() as c:
-            job = c.execute('''SELECT j.id,j.city_id,rc.lat,rc.lng FROM ramassage_jobs j
-                               JOIN ramassage_clients rc ON rc.id=j.client_id WHERE j.id=?''', (job_id,)).fetchone()
-            if not job:
-                raise Error('Demande de ramassage introuvable.', 404)
-            rows = eligible_candidates(c, job['city_id'], job['lat'], job['lng'])
+            manager_hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+            job = c.execute('''SELECT j.id,j.city_id,j.hub_id,ci.hub_id city_hub_id,rc.lat,rc.lng FROM ramassage_jobs j
+                               JOIN ramassage_clients rc ON rc.id=j.client_id LEFT JOIN cities ci ON ci.id=j.city_id WHERE j.id=?''', (job_id,)).fetchone()
+            if not job or (manager_hub_id is not None and (job['hub_id'] or job['city_hub_id'])!=manager_hub_id):
+                raise Error('Demande de ramassage introuvable dans votre Hub.', 404)
+            rows = eligible_candidates(c, job['city_id'], job['lat'], job['lng'],hub_id=manager_hub_id)
         return jsonify(job_id=job_id, candidates=rows)
 
     @app.post('/api/control-tower/ramassage/<int:job_id>/assign')
-    @auth('admin')
+    @auth('admin','agent')
     def ramassage_assign(job_id):
         d = request.get_json(silent=True) or {}
         try:
             driver_id = int(d.get('driver_id'))
         except (TypeError, ValueError):
             raise Error('Sélectionnez un livreur valide.')
+        actor=user()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
-            assignment = assign_job(c, job_id, driver_id)
+            manager_hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+            assignment = assign_job(c, job_id, driver_id,hub_id=manager_hub_id)
         return jsonify(ok=True, job_id=job_id, assignment=assignment)
 
     @app.get('/api/driver/tower-status')
@@ -589,16 +651,21 @@ def register_ramassage_tower(app, s):
         return jsonify(ok=True, status=status)
 
     @app.get('/api/control-tower/route-history/<int:driver_id>')
-    @auth('admin')
+    @auth('admin','agent')
     def ramassage_route_history(driver_id):
         day = str(request.args.get('date') or datetime.now().date().isoformat())
         try:
             datetime.strptime(day, '%Y-%m-%d')
         except ValueError:
             raise Error('Date invalide; utilisez AAAA-MM-JJ.')
+        actor=user()
         with conn() as c:
-            if not c.execute("SELECT 1 FROM users WHERE id=? AND role='livreur'", (driver_id,)).fetchone():
-                raise Error('Livreur introuvable.', 404)
+            manager_hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+            if manager_hub_id is None:
+                driver_ok=c.execute("SELECT 1 FROM users WHERE id=? AND role='livreur'",(driver_id,)).fetchone()
+            else:
+                driver_ok=c.execute("SELECT 1 FROM users WHERE id=? AND role='livreur' AND driver_hub_id=?",(driver_id,manager_hub_id)).fetchone()
+            if not driver_ok:raise Error('Livreur introuvable dans votre Hub.',404)
             rows = [dict(r) for r in c.execute('''SELECT lat,lng,created_at FROM driver_positions
                          WHERE driver_id=? AND substr(created_at,1,10)=? ORDER BY id LIMIT 10000''', (driver_id, day))]
         return jsonify(driver_id=driver_id, date=day, points=rows, count=len(rows), retention_days=POSITION_RETENTION_DAYS)

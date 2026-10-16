@@ -431,7 +431,7 @@ const menu = [
     [
       ["dashboard", "grid", "Tableau de bord"],
       ["analytics", "chart", "Statistiques", ["admin"]],
-      ["tour", "pin", "Tour de contrôle", ["admin"]],
+      ["tour", "pin", "Tour de contrôle", ["admin", "agent"]],
     ],
   ],
   [
@@ -495,7 +495,7 @@ function shell() {
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
           ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${t}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
@@ -507,7 +507,7 @@ function shell() {
 async function navigate(v) {
   if (!S) return;
   // Responsable de hub : navigation limitée aux tâches et vues explicitement sûres.
-  if (S.user.role==='agent'&&!['parcels','documents','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
+  if (S.user.role==='agent'&&!['parcels','documents','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
   if (S.user.role==='support'&&!['support-orders','profile'].includes(v)) v='support-orders';
   if (S.user.role === "livreur" && ["parcels","dashboard","print"].includes(v)) { try { const owner=S.user.id,fresh=await api("/bootstrap"); if(S?.user?.id!==owner||fresh.user.id!==owner)return; S=fresh; } catch(e) {toast(e.message,true);return;} }
   view = v;
@@ -591,7 +591,7 @@ async function renderView(background = false) {
         html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Retours vendeurs","La gestion des retours vendeurs nécessite la version serveur.") : returnPalettesView(await api("/return-palettes?"+rpQuery()));
         break;
       case "palette-hub":
-        html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Palettes","Les palettes inter-hubs nécessitent la version serveur.") : hubPalletsView(await api("/logistics/documents"));
+        html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Palettes","Les palettes inter-hubs nécessitent la version serveur.") : hubPalletsView(await api("/logistics/palettes?"+hubPaletteQuery()));
         break;
       case "alerts":
         html = alertsView(await api("/alerts"));
