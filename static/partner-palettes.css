@@ -219,3 +219,31 @@
 .pc-recovered-check span{font-size:12px;line-height:1.5;color:#26374e}
 .pp-search-match{display:block!important;margin-top:4px;color:#a95a13!important;font-weight:650}
 @media(max-width:720px){.pc-exceptions-summary{align-items:flex-start}.pc-exception-grid{grid-template-columns:minmax(0,1fr)}.pc-exceptions-list{max-height:62vh}.pc-exception-origin{align-items:flex-start}.pc-exception-foot{flex-wrap:wrap}.pc-exception-foot .tag{margin-right:0}.pc-exception-receive{flex:1 1 100%;min-height:38px}.pc-recovered-check{padding:11px}.pc-recovered-confirm .form-actions{align-items:stretch}.pc-recovered-confirm .form-actions button{flex:1 1 100%}}
+
+/* Shared A1-style collector used by individual receipt workflows. */
+.o24-scan-batch{display:flex;flex-direction:column;gap:12px;margin:8px 0 14px}
+.o24-scan-batch .pp-rxbox{width:100%;text-align:left}
+.o24-scan-batch .pp-rx-entry{align-items:center}
+.o24-scan-camera-slot{display:flex;align-items:center;gap:7px;flex:0 0 auto;white-space:nowrap}
+.o24-scan-list{margin:0;max-height:300px;overflow:auto}
+.o24-scan-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:12.5px}
+.o24-scan-row:last-child{border-bottom:0}
+.o24-scan-row-content{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px;overflow-wrap:anywhere}
+.o24-scan-confirm{margin:0;text-align:left;line-height:1.6}
+.o24-scan-confirm input{flex:0 0 auto}
+.o24-scan-validate{margin:0}
+.o24-scan-validate p{margin:0}
+.o24-scan-validate .btn{max-width:520px}
+.o24-scan-validate .btn:disabled{opacity:.48;cursor:not-allowed}
+@media(max-width:720px){
+ .o24-scan-batch .pp-rx-entry{display:grid;grid-template-columns:1fr 1fr}
+ .o24-scan-batch .pp-rx-entry>input{grid-column:1/-1;min-width:0}
+ .o24-scan-batch .pp-rx-entry>.btn{width:100%}
+ .o24-scan-batch .o24-scan-camera-slot{display:contents}
+ .o24-scan-batch .o24-scan-camera-slot>.btn{width:100%}
+ .o24-scan-batch .pp-rx-cam video{max-height:230px}
+}
+@media(max-width:400px){
+ .o24-scan-batch .pp-rx-entry{grid-template-columns:1fr}
+ .o24-scan-batch .pp-rx-entry>input{grid-column:auto}
+}

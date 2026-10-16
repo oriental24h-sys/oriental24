@@ -9,6 +9,7 @@ from functools import wraps
 from flask import Flask, g, jsonify, request
 
 from logistics import register_logistics
+from return_palettes import register_return_palettes
 
 
 class APIError(Exception):
@@ -152,6 +153,7 @@ class HubPaletteFlowTests(unittest.TestCase):
             ''')
 
         register_logistics(self.app, services)
+        register_return_palettes(self.app, services)
         # register_security runs later in app.py; its service is added to this same dict.
         services['security_revoke_user']=security_revoke_user
         self.conn = conn
@@ -296,6 +298,75 @@ class HubPaletteFlowTests(unittest.TestCase):
     def test_secondary_hub_cannot_send_directly_to_another_secondary(self):
         response=self.create_palette('agent',10,'standard',10,20,[3],910)
         self.assertEqual(response.status_code,409,response.get_json())
+
+    def test_return_palette_agent_details_fail_closed_after_dispatch(self):
+        with self.conn() as c:
+            c.execute('CREATE TABLE IF NOT EXISTS account_dossiers(user_id INTEGER PRIMARY KEY,legal_name TEXT NOT NULL DEFAULT \'\',billing_address TEXT NOT NULL DEFAULT \'\')')
+            line_columns={row['name'] for row in c.execute('PRAGMA table_info(ops_document_lines)')}
+            if 'missing_at' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN missing_at TEXT')
+            c.execute("INSERT INTO users(id,name,email,password,role,company,phone,active) VALUES(300,'Vendor','vendor@example.test','x','client','Vendor Co','0600000300',1)")
+            c.executemany('''INSERT INTO parcels(id,tracking,recipient,status,amount,client_id,city_id,note,created_at,updated_at,current_hub_id,origin_hub_id)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',[
+                (6,'TRK-LOCAL-RET','Local Recipient','Refusé',25,300,2,'','2026-01-01','2026-01-01',10,10),
+                (7,'TRK-OTHER-HUB','Other Hub Recipient','Refusé',35,300,2,'','2026-01-01','2026-01-01',20,20),
+                (8,'TRK-IN-TRANSIT','Transit Recipient','Refusé',45,300,2,'','2026-01-01','2026-01-01',10,10),
+                (9,'TRK-DELIVERED-RETURN','Delivered Recipient','Retourné',55,300,2,'','2026-01-01','2026-01-01',None,10),
+            ])
+            c.executemany('''INSERT INTO ops_documents(id,reference,kind,client_id,destination_hub_id,client_name,source_name,destination_name,status,revision,note,created_by,created_at)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',[
+                (600,'PR-000600','return_palette',300,10,'Vendor Co','Hub A','Vendor Co','Préparé',1,'',910,'2026-01-01'),
+                (601,'PR-000601','return_palette',300,10,'Vendor Co','Hub A','Vendor Co','En transit',3,'',910,'2026-01-01'),
+            ])
+            c.executemany('INSERT INTO return_palette_meta(document_id,transport,tracking_code,lots) VALUES(?,?,?,?)',[
+                (600,'Transport A','RET-CARRIER-600',1),(601,'Transport A','RET-CARRIER-601',1),
+            ])
+            c.executemany('''INSERT INTO ops_document_lines(document_id,parcel_id,tracking,recipient,city,initial_status,received_at,active)
+                             VALUES(?,?,?,?,?,?,?,?)''',[
+                (600,6,'TRK-LOCAL-RET','Local Recipient','Secondary A','Refusé',None,1),
+                (600,7,'TRK-OTHER-HUB','Other Hub Recipient','Secondary A','Refusé',None,1),
+                (601,8,'TRK-IN-TRANSIT','Transit Recipient','Secondary A','Refusé',None,1),
+                (601,9,'TRK-DELIVERED-RETURN','Delivered Recipient','Secondary A','Retourné','2026-01-03',0),
+            ])
+            c.execute('''INSERT INTO ops_audit(document_id,actor_id,action,details,created_at)
+                         VALUES(601,910,'Remise partielle',?,?)''',
+                      ('{"parcel_ids":[8,9],"trackings":["TRK-IN-TRANSIT","TRK-DELIVERED-RETURN"],"status_changes":[],"count":1}', '2026-01-03'))
+
+        prepared=self.client.get('/api/return-palettes/600',headers=self.headers('agent',10,910))
+        self.assertEqual(prepared.status_code,200,prepared.get_json())
+        self.assertEqual([line['tracking'] for line in prepared.get_json()['lines']],['TRK-LOCAL-RET'])
+        self.assertEqual((prepared.get_json()['count'],prepared.get_json()['remaining']),(2,2))
+
+        dispatched=self.client.get('/api/return-palettes/601',headers=self.headers('agent',10,910))
+        self.assertEqual(dispatched.status_code,200,dispatched.get_json())
+        self.assertEqual(dispatched.get_json()['lines'],[])
+        self.assertEqual((dispatched.get_json()['count'],dispatched.get_json()['received'],dispatched.get_json()['remaining']),(2,1,1))
+        audit_details=dispatched.get_json()['audit'][0]['details']
+        self.assertNotIn('parcel_ids',audit_details);self.assertNotIn('trackings',audit_details)
+        self.assertNotIn('status_changes',audit_details)
+        csv_response=self.client.get('/api/return-palettes/601/csv',headers=self.headers('agent',10,910))
+        self.assertEqual(csv_response.status_code,200)
+        for tracking in ('TRK-IN-TRANSIT','TRK-DELIVERED-RETURN'):
+            self.assertNotIn(tracking,csv_response.get_data(as_text=True))
+
+        local_search=self.client.get('/api/return-palettes?q=TRK-LOCAL-RET',headers=self.headers('agent',10,910))
+        self.assertEqual(local_search.status_code,200,local_search.get_json())
+        self.assertEqual(local_search.get_json()['total'],1)
+        self.assertEqual(local_search.get_json()['rows'][0]['tracking_matches'][0]['tracking'],'TRK-LOCAL-RET')
+        for hidden_tracking in ('TRK-IN-TRANSIT','TRK-DELIVERED-RETURN','TRK-OTHER-HUB'):
+            with self.subTest(tracking=hidden_tracking):
+                hidden_search=self.client.get('/api/return-palettes?q='+hidden_tracking,headers=self.headers('agent',10,910))
+                self.assertEqual(hidden_search.status_code,200,hidden_search.get_json())
+                self.assertEqual(hidden_search.get_json()['total'],0)
+                self.assertEqual(hidden_search.get_json()['rows'],[])
+        admin_detail=self.client.get('/api/return-palettes/601',headers=self.headers('admin'))
+        self.assertEqual(admin_detail.status_code,200,admin_detail.get_json())
+        self.assertEqual({line['tracking'] for line in admin_detail.get_json()['lines']},{'TRK-IN-TRANSIT','TRK-DELIVERED-RETURN'})
+        blind_scan=self.client.post('/api/return-palettes/601/receive',json={
+            'tracking':'TRK-IN-TRANSIT','confirmed':True,'revision':3,
+            'request_key':'agentreturnscan0000000001',
+        },headers=self.headers('agent',10,910))
+        self.assertEqual(blind_scan.status_code,200,blind_scan.get_json())
+        self.assertEqual(blind_scan.get_json()['received'],1)
 
 
 if __name__=='__main__':

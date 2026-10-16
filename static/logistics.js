@@ -170,24 +170,121 @@ async function newOpsDocument(kind='pickup',fixedKind=false){
  bindForm(async d=>{const parcel_ids=[...$('#ops-parcel-list').selectedOptions].map(o=>Number(o.value));const r=await api('/logistics/documents','POST',{...d,parcel_ids});await refresh();await renderView();await openOpsDocument(r.id);toast('Document créé, colis rattachés')});
  }catch(e){toast(e.message,true)}
 }
-async function openOpsDocument(id){
+async function openOpsDocument(id,scanState={}){
  try{
   opsDoc=await api('/logistics/documents/'+id);
+  if(scanState.owner!==undefined&&S?.user?.id!==scanState.owner)return;
+  if(scanState.runState&&!scanState.runState.active&&!scanState.runState.internal)return;
   if(opsDoc.kind==='partner_palette')return openPartnerPalette(id);
   const d=opsDoc,admin=S.user.role==='admin',hubManager=S.user.role==='agent',myHubId=Number(S.user.agent_hub_id)||0;
   const canScanDeparture=admin||(hubManager&&d.kind==='transfer'&&Number(d.source_hub_id)===myHubId);
   const canScanArrival=admin||(hubManager&&d.kind==='transfer'&&Number(d.destination_hub_id)===myHubId);
+  const departurePending=scanState.departure||[],receivePending=scanState.receive||[];
   const departureProgress=d.departure_scan_required?`<div class="ops-receipt-count"><strong>${d.departure_scanned} / ${d.count}</strong><span>colis scannés pour le départ${d.departure_reconciled_count?` · ${d.departure_reconciled_count} retiré(s) du manifeste`:''}</span></div>`:'';
-  const departureForm=canScanDeparture&&d.kind==='transfer'&&d.departure_scan_required&&['Préparé','Départ partiel'].includes(d.status)?`<form id="ops-departure-scan-form" class="ops-scan-form"><div class="form-error"></div><label for="ops-departure-tracking">Scan de sortie · colis au Hub de départ</label><div class="flex"><input id="ops-departure-tracking" name="tracking" placeholder="O24-…" required autocomplete="off"><button type="submit" class="btn primary">${icon('scan')}Scanner le colis</button></div><small>Le scan vérifie le colis au Hub source et le déclare en transit. Le dernier scan fait passer le manifeste en transit complet.</small></form>`:'';
+  const departureForm=canScanDeparture&&d.kind==='transfer'&&d.departure_scan_required&&(['Préparé','Départ partiel'].includes(d.status)||departurePending.length)?`<section class="ops-scan-form"><div id="ops-departure-scan"></div><small>Le lot reste local jusqu’à validation. Chaque scan de sortie est ensuite enregistré individuellement; le dernier scan requis confirme le départ complet.</small></section>`:'';
   const canReceive=['En transit','Partiellement reçu','Départ partiel'].includes(d.status);
-  const receiveForm=canScanArrival&&canReceive?`<form id="ops-receive-form" class="ops-scan-form"><div class="form-error"></div><label for="ops-tracking">Scanner ou saisir la référence du colis reçu</label><div class="flex"><input id="ops-tracking" name="tracking" placeholder="O24-…" required autocomplete="off"><button type="submit" class="btn primary">${icon('check')}Recevoir</button></div><small>Contrôlez physiquement l’arrivée. Seul un colis déjà scanné en sortie peut être reçu; un scan répété ne crée pas de doublon.</small></form>`:'';
+  const receiveForm=canScanArrival&&(canReceive||receivePending.length)?`<section class="ops-scan-form"><div id="ops-receive-scan"></div><small>Contrôlez physiquement l’arrivée avant de valider. Chaque colis est vérifié individuellement côté serveur; un scan répété ne crée pas de doublon.</small></section>`:'';
   const lines=simpleTable(['Colis','Destinataire / Ville','Statut à la préparation','Scan de sortie','Réception'],d.lines.map(l=>[esc(l.tracking),`${esc(l.recipient)}<span class="sub">${esc(l.city)}</span>`,tag(l.initial_status),d.departure_scan_required?(l.departure_reconciled_at?`<span class="tag warn">Resté au Hub · ${opsDate(l.departure_reconciled_at)}</span>${admin&&l.departure_reconciliation_reason?`<span class="sub ops-wrap">Motif : ${esc(l.departure_reconciliation_reason)}</span>`:''}`:l.departure_scanned_at?`<span class="green">Scanné · ${opsDate(l.departure_scanned_at)}</span>`:'À scanner'):'—',l.departure_reconciled_at?'<span class="sub">Retiré du transfert</span>':l.received_at?`<span class="green">${opsDate(l.received_at)}</span>`:'En attente']));
   const actions=(admin&&d.status==='Préparé'?`<button class="btn danger" onclick="opsDocAction('cancel')">Annuler le bon</button>${d.departure_scan_required?'':`<button class="btn primary" onclick="opsDocAction('dispatch')">${icon('truck')}Confirmer le départ</button>`}`:'')+(admin&&d.kind==='transfer'&&d.departure_scan_required&&d.status==='Départ partiel'&&d.lines.some(l=>l.active&&!l.departure_scanned_at&&!l.departure_reconciled_at)?`<button class="btn danger" onclick="opsReconcileDeparture(${id})">${icon('alert')}Réconcilier les colis restés au Hub</button>`:'');
+  const runState=scanState.runState||{active:true,internal:false,inProgress:false,collectors:[]};
+  if(runState.active===undefined)runState.active=true;
+  if(runState.inProgress===undefined)runState.inProgress=false;
+  if(!runState.completedTrackings)runState.completedTrackings=new Set();
+  runState.collectors=[];
+  if(runState.internal)runState.internal=false;
+  runState.owner=scanState.owner??S?.user?.id;
+  runState.onCleanup=()=>{if(!runState.internal)runState.active=false};
+  runState.register=collector=>{if(collector)runState.collectors.push(collector)};
+  runState.setCollectorsBusy=value=>runState.collectors.forEach(collector=>collector?.setBusy(value));
+  const openInternally=async(mode,pending,busy)=>{
+   await openOpsDocument(id,{[mode]:pending,busy,runState,owner:runState.owner});
+  };
+  const commitScans=async(mode,items,control)=>{
+   if(runState.inProgress){control.setMessage('err','Une validation est déjà en cours pour ce document.');return}
+   runState.inProgress=true;runState.setCollectorsBusy(true);
+   let pending=items.slice(),completed=0,already=0;
+   try{
+    for(const item of items){
+     if(!runState.active||S?.user?.id!==runState.owner)return;
+     const action=mode==='departure'?'departure-scan':'receive';
+     const result=await api('/logistics/documents/'+id+'/'+action,'POST',{tracking:item.tracking});
+     pending=pending.filter(x=>String(x.tracking).toUpperCase()!==String(item.tracking).toUpperCase());
+     runState.completedTrackings.add(mode+':'+String(item.tracking).toUpperCase());
+     control.remove(item);completed++;
+     if(mode==='departure'?result.already_scanned:result.already_received)already++;
+     // A Hub Manager's document detail is re-read after each mutation so parcels
+     // in transit disappear immediately and newly received parcels appear only after receipt.
+     if(hubManager&&pending.length){
+      await openInternally(mode,pending,true);
+      if(!runState.active||S?.user?.id!==runState.owner)return;
+     }
+    }
+    if(!runState.active||S?.user?.id!==runState.owner)return;
+    await refresh();if(!runState.active||S?.user?.id!==runState.owner)return;
+    await renderView();if(!runState.active||S?.user?.id!==runState.owner)return;
+    await openInternally(mode,[],false);
+    const noun=mode==='departure'?'scan(s) de sortie':'réception(s)';
+    toast(`${completed} ${noun} enregistré${completed===1?'':'s'}${already?' · '+already+' déjà traité(s)':''} ✓`);
+   }catch(error){
+    if(!runState.active||S?.user?.id!==runState.owner)return;
+    if(hubManager){try{await openInternally(mode,pending,false)}catch(e){}}
+    else control.setMessage('err',(completed?`Traitement partiel : ${completed} colis déjà traités. `:'')+(error.message||'Scan impossible.'));
+    toast((completed?`Traitement partiel (${completed} colis) · `:'')+(error.message||'Scan impossible.'),true);
+   }finally{
+    runState.inProgress=false;runState.setCollectorsBusy(false);
+   }
+  };
+  const mount=(element,mode,initialItems)=>{
+   if(!element||typeof o24ScanCollector!=='function')return;
+   const linesByCode=new Map((d.lines||[]).map(line=>[String(line.tracking||'').trim().toUpperCase(),line]));
+   const collector=o24ScanCollector(element,{
+    id:'ops-'+mode+'-'+id,
+    label:mode==='departure'?'Scan de sortie · colis au Hub de départ':'Scanner les colis reçus (lecteur USB, clavier ou caméra)',
+    placeholder:'Tracking ORIENTAL24 puis Entrée',inputMax:80,max:Math.max(1,Math.min(500,mode==='departure'?d.count-d.departure_scanned:d.count-d.received)),
+    commitLabel:mode==='departure'?'Valider les scans de sortie':'Valider les réceptions',
+    hint:mode==='departure'?'Rien ne quitte le manifeste avant validation; le serveur contrôle la présence physique au Hub source.':'Les scans restent en attente; le serveur vérifie le manifeste et le scan de sortie avant chaque réception.',
+    initialMessage:mode==='departure'?'Scannez uniquement les colis réellement présents au Hub de départ.':'Scannez uniquement les colis physiquement reçus à ce Hub.',
+    initialItems,initialBusy:!!scanState.busy,
+    renderItem:item=>`<b>${esc(item.tracking)}</b>${item.recipient?`<span class="sub">${esc(item.recipient)} · ${esc(item.city||'')}</span>`:''}`,
+    resolve:async code=>{
+     const tracking=String(code||'').trim(),normalized=tracking.toUpperCase(),line=linesByCode.get(normalized);
+     if(runState.completedTrackings.has(mode+':'+normalized))throw Error('Ce colis a déjà été traité dans cette session.');
+     if(mode==='departure'){
+      if(!line||!line.active||line.departure_scanned_at||line.departure_reconciled_at)throw Error('Ce colis n’est pas en attente de départ dans ce manifeste.');
+     }else if(line){
+      if(line.received_at)throw Error('Ce colis est déjà réceptionné à ce Hub.');
+      if(line.departure_reconciled_at)throw Error('Ce colis a été retiré du manifeste.');
+      if(d.departure_scan_required&&!line.departure_scanned_at)throw Error('Le scan de sortie de ce colis est requis avant sa réception.');
+     }else if(admin)throw Error('Ce tracking ne figure pas dans ce document.');
+     // The destination manager may not see transit line details. Such codes are
+     // staged without looking up hidden parcels; the existing receive endpoint
+     // remains the authority when the batch is validated.
+     return {tracking:line?.tracking||tracking,recipient:line?.recipient||'',city:line?.city||''};
+    },
+    onCommit:(items,control)=>commitScans(mode,items,control)
+   });
+   runState.register(collector);
+  };
+  if(runState.internal)runState.internal=false;
+  // modal() invokes the previous scanner's cleanup. Mark this replacement as
+  // internal only for that synchronous cleanup, not for an operator closing it.
+  runState.internal=true;
   modal(d.reference,`<div class="ops-document-head"><div><span class="eyebrow orange">${opsKinds[d.kind]}</span><h3>${esc(d.source_name)} → ${esc(d.destination_name)}</h3><p>${esc(d.client_name||'Plusieurs clients')} · ${esc(d.driver_name||'Transporteur non affecté')}</p><p>Préparé le ${opsDate(d.created_at)} · Version ${d.revision}</p></div><div>${opsTag(d.status)}${d.qr?`<img class="ops-doc-qr" src="${d.qr}" alt="QR du document ${esc(d.reference)}">`:''}</div></div><div class="ops-receipt-count${d.status!=='Annulé'&&d.received<d.count&&['En transit','Partiellement reçu'].includes(d.status)?' ops-receipt-ecart':''}"><strong>${d.received} / ${d.count}</strong><span>colis reçus${d.status==='Annulé'?' · bon annulé':` · écart théorique/physique : ${d.count-d.received} restant(s)`}</span>${d.status!=='Annulé'&&d.received<d.count&&['En transit','Partiellement reçu'].includes(d.status)?`<strong class="ops-ecart-badge">${icon('alert')}Écart −${d.count-d.received}</strong>`:''}</div>${departureProgress}${opsEtaAt(d)?`<p class="form-hint ops-eta-line">${icon('clock')}Arrivée estimée : <b>${opsDate(opsEtaAt(d).toISOString())}</b> — hypothèse navette quotidienne (départ + 24 h)${opsEtaAt(d).getTime()<Date.now()?' · <b style="color:#b46300">en retard</b>':''}</p>`:''}${d.note?`<p class="form-hint" data-no-translate>${esc(d.note)}</p>`:''}${d.cancel_reason?`<p class="form-hint orange">Annulation : <span data-no-translate>${esc(d.cancel_reason)}</span></p>`:''}${departureForm}${receiveForm}${lines}<details class="ops-history"><summary>Historique du document (${d.audit.length})</summary><div class="timeline">${d.audit.map(a=>`<div class="timeline-item"><b>${esc(a.action)}</b><p data-no-translate>${esc(a.details.tracking||a.details.reason||'')}</p><small data-no-translate>${esc(a.actor)} · ${opsDate(a.created_at)}</small></div>`).join('')}</div></details><div class="form-actions">${actions}<button class="btn" onclick="printOpsDocument(${id})">${icon('print')}Imprimer / PDF</button></div>`,true);
-  if($('#ops-departure-scan-form'))bindForm(async data=>{const r=await api('/logistics/documents/'+id+'/departure-scan','POST',data);await refresh();await renderView();await openOpsDocument(id);toast(r.already_scanned?'Colis déjà scanné à la sortie.':r.dispatched?`Dernier scan enregistré · départ confirmé (${r.departure_scanned}/${r.count})`:`Scan de sortie enregistré (${r.departure_scanned}/${r.count})`)},'ops-departure-scan-form');
-  if($('#ops-receive-form'))bindForm(async data=>{const r=await api('/logistics/documents/'+id+'/receive','POST',data);await refresh();await renderView();await openOpsDocument(id);toast(r.already_received?'Colis déjà reçu, aucun doublon.':'Réception enregistrée')},'ops-receive-form');
- }catch(e){toast(e.message,true)}
+  runState.internal=false;
+  runState.collectors=[];
+  if(departureForm)mount($('#ops-departure-scan'), 'departure',departurePending);
+  if(receiveForm)mount($('#ops-receive-scan'),'receive',receivePending);
+  const collectors=runState.collectors.slice();
+  modalCleanup=()=>{
+   collectors.forEach(collector=>collector?.destroy());
+   runState.onCleanup?.();
+  };
+ }catch(e){
+  if(scanState.runState){toast(e.message,true);if($('#modal-root .modal'))closeModal()}
+  else toast(e.message,true)
+ }
 }
+
 function opsDocAction(action){const d=opsDoc;modal(action==='dispatch'?'Confirmer la remise physique ?':'Annuler le document ?',form(`${action==='cancel'?textarea('reason','Motif obligatoire','',true):`<div class="full form-hint">${esc(d.reference)} · ${d.count} colis. Après départ, une annulation simple n’est plus possible : chaque colis doit être reçu et contrôlé.</div>`}`,action==='cancel'?'Annuler le document':'Confirmer le départ'));bindForm(async data=>{await api409(f=>api('/logistics/documents/'+d.id+'/'+action,'POST',{...data,revision:f?f.revision:d.revision}),async()=>({revision:(await api('/logistics/documents/'+d.id)).revision}));await refresh();await renderView();await openOpsDocument(d.id);toast('Document mis à jour')})}
 async function opsReconcileDeparture(id){
  const d=opsDoc,candidates=(d?.lines||[]).filter(l=>l.active&&!l.departure_scanned_at&&!l.departure_reconciled_at);

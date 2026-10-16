@@ -14,6 +14,7 @@ from hub_access import (
     driver_dispatch_allowed,
     driver_team_member_ids,
     hub_document_lines_at_hub,
+    hub_return_palette_lines,
     hub_manager_transfer_scope,
     ops_manifest_counts,
     manifest_status_from_counts,
@@ -328,6 +329,22 @@ class PhysicalHubParcelScopeTests(unittest.TestCase):
         ]
         self.assertEqual([line['id'] for line in hub_received_lines(lines, 10)], [1])
         self.assertEqual(hub_received_lines(lines, True), [])
+
+
+class HubReturnPaletteLineScopeTests(unittest.TestCase):
+    def test_agent_lines_are_hidden_after_dispatch_and_when_not_at_hub(self):
+        lines=[
+            {'id':1,'current_hub_id':10},
+            {'id':2,'current_hub_id':20},
+            {'id':3,'current_hub_id':None},
+            {'id':4,'current_hub_id':True},
+        ]
+        self.assertEqual([line['id'] for line in hub_return_palette_lines(lines,10,'Préparé')],[1])
+        self.assertEqual([line['id'] for line in hub_return_palette_lines(lines,10,'Annulé')],[1])
+        for status in ('En transit','Partiellement remis','Remis','Clôturé (écarts)'):
+            with self.subTest(status=status):
+                self.assertEqual(hub_return_palette_lines(lines,10,status),[])
+        self.assertEqual(hub_return_palette_lines(lines,True,'Préparé'),[])
 
 
 if __name__ == '__main__':
