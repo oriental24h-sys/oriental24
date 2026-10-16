@@ -133,7 +133,7 @@
       jobHost.innerHTML=active.length?active.map(j=>{
         const selected=j.id===Number(state.selectedJobId), name=j.client?.name||'Client';
         const assignment=j.driver_name?` · ${escText(j.driver_name)}`:'';
-        const canManage=typeof S!=='undefined'&&S.user?.role==='admin';
+        const canManage=typeof S!=='undefined'&&['admin','agent'].includes(S.user?.role);
         const action=j.status==='pending'&&canManage?`<button type="button" class="rt-mini-action" onclick="event.stopPropagation();rtManualAssign(${j.id})">Affecter</button>`:'';
         return `<button class="rt-job-row ${selected?'selected':''}" type="button" onclick="rtSelectJob(${j.id})">
           <span class="rt-job-dot ${escText(j.status)}"></span><span class="rt-job-copy"><b>${escText(name)}</b><small>#${j.id} · ${escText(j.zone||'Zone inconnue')} · ${j.parcels_count} colis${assignment}</small></span>${action}</button>`;
@@ -148,7 +148,7 @@
     if(!job){host.hidden=true;host.innerHTML='';return;}
     host.hidden=false;
     const candidates=suitableDrivers(job), chosen=candidates[0];
-    const canManage=typeof S!=='undefined'&&S.user?.role==='admin';
+    const canManage=typeof S!=='undefined'&&['admin','agent'].includes(S.user?.role);
     const info=state.routeInfo;
     const driver=chosen||((job.driver_id)?(state.data?.map_drivers||[]).find(d=>d.id===job.driver_id):null);
     const km=info?.distance_km ?? (driver?.pos?distKm(driver.pos,{lat:job.client.lat,lng:job.client.lng}):null);
@@ -525,12 +525,14 @@
   window.ramassageControlView=function(d){
     const k=d.kpis||{},drivers=d.map_drivers||d.drivers||[],zones=d.zones||[],jobs=d.ramassage_jobs||[];
     const isAdmin=typeof S!=='undefined'&&S.user?.role==='admin';
+    const isManager=typeof S!=='undefined'&&S.user?.role==='agent';
+    const canManage=isAdmin||isManager;
     const pickupCities=d.pickup_cities||[];
     const date=new Date().toISOString().slice(0,10);
     const alerts=(d.gps_alerts||[]).map(x=>`${escText(x.name)} — GPS désactivé`).join(' · ');
-    return heading('Tour de contrôle — Ramassage','Carte temps réel des livreurs et demandes de collecte · mise à jour automatique toutes les 8 secondes.',
+    return heading(isManager?`Tour de contrôle — Ramassage · ${escText(d.manager_hub?.name||'mon Hub')}`:'Tour de contrôle — Ramassage',isManager?'Votre périmètre : demandes, clients et livreurs rattachés à votre Hub uniquement. Toute affectation automatique reste dans votre zone. Mise à jour toutes les 8 secondes.':'Carte temps réel des livreurs et demandes de collecte · mise à jour automatique toutes les 8 secondes.',
       `<button class="btn sm" type="button" onclick="renderView()">${icon('refresh')}Actualiser</button>${isAdmin?`<button class="btn sm" type="button" onclick="rtZoneSettings()">${icon('pin')}Zones</button><button class="btn sm primary" type="button" onclick="tourDispatchPanel()">${icon('scan')}Répartition colis</button>`:''}`)+
-      `<div class="rt-kpis stats">${stat('En tournée',k.out_today||0,'','truck','navy')}${stat('Livrés aujourd’hui',k.delivered_today||0,'','check','green')}${stat('Demandes ramassage actives',`<span id="rt-active-kpi">${jobs.filter(j=>['pending','assigned','en_route'].includes(j.status)).length}</span>`,'','box','orange')}${stat('Alertes GPS',`<span id="rt-gps-kpi">${(d.gps_alerts||[]).length}</span>`,'','alert',(d.gps_alerts||[]).length?'red':'green')}</div>
+      `<div class="rt-kpis stats">${isManager?`${stat('Livreurs du Hub',drivers.length,'','truck','navy')}${stat('Disponibles en ligne',drivers.filter(x=>x.status==='available').length,'','check','green')}`:`${stat('En tournée',k.out_today||0,'','truck','navy')}${stat('Livrés aujourd’hui',k.delivered_today||0,'','check','green')}`}${stat('Demandes ramassage actives',`<span id="rt-active-kpi">${jobs.filter(j=>['pending','assigned','en_route'].includes(j.status)).length}</span>`,'','box','orange')}${stat('Alertes GPS',`<span id="rt-gps-kpi">${(d.gps_alerts||[]).length}</span>`,'','alert',(d.gps_alerts||[]).length?'red':'green')}</div>
       <div id="rt-gps-alerts" class="rt-gps-alert" role="alert" ${alerts?'':'hidden'}>${alerts?'⚠ GPS désactivé : '+alerts:''}</div>
       ${(d.hubs||[]).length?'':`<div class="rt-hub-empty">Aucun hub n’est encore configuré : la carte n’invente pas d’emplacement. ${isAdmin?'<button type="button" onclick="rtOpenHubSettings()">Configurer un hub</button>':''}</div>`}
       <section class="rt-layout">
@@ -546,10 +548,10 @@
         </div>
         <aside class="rt-side">
           <div class="rt-side-title"><div><b>Dispatch ramassage</b><small>Clients, affectations et présence</small></div><button class="rt-icon-btn" type="button" onclick="rtRefresh()" title="Actualiser">↻</button></div>
-          <label class="rt-auto-toggle"><span><b>Attribution automatique</b><small>Le plus proche, même zone, GPS récent, véhicule disponible, non chargé.</small></span><input id="rt-auto-dispatch" type="checkbox" ${d.auto_dispatch?'checked':''} ${isAdmin?'':'disabled'} onchange="rtSetAutoDispatch(this.checked)"><i></i></label>
+          ${isAdmin?`<label class="rt-auto-toggle"><span><b>Attribution automatique</b><small>Le plus proche, même zone, GPS récent, véhicule disponible, non chargé.</small></span><input id="rt-auto-dispatch" type="checkbox" ${d.auto_dispatch?'checked':''} onchange="rtSetAutoDispatch(this.checked)"><i></i></label>`:isManager?`<div class="rt-agent-note">${d.auto_dispatch?'Attribution automatique activée par Admin. Les propositions de votre Hub restent limitées à vos livreurs et à votre zone.':'Attribution automatique désactivée par Admin; créez la demande puis choisissez un livreur de votre Hub.'}</div>`:''}
           <form id="rt-pickup-form" class="rt-pickup-form" onsubmit="rtSubmitPickup(event)">
-            ${isAdmin?'':'<div class="rt-agent-note">Consultation de la carte et de l’historique. Les créations, affectations et réglages sont réservés à l’administrateur.</div>'}
-            <fieldset ${isAdmin?'':'disabled'} class="rt-form-fields">
+            ${isManager?'<div class="rt-agent-note">Création et affectation locales uniquement. Les clients, zones et livreurs affichés appartiennent à votre Hub.</div>':''}
+            <fieldset class="rt-form-fields">
             <div class="rt-section-head"><b>Nouvelle demande</b>${isAdmin?'<button class="rt-text-btn" type="button" onclick="rtZoneSettings()">Régler une zone</button>':''}</div>
             <label class="rt-field"><span>Réutiliser un client enregistré</span><select id="rt-saved-client" onchange="rtUseSavedClient(this.value)">${savedClientOptions()}</select></label>
             <div class="rt-two"><label class="rt-field"><span>Nom du client *</span><input id="rt-client-name" maxlength="100" required autocomplete="name" placeholder="Nom / société"></label><label class="rt-field"><span>Téléphone *</span><input id="rt-client-phone" type="tel" maxlength="32" required autocomplete="tel" placeholder="+212…"></label></div>
@@ -567,7 +569,7 @@
             <small>Positions GPS conservées 30 jours. Un itinéraire n’apparaît que si le suivi GPS était actif.</small></section>
         </aside>
       </section>
-      <div class="rt-lower-grid"><section class="card"><div class="card-head"><h3>Colis sans nouvelle depuis 48 h</h3>${(d.alerts||[]).length?`<span class="tag">${d.alerts.length}</span>`:''}</div>${(d.alerts||[]).length?`<table><thead><tr><th>Suivi</th><th>Destinataire</th><th>Ville</th><th>Statut</th><th>Retard</th><th></th></tr></thead><tbody>${d.alerts.map(a=>`<tr><td class="mono">${escText(a.tracking)}</td><td>${escText(a.recipient)}</td><td>${escText(a.city||'—')}</td><td><span class="tag">${escText(a.status)}</span></td><td style="color:#f59e0b"><b>${a.days} j</b></td><td><button class="btn sm" type="button" onclick="parcelDetail(${a.id})">${icon('eye')}Ouvrir</button></td></tr>`).join('')}</tbody></table>`:'<p class="muted">Aucun colis en silence — tout le monde avance. ✓</p>'}</section>
-        <section class="card"><div class="card-head"><h3>Non affectés par ville</h3></div>${(d.unassigned_by_city||[]).length?`<table><thead><tr><th>Ville</th><th>Colis</th><th>IDs</th></tr></thead><tbody>${d.unassigned_by_city.map(x=>`<tr><td>${escText(x.city)}</td><td>${x.count}</td><td class="muted">${escText((x.parcel_ids||[]).slice(0,8).join(', '))}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">Rien à affecter. ✓</p>'}</section></div>`;
+      ${isAdmin?`<div class="rt-lower-grid"><section class="card"><div class="card-head"><h3>Colis sans nouvelle depuis 48 h</h3>${(d.alerts||[]).length?`<span class="tag">${d.alerts.length}</span>`:''}</div>${(d.alerts||[]).length?`<table><thead><tr><th>Suivi</th><th>Destinataire</th><th>Ville</th><th>Statut</th><th>Retard</th><th></th></tr></thead><tbody>${d.alerts.map(a=>`<tr><td class="mono">${escText(a.tracking)}</td><td>${escText(a.recipient)}</td><td>${escText(a.city||'—')}</td><td><span class="tag">${escText(a.status)}</span></td><td style="color:#f59e0b"><b>${a.days} j</b></td><td><button class="btn sm" type="button" onclick="parcelDetail(${a.id})">${icon('eye')}Ouvrir</button></td></tr>`).join('')}</tbody></table>`:'<p class="muted">Aucun colis en silence — tout le monde avance. ✓</p>'}</section>
+        <section class="card"><div class="card-head"><h3>Non affectés par ville</h3></div>${(d.unassigned_by_city||[]).length?`<table><thead><tr><th>Ville</th><th>Colis</th><th>IDs</th></tr></thead><tbody>${d.unassigned_by_city.map(x=>`<tr><td>${escText(x.city)}</td><td>${x.count}</td><td class="muted">${escText((x.parcel_ids||[]).slice(0,8).join(', '))}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">Rien à affecter. ✓</p>'}</section></div>`:''}`;
   };
 })();

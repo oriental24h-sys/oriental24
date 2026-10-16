@@ -1,5 +1,5 @@
 /* ORIENTAL24 — operational workflows. These routes require the real server. */
-let opsConfig=null,opsDoc=null,opsParcel=null,opsTab='all',opsPeriod={from:'',to:''},hubDriverRows=[];
+let opsConfig=null,opsDoc=null,opsParcel=null,opsTab='all',opsPeriod={from:'',to:''},hubDriverRows=[],hubPaletteTab='default',hubPaletteDialog=null,hubPaletteUnknownRows=[],hubPaletteUnknownHubs=[];
 const opsKinds={pickup:'Bon de ramassage',return:'Bon de retour',transfer:'Palette inter-hub'};
 const opsOffline=typeof OFFLINE_SEED!=='undefined';
 window.opsOffline=opsOffline;
@@ -39,12 +39,123 @@ async function opsLoadConfig(){opsConfig=await api('/logistics/config');return o
 function opsDocsView(rows){
  const visible=rows.filter(d=>opsTab==='all'||d.kind===opsTab);return heading('Documents & transferts','Des colis identifiés, un départ déclaré, une réception contrôlée.',`${S.user.role==='admin'?`<button class="btn primary" onclick="newOpsDocument()">${icon('plus')}Préparer un document</button>`:''}<button class="btn" onclick="findOpsDocument()">${icon('scan')}Rechercher / scanner un bon</button>`)+`<div class="demo-notice">Bons internes de démonstration. Une réception ne déclenche aucun paiement. Le transporteur du document et le livreur final du colis peuvent être différents.</div><section class="stats">${stat('Documents affichés',rows.length,'','file','blue','500 derniers de votre périmètre')}${stat('Préparés',rows.filter(d=>d.status==='Préparé').length,'','box','','Prêts à déclarer au départ')}${stat('Départs / réceptions en cours',rows.filter(d=>['Départ partiel','En transit','Partiellement reçu'].includes(d.status)).length,'','truck','purple','Scans de sortie ou réception à terminer')}${stat('Reçus intégralement',rows.filter(d=>d.status==='Reçu').length,'','checkcircle','green','Tous les colis ont été scannés')}${stat('Écarts à contrôler',rows.filter(d=>['En transit','Partiellement reçu'].includes(d.status)&&d.received<d.count).reduce((n,d)=>n+(d.count-d.received),0),'','alert','bad','Colis annoncés mais pas encore physiquement scannés')}</section><section class="card"><div class="tabs">${[['all','Tous'],['pickup','Ramassages'],['return','Retours'],...(S.user.role==='client'?[]:[['transfer','Transferts']])].map(([v,t])=>`<button class="${opsTab===v?'active':''}" onclick="opsTab='${v}';renderView()">${t}</button>`).join('')}</div>${simpleTable(['Document','Parties / Trajet','Colis reçus','Écart théorique / physique','ETA','État',''],visible.map(d=>[`<button class="tracking" onclick="openOpsDocument(${d.id})">${esc(d.reference)}</button><span class="sub">${opsKinds[d.kind]} · ${date(d.created_at)}</span>`,`${esc(d.source_name)} → ${esc(d.destination_name)}<span class="sub">${esc(d.client_name||'Multi-clients')} · ${esc(d.driver_name||'Transporteur non affecté')}</span>`,`<strong>${d.received} / ${d.count}</strong>`,opsEcartChip(d),opsEtaChip(d),opsTag(d.status),`<button class="btn sm" onclick="openOpsDocument(${d.id})">Ouvrir ${icon('arrow')}</button>`]))}</section>`;
 }
-function hubPalletsView(rows){
- const transfers=rows.filter(d=>d.kind==='transfer');
- const active=transfers.filter(d=>['Départ partiel','En transit','Partiellement reçu'].includes(d.status));
- const missing=active.reduce((n,d)=>n+Math.max(0,(d.departure_scan_required?d.departure_scanned:d.count)-d.received),0);
- const actions=`${S.user.role==='admin'?`<button class="btn primary" onclick="newOpsDocument('transfer',true)">${icon('plus')}Nouvelle palette interne</button>`:''}<button class="btn" onclick="findOpsDocument('transfer')">${icon('scan')}Rechercher un bon</button>`;
- return heading('Palettes','Mouvements et retours de palettes entre les hubs ORIENTAL24.',actions)+`<div class="pp-explainer"><span class="stat-icon">${icon('layers')}</span><div><b>Flux interne ORIENTAL24 uniquement.</b><p>Cette liste regroupe les transferts entre hubs. Pour un retour inter-hubs, créez un transfert avec le trajet inversé (hub de départ et hub de destination permutés). Les arrivées des sociétés et les retours vers les vendeurs se trouvent dans <b>Palettes partenaires</b>.</p></div></div><section class="stats">${stat('Palettes inter-hubs',transfers.length,'','layers','blue','500 derniers documents accessibles')}${stat('À préparer',transfers.filter(d=>d.status==='Préparé').length,'','box','','Départ pas encore confirmé')}${stat('Départs / réceptions en cours',active.length,'','truck','purple','Scans de sortie ou réception à terminer')}${stat('Colis en transit non reçus',missing,'','alert','bad','N’inclut pas les colis encore au Hub source')}</section><section class="card"><div class="card-head"><div><h3>Mouvements entre hubs</h3><p>Chaque palette garde son manifeste, son trajet et son historique de réception.</p></div></div>${transfers.length?simpleTable(['Palette','Trajet inter-hubs','Colis reçus','Écart','Arrivée estimée','État',''],transfers.map(d=>[`<button class="tracking" onclick="openOpsDocument(${d.id})">${esc(d.reference)}</button><span class="sub">${opsDate(d.created_at)}</span>`,`${esc(d.source_name)} → ${esc(d.destination_name)}<span class="sub">${esc(d.driver_name||'Transporteur non affecté')}</span>`,`<strong>${d.received} / ${d.count}</strong>`,opsEcartChip(d),opsEtaChip(d),opsTag(d.status),`<button class="btn sm" onclick="openOpsDocument(${d.id})">Ouvrir ${icon('arrow')}</button>`])):empty('Aucune palette inter-hubs',S.user.role==='admin'?'Créez un transfert interne ; pour un retour, choisissez les hubs dans le sens inverse.':'Les transferts affectés à votre Hub apparaîtront ici.')}</section>`;
+function hubPaletteQuery(){return new URLSearchParams({tab:hubPaletteTab}).toString()}
+async function hubPaletteTabSet(tab){hubPaletteTab=tab;await renderView()}
+function hubPalettePurposeLabel(d){return ({standard:'Palette inter-Hub',return_to_central:'Retour vers Hub Central',return_to_origin:'Retour vers Hub d’origine'}[d.palette_purpose]||'Palette inter-Hub')}
+function hubPalletsView(data){
+ const rows=data.rows||[],agent=S.user.role==='agent',hubId=Number(S.user.agent_hub_id)||0,tab=data.tab||hubPaletteTab;
+ const active=rows.filter(d=>['Préparé','Départ partiel','En transit','Partiellement reçu'].includes(d.status));
+ const pending=rows.filter(d=>['Départ partiel','En transit','Partiellement reçu'].includes(d.status));
+ const incoming=rows.filter(d=>(!agent||Number(d.destination_hub_id)===hubId)&&['Départ partiel','En transit','Partiellement reçu'].includes(d.status));
+ const tabs=[['default','Default'],['retours','Retours'],['a-recevoir','À recevoir']];
+ const admin=S.user.role==='admin',centralId=Number(data.central_hub_id)||0;
+ const receiveAction=`<button class="btn" onclick="hubPaletteReception()">${icon('scan')}Reception Palette</button>`;
+ const actions=tab==='default'?`${receiveAction}<button class="btn primary" onclick="hubPaletteNew('standard')">${icon('truck')}Envoyer Palette</button>`:
+   tab==='retours'?(admin?`${receiveAction}<button class="btn" onclick="hubPaletteReviewUnknown()">${icon('alert')}Origines inconnues · Revue Admin</button><button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button><button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:hubId===centralId?`${receiveAction}<button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:`<button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button>`):tab==='a-recevoir'?receiveAction:'';
+ const purposeNote=tab==='retours'?(hubId===centralId&&!admin?'Les retours reçus du réseau sont triés ici. Un colis ne peut repartir qu’au Hub attesté par son historique physique; les origines incertaines restent bloquées pour vérification Admin.':'Les colis refusés ou retournés remontent au Hub Central; ils repartent ensuite uniquement vers leur Hub d’origine attesté.'):
+   tab==='a-recevoir'?'Cette file contient les retours triés par le Hub Central vers leur Hub d’origine. Les détails du colis ne sont visibles qu’après sa réception physique.':'Le réseau conserve une étoile autour du Hub Central : un Hub secondaire ne transfère jamais directement vers un autre Hub secondaire.';
+ const table=rows.length?simpleTable(['Palette','Trajet','Transport · suivi','Colis','Lots','Créée le','État',''],rows.map(d=>[
+   `<strong>${esc(d.reference)}</strong><span class="sub">${esc(hubPalettePurposeLabel(d))}</span>`,
+   `${esc(d.source_name||'—')} → ${esc(d.destination_name||'—')}`,
+   `${esc(d.transport||'—')}<span class="sub">${esc(d.tracking_code||'—')}</span>`,
+   `<strong>${d.received||0} / ${d.count||0}</strong><span class="sub">${Math.max(0,d.remaining||0)} restant(s)</span>`,
+   d.lots||'—',opsDate(d.created_at),opsTag(d.status),
+   `<button class="btn sm" onclick="openOpsDocument(${d.id})">${d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)?'Ouvrir / recevoir':'Ouvrir'} ${icon('arrow')}</button>`
+ ])):empty(tab==='retours'?'Aucun retour dans cette sélection':tab==='a-recevoir'?'Aucune palette à recevoir':'Aucune palette inter-Hub','Les palettes autorisées pour votre périmètre apparaîtront ici.');
+ return heading('Palettes',agent?`${esc(data.hub?.name||'Mon Hub')} · transferts et retours qui impliquent ce Hub.`:'Transferts et retours inter-Hubs · administrateur.',`<button class="btn" onclick="renderView()">${icon('refresh')}Actualiser</button>`)+
+ `<div class="pp-explainer"><span class="stat-icon">${icon('layers')}</span><div><b>${esc(purposeNote)}</b><p>Les transferts ne modifient aucune formule financière. Les retours conservent le statut « Refusé/Retourné » pendant le transport; une origine inconnue n’est jamais déduite de la ville.</p></div></div>
+ <section class="stats">${stat('Palettes affichées',rows.length,'','layers','blue',tab==='default'?'Périmètre autorisé':tab==='retours'?'Flux de retour':'Retours dirigés vers l’origine')}${stat('À traiter',active.length,'','truck','purple','Préparées, départs ou réceptions en cours')}${stat('Colis restant(s)',rows.reduce((n,d)=>n+(d.remaining||0),0),'','box','orange','Résumé de palette, sans détail hors Hub')}${stat('À recevoir',incoming.length,'','scan',incoming.length?'warn':'green','Destinées à votre Hub')}</section>
+ <section class="card"><div class="pc-tabs">${tabs.map(([id,label])=>`<button type="button" class="pc-tab ${tab===id?'on':''}" onclick="hubPaletteTabSet('${id}')">${label}</button>`).join('')}</div><div class="pc-actions-row">${actions}</div>${table}</section>`;
+}
+async function hubPaletteReception(){
+ try{
+  const data=await api('/logistics/palettes?tab='+encodeURIComponent(hubPaletteTab)),agent=S.user.role==='agent',hubId=Number(S.user.agent_hub_id)||0;
+  const rows=(data.rows||[]).filter(d=>(!agent||Number(d.destination_hub_id)===hubId)&&['Départ partiel','En transit','Partiellement reçu'].includes(d.status));
+  if(!rows.length){toast('Aucune palette en transit vers votre Hub.');return}
+  modal('Reception Palette',`<p class="form-hint">Ouvrez le bon, vérifiez le trajet et scannez chaque colis réellement arrivé. Les détails d’un colis ne s’affichent qu’après sa réception physique.</p>${simpleTable(['Référence','Origine → destination','Colis','État',''],rows.map(d=>[`<strong>${esc(d.reference)}</strong><span class="sub">${esc(hubPalettePurposeLabel(d))}</span>`,`${esc(d.source_name)} → ${esc(d.destination_name)}`,`${d.received||0} / ${d.count||0}`,opsTag(d.status),`<button class="btn sm primary" onclick="closeModal();openOpsDocument(${d.id})">Ouvrir</button>`]))}`);
+ }catch(e){toast(e.message,true)}
+}
+async function hubPaletteReviewUnknown(){
+ try{
+  const result=await api('/logistics/palette-candidates?mode=unresolved_origin');
+  hubPaletteUnknownRows=result.rows||[];hubPaletteUnknownHubs=result.available_hubs||[];
+  if(!hubPaletteUnknownRows.length){toast('Aucun retour reçu au Central avec une origine numérique inconnue.');return}
+  const rows=hubPaletteUnknownRows.map(p=>[
+    `<strong>${esc(p.tracking)}</strong><span class="sub">${esc(p.recipient)} · ${esc(p.city||'')}</span>`,
+    `${esc(p.status)} · réception Central vérifiée`,
+    p.physical_evidence?.length?p.physical_evidence.map(e=>`${esc(e.hub_name)} · ${e.events.map(x=>esc(x.type)+' '+opsDate(x.at)).join(' / ')}`).join('<span class="sub"></span>'):'<span class="tag warn">Aucune trace numérique antérieure</span>',
+    `<button class="btn sm primary" onclick="hubPaletteResolveOrigin(${p.id})">Revoir l’origine</button>`
+  ]);
+  modal('Origines inconnues · Revue Admin',`<div class="form-hint orange">Les retours ci-dessous sont physiquement au Hub Central, mais aucun Hub d’origine n’est enregistré sans ambiguïté. La ville du colis n’est jamais utilisée comme preuve. Si une trace physique n’apparaît pas, une référence papier/scan doit être vérifiée et consignée.</div>${simpleTable(['Colis · destinataire','Statut','Traces de garde physique',''],rows)}`);
+ }catch(e){toast(e.message,true)}
+}
+function hubPaletteResolveOrigin(pid){
+ const row=hubPaletteUnknownRows.find(x=>Number(x.id)===Number(pid));if(!row)return;
+ const evidence=row.physical_evidence||[],hubs=hubPaletteUnknownHubs||[];
+ const options=hubs.map(h=>{const e=evidence.find(x=>Number(x.hub_id)===Number(h.id));return [h.id,`${h.name}${h.city?' · '+h.city:''}${e?' · preuve numérique '+e.events.map(x=>x.type+' '+opsDate(x.at)).join(' / '):' · aucune trace numérique'}`]});
+ if(!options.length){toast('Aucun Hub actif différent du Central n’est disponible.',true);return}
+ modal('Confirmer le Hub d’origine · '+row.tracking,form(`${select('hub_id','Hub retenu après contrôle physique',options)}${input('evidence_reference','Référence du reçu, scan ou registre','', 'text',true,'minlength="3" maxlength="160"')}${textarea('reason','Motif détaillé de la revue Admin','',true)}<div class="full form-hint orange">Si le système n’a pas de trace numérique au Hub choisi, fournissez la référence d’un reçu/registre physique vérifiable. Toute revue manuelle est journalisée avec l’acteur, la preuve et l’ancien/nouveau Hub. Une origine sans preuve n’est pas envoyée automatiquement.</div><label class="full check-label"><input type="checkbox" name="manual_physical_review" required> J’ai vérifié une preuve de garde physique; si elle est hors système, la référence ci-dessus permet de la retrouver.</label><label class="full check-label"><input type="checkbox" name="confirmed" required> Je confirme cette revue Admin et l’affectation à l’origine retenue.</label>`,'Enregistrer la revue'));
+ bindForm(async d=>{const result=await api('/logistics/parcels/'+pid+'/origin-review','POST',{hub_id:Number(d.hub_id),reason:d.reason,evidence_reference:d.evidence_reference,manual_physical_review:d.manual_physical_review===true,confirmed:d.confirmed===true});hubPaletteTab='retours';await saved('Origine documentée · '+(result.evidence_reference||''))});
+}
+async function hubPaletteNew(purpose='standard'){
+ try{
+  const cfg=await opsLoadConfig(),agent=S.user.role==='agent',myHub=Number(S.user.agent_hub_id)||0,central=Number(cfg.central_hub_id)||0;
+  const activeHubs=(cfg.hubs||[]).filter(h=>h.active),targets=(cfg.palette_targets||[]).filter(h=>h.id!==central||h.active!==false);
+  if(!central||!cfg.central_hub?.active){toast('Configurez un Hub Central actif avant de préparer une palette.',true);return}
+  if(agent&&(!myHub||!activeHubs.some(h=>Number(h.id)===myHub))){toast('Aucun Hub actif rattaché à votre compte.',true);return}
+  if(agent&&purpose==='return_to_central'&&myHub===central){toast('Le Hub Central ne peut pas envoyer un retour vers lui-même.',true);return}
+  if(agent&&purpose==='return_to_origin'&&myHub!==central){toast('Le tri vers le Hub d’origine est réservé au Hub Central.',true);return}
+  const sourceChoices=purpose==='return_to_origin'?activeHubs.filter(h=>Number(h.id)===central):purpose==='return_to_central'?activeHubs.filter(h=>Number(h.id)!==central):activeHubs;
+  if(!sourceChoices.length){toast('Aucun Hub actif autorisé pour ce type de palette.',true);return}
+  const fixedSource=purpose==='return_to_origin'?central:(agent?myHub:null);
+  const sourceHub=sourceChoices.find(h=>Number(h.id)===fixedSource)||(cfg.central_hub||{});
+  let fixedDestination=purpose==='return_to_central'?central:null;
+  if(agent&&myHub!==central&&purpose==='standard')fixedDestination=central;
+  let defaultSource=fixedSource||sourceHub.id;
+  let destList=targets.filter(h=>Number(h.id)!==Number(defaultSource));
+  if(purpose==='return_to_central')destList=targets.filter(h=>Number(h.id)===central);
+  if(purpose==='return_to_origin')destList=targets.filter(h=>Number(h.id)!==central);
+  if(purpose==='standard'&&Number(defaultSource)!==central)destList=targets.filter(h=>Number(h.id)===central);
+  if(purpose==='standard'&&Number(defaultSource)===central)destList=targets.filter(h=>Number(h.id)!==central);
+  const destOptions=destList.map(h=>[h.id,`${h.name}${h.city?' · '+h.city:''}`]);
+  if(fixedDestination)destOptions.splice(0,destOptions.length,...targets.filter(h=>Number(h.id)===fixedDestination).map(h=>[h.id,`${h.name}${h.city?' · '+h.city:''}`]));
+  if(!destOptions.length){toast('Aucun Hub de destination autorisé.',true);return}
+  hubPaletteDialog={purpose,cfg,agent,myHub,central,sourceHubs:sourceChoices,targets,fixedSource,fixedDestination,defaultSource};
+  const title=purpose==='standard'?'Envoyer Palette':purpose==='return_to_central'?'Envoyer Retour au Central':'Envoyer vers le Hub d’origine';
+  const sourceControl=fixedSource?`<input id="hp-source" type="hidden" value="${fixedSource}"><div class="full form-hint">Départ : <b>${esc(sourceHub.name||cfg.central_hub.name)}</b></div>`:`<label class="field"><span>Hub de départ</span><select id="hp-source" onchange="hubPaletteUpdateTargets()">${sourceChoices.map(h=>`<option value="${h.id}" ${Number(h.id)===Number(defaultSource)?'selected':''}>${esc(h.name)} · ${esc(h.city||'')}</option>`).join('')}</select></label>`;
+  const destinationControl=fixedDestination?`<input id="hp-destination" type="hidden" value="${fixedDestination}"><div class="full form-hint">Destination : <b>${esc((targets.find(h=>Number(h.id)===fixedDestination)||cfg.central_hub).name)}</b></div>`:`<label class="field"><span>Hub de destination</span><select id="hp-destination">${destOptions.map(([id,label])=>`<option value="${id}">${esc(label)}</option>`).join('')}</select></label>`;
+  modal(title,`<div class="form-grid">${sourceControl}${destinationControl}<label class="field"><span>Transporteur (facultatif)</span><input id="hp-transport" maxlength="120"></label><label class="field"><span>Tracking palette (facultatif)</span><input id="hp-track" maxlength="80"></label><label class="field"><span>Nombre de lots</span><input id="hp-lots" type="number" min="0" max="500" value="0"></label><label class="field full"><span>Note (facultatif)</span><textarea id="hp-note" maxlength="600"></textarea></label></div><p class="form-hint">Chargez la liste; le serveur n’affiche que les colis physiquement au Hub de départ et admissibles pour ce type de flux.</p><div class="form-actions"><button class="btn" type="button" onclick="hubPaletteLoadCandidates()">Charger les colis admissibles</button><button class="btn primary" id="hp-create" type="button" disabled onclick="hubPaletteCreate()">Créer la palette</button></div><div id="hp-candidates" class="hub-palette-candidates"><p class="sub">Aucun colis chargé.</p></div>`);
+ }catch(e){toast(e.message,true)}
+}
+function hubPaletteUpdateTargets(){
+ const d=hubPaletteDialog;if(!d||d.fixedDestination)return;
+ const src=Number(document.getElementById('hp-source')?.value||d.defaultSource),dest=document.getElementById('hp-destination');if(!dest)return;
+ let list=d.targets.filter(h=>Number(h.id)!==src);
+  if(d.purpose==='return_to_origin')list=list.filter(h=>Number(h.id)!==d.central);
+  else if(d.purpose==='return_to_central'||src!==d.central)list=list.filter(h=>Number(h.id)===d.central);
+  else list=list.filter(h=>Number(h.id)!==d.central);
+ dest.innerHTML=list.map(h=>`<option value="${h.id}">${esc(h.name)}${h.city?' · '+esc(h.city):''}</option>`).join('');
+ hubPaletteResetCandidates();
+}
+function hubPaletteResetCandidates(){const host=document.getElementById('hp-candidates');if(host)host.innerHTML='<p class="sub">Chargez les colis après avoir confirmé le trajet.</p>';const button=document.getElementById('hp-create');if(button)button.disabled=true}
+async function hubPaletteLoadCandidates(){
+ const d=hubPaletteDialog;if(!d)return;
+ const source=Number(document.getElementById('hp-source')?.value||d.defaultSource),destination=Number(document.getElementById('hp-destination')?.value||d.fixedDestination);
+ if(!source||!destination){toast('Choisissez le Hub de départ et de destination.',true);return}
+ try{
+  const qs=new URLSearchParams({mode:d.purpose,source_hub_id:String(source),destination_hub_id:String(destination)}),result=await api('/logistics/palette-candidates?'+qs.toString()),host=document.getElementById('hp-candidates');
+  const rows=result.rows||[];
+  if(host)host.innerHTML=rows.length?`<div class="full form-hint">${rows.length} colis admissible(s) · sélection uniquement après présence physique au Hub.</div>${rows.map(p=>`<label class="check-label hub-palette-candidate"><input class="hp-pick" type="checkbox" value="${p.id}" onchange="hubPaletteSelectionChanged()"><span><b>${esc(p.tracking)}</b> · ${esc(p.recipient)}<small class="sub">${esc(p.city||'')} · ${esc(p.status)}${p.origin_hub?' · origine vérifiée : '+esc(p.origin_hub):' · origine non renseignée'}</small></span></label>`).join('')}`:empty('Aucun colis admissible','Le serveur n’a trouvé aucun colis physiquement présent et compatible avec ce trajet.');
+  hubPaletteSelectionChanged();
+ }catch(e){toast(e.message,true)}
+}
+function hubPaletteSelectionChanged(){const button=document.getElementById('hp-create');if(button)button.disabled=!document.querySelectorAll('#hp-candidates .hp-pick:checked').length}
+async function hubPaletteCreate(){
+ const d=hubPaletteDialog;if(!d)return;
+ const parcel_ids=[...document.querySelectorAll('#hp-candidates .hp-pick:checked')].map(x=>Number(x.value));
+ if(!parcel_ids.length){toast('Sélectionnez au moins un colis.',true);return}
+ const body={kind:'transfer',palette_purpose:d.purpose,source_hub_id:Number(document.getElementById('hp-source')?.value||d.defaultSource),destination_hub_id:Number(document.getElementById('hp-destination')?.value||d.fixedDestination),parcel_ids,transport:document.getElementById('hp-transport')?.value||'',tracking_code:document.getElementById('hp-track')?.value||'',lots:Number(document.getElementById('hp-lots')?.value||0),note:document.getElementById('hp-note')?.value||''};
+ try{const r=await api('/logistics/documents','POST',body);hubPaletteDialog=null;closeModal();hubPaletteTab=d.purpose==='return_to_origin'?'a-recevoir':d.purpose==='standard'?'default':'retours';toast('Palette préparée · '+r.reference);await renderView();await openOpsDocument(r.id)}catch(e){toast(e.message,true)}
 }
 async function newOpsDocument(kind='pickup',fixedKind=false){
  try{await opsLoadConfig();if(!opsConfig.hubs.some(h=>h.active)){toast('Créez au moins un hub actif avant de préparer un document.',true);await navigate('ops-settings');return}
@@ -212,9 +323,15 @@ function hubDashboardView(data){
 function hubDriversView(data){
  const drivers=hubDriverRows=data.drivers||[];
  return heading('Livreurs de mon Hub',`${esc(data.hub.name)} · ${esc(data.hub.city)}. Gérez les comptes de votre Hub et affectez les colis reçus physiquement.`, `<button class="btn primary" onclick="hubDriverForm()">${icon('plus')}Créer un livreur</button>`)+
- `<div class="demo-notice">Vous pouvez modifier les coordonnées, le mot de passe et l’activation des livreurs de votre Hub. Le Hub et le lien d’équipe ne sont pas modifiables ici. La désactivation est bloquée tant qu’il reste des colis ouverts. L’affectation ne confirme pas la remise physique et ne règle pas le COD.</div><section class="card"><div class="card-head"><h3>Comptes locaux · ${drivers.length}</h3><span class="tag">${drivers.filter(d=>d.active).length} actifs</span></div>${simpleTable(['Livreur','E-mail · téléphone','Colis ouverts','Créé le','Statut',''],drivers.map(d=>[`<strong>${esc(d.name)}</strong>${d.team_lead_id?'<span class="sub">Membre d’équipe · lien conservé</span>':''}`,`${esc(d.email)}<span class="sub">${esc(d.phone||'—')}</span>`,d.assigned_open_count||0,date(d.created_at),`<span class="tag ${d.active?'good':'bad'}">${d.active?'Actif':'Désactivé'}</span>`,`<button class="btn sm" onclick="hubDriverEdit(${d.id})">${icon('edit')}Gérer</button>`]))}${drivers.length?'':empty('Aucun livreur rattaché','Créez le premier compte de votre équipe locale.')}</section>`;
+ `<div class="demo-notice">Vous pouvez modifier les coordonnées, le mot de passe et l’activation des livreurs de votre Hub. Le Hub et le lien d’équipe ne sont pas modifiables ici. La désactivation est bloquée tant qu’il reste des colis ouverts. L’affectation ne confirme pas la remise physique et ne règle pas le COD.</div><section class="card"><div class="card-head"><h3>Comptes locaux · ${drivers.length}</h3><span class="tag">${drivers.filter(d=>d.active).length} actifs</span></div>${simpleTable(['Livreur','E-mail · téléphone','Colis ouverts','Créé le','Statut',''],drivers.map(d=>[`<strong>${esc(d.name)}</strong>${d.team_lead_id?'<span class="sub">Membre d’équipe · lien conservé</span>':''}`,`${esc(d.email)}<span class="sub">${esc(d.phone||'—')}</span>`,d.assigned_open_count||0,date(d.created_at),`<span class="tag ${d.active?'good':'bad'}">${d.driver_archived?'Archivé':d.driver_blocked?'Bloqué':d.active?'Actif':'Désactivé'}</span>`,`<button class="btn sm" onclick="hubDriverEdit(${d.id})">${icon('edit')}Gérer</button> <button class="btn sm" onclick="hubDriverAccess(${d.id})">Accès</button>`]))}${drivers.length?'':empty('Aucun livreur rattaché','Créez le premier compte de votre équipe locale.')}</section>`;
 }
 function hubDriverEdit(id){const driver=hubDriverRows.find(d=>d.id===id);if(driver)hubDriverForm(driver)}
+function hubDriverAccess(id){
+ const driver=hubDriverRows.find(d=>d.id===id);if(!driver||S?.user?.role!=='agent')return;
+ const options=[[driver.driver_blocked?'unblock':'block',driver.driver_blocked?'Réactiver l’accès':'Bloquer l’accès'],[driver.driver_archived?'restore':'archive',driver.driver_archived?'Restaurer le compte':'Archiver le compte']];
+ modal('Accès livreur · '+esc(driver.name),form(`${select('action','Action',options)}${textarea('reason','Motif obligatoire','',true)}<div class="full form-hint">L’action concerne uniquement un livreur rattaché à votre Hub. L’archivage est refusé tant qu’il reste des colis non livrés ou un document actif. Aucun règlement, COD ou relevé financier n’est modifié.</div><label class="full check-label"><input type="checkbox" name="confirmed" required> Je confirme cette modification d’accès.</label>`,'Confirmer'));
+ bindForm(async d=>{await api('/logistics/hub/drivers/'+driver.id+'/access','POST',{action:d.action,reason:d.reason,revision:driver.driver_revision,confirmed:d.confirmed===true});await saved('Accès livreur mis à jour')});
+}
 function hubDriverForm(existing=null){
  if(S?.user?.role!=='agent')return;
  const edit=!!existing,hubName=esc(S.hubs?.[0]?.name||'votre Hub');

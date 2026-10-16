@@ -114,8 +114,16 @@ def register_tour_control(app,s):
         return jsonify(ok=True,points=n,retention_days=30)
 
     @app.get('/api/control-tower')
-    @auth('admin')
+    @auth('admin','agent')
     def control_tower():
+        actor=user()
+        if actor['role']=='agent':
+            hub_id=actor.get('agent_hub_id')
+            extra=getattr(app,'o24_ramassage_tower_payload',None)
+            if type(hub_id) is not int or hub_id<=0 or not extra:raise Error('Le Hub de ce compte est inactif ou introuvable.',403)
+            # Hub Managers receive only the pickup tower's local payload. Never build or serialize
+            # the global delivery/parcel tower for this role.
+            return jsonify(drivers=[],kpis={},alerts=[],unassigned_by_city=[],**extra(hub_id))
         t=now()[:10]
         with conn() as c:
             drivers=[dict(r) for r in c.execute("SELECT id,name,phone FROM users WHERE role='livreur' AND active=1 ORDER BY name")]

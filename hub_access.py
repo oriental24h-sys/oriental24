@@ -22,9 +22,12 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('POST', r'/api/logistics/parcels/\d+/tickets'),
     ('GET', r'/api/logistics/config'),
     ('GET', r'/api/logistics/documents'), ('GET', r'/api/logistics/documents/\d+'),
+    ('POST', r'/api/logistics/documents'),
+    ('GET', r'/api/logistics/palettes'), ('GET', r'/api/logistics/palette-candidates'),
     ('GET', r'/api/logistics/hub-dashboard'),
     ('GET', r'/api/logistics/hub/drivers'), ('POST', r'/api/logistics/hub/drivers'),
     ('PATCH', r'/api/logistics/hub/drivers/\d+'),
+    ('POST', r'/api/logistics/hub/drivers/\d+/access'),
     ('POST', r'/api/logistics/hub/assignments'), ('GET', r'/api/logistics/hub/invoices'),
     ('GET', r'/api/logistics/hub/driver-statements'),
     ('GET', r'/api/logistics/cod/hub'),
@@ -45,6 +48,12 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('POST', r'/api/partner-palettes/fusion'), ('GET', r'/api/partner-palettes/fusion/\d+'),
     ('POST', r'/api/partner-palettes/fusion/\d+/scan'),
     ('POST', r'/api/partner-palettes/fusion/\d+/close'),
+    ('GET', r'/api/control-tower'),
+    ('GET', r'/api/control-tower/map-data'),
+    ('POST', r'/api/control-tower/ramassage'),
+    ('GET', r'/api/control-tower/ramassage/\d+/candidates'),
+    ('POST', r'/api/control-tower/ramassage/\d+/assign'),
+    ('GET', r'/api/control-tower/route-history/\d+'),
     ('GET', r'/api/return-palettes/config'), ('GET', r'/api/return-palettes/vendor-counts'),
     ('GET', r'/api/return-palettes/candidates'), ('GET', r'/api/return-palettes'),
     ('POST', r'/api/return-palettes'), ('GET', r'/api/return-palettes/\d+'),
@@ -59,6 +68,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
 HUB_OPERATIONAL_PREFIXES = (
     '/api/parcels/', '/api/logistics/parcels/', '/api/logistics/config', '/api/logistics/documents', '/api/logistics/hub-dashboard', '/api/logistics/hub/', '/api/logistics/hub/drivers', '/api/logistics/cod/', '/api/logistics/notifications', '/api/partner-palettes',
     '/api/partner-palette-incidents', '/api/return-palettes', '/api/alerts',
+    '/api/control-tower', '/api/logistics/palettes', '/api/logistics/palette-candidates',
 )
 
 
