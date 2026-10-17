@@ -111,7 +111,7 @@ function tag(s) {
     ? "invoice"
     : ["Livré", "Réglée", "Résolu", "Réceptionnée", "Acceptée", "Ramassé"].includes(s)
       ? "good"
-      : ["En livraison", "Au hub", "En cours", "Planifié", "En transit", "Transit", "Réceptionné", "Reçu par le livreur", "Intéressé", "Appel client", "WhatsApp client"].includes(s)
+      : ["En livraison", "Au hub", "En cours", "Planifié", "En transit", "Transit", "Vers Hub Central", "Réceptionné", "Reçu par le livreur", "Intéressé", "Appel client", "WhatsApp client"].includes(s)
         ? "blue"
         : ["Retourné", "Refusé", "Refusée", "Annulé"].includes(s)
           ? "bad"
@@ -687,7 +687,7 @@ async function renderView(background = false) {
         if (S?.user?.role === "support" && view === "support-orders" && document.visibilityState === "visible") refreshSupportOrders(false);
       }, 45000);
     }
-    if (view === "drivers") drawDriverWorkspace();
+    if (view === "drivers" || view === "hub-drivers") drawDriverWorkspace();
     if (view === "profile") bindProfile();
     if (view === "settings" && settingsTab === "general") bindSettings();
     if ($("#finance-days")) loadFinanceDays();   // v1.5.3 : onglet « Fin de journée » se recalcule à chaque rendu.
@@ -939,7 +939,7 @@ function parcelsView() {
   const create = !["livreur", "agent"].includes(S.user.role);
   const title = hubManager ? "Colis reçus au Hub" : create ? "Gestion des colis" : "Mes colis";
   const subtitle = hubManager
-    ? "Seuls les colis physiquement reçus dans votre Hub sont affichés."
+    ? "Seuls les colis physiquement reçus dans votre Hub sont affichés. Cliquez sur la situation pour la modifier ; Livré, Retourné et les colis verrouillés ne sont pas modifiables."
     : "Chaque colis a son histoire. Retrouvez-la ici.";
   const actions = hubManager ? "" : `<a class="btn export-btn" href="/api/export">${icon("download")}Exporter CSV</a>${create ? `<button class="btn import-trigger" onclick="openImports()">${icon("upload")}Importer</button>` : ""}${create ? `<button class="btn primary" onclick="newParcel()">${icon("plus")}Nouveau colis</button>` : ""}`;
   return (
@@ -1014,7 +1014,7 @@ function changeStatus(id) {
   const p = S.parcels.find((p) => p.id === id);
   const transitions = S.status_policy.driver_transitions;
   const options =
-    S.user.role === "admin" ? S.statuses : transitions[p.status] || [];
+    S.user.role === "admin" ? S.statuses.filter(s=>s!=="Vers Hub Central") : transitions[p.status] || [];
   if (!options.length) {
     toast("Ce colis est clôturé. Contactez l’administration.", true);
     return;

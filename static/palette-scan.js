@@ -6,6 +6,10 @@
 let ppSound=(()=>{try{return localStorage.getItem('o24-pp-sound')!=='0'}catch(e){return true}})();
 let ppAc=null;
 function ppTone(f,t0,dur,type,vol){const o=ppAc.createOscillator(),g=ppAc.createGain();o.type=type||'sine';o.frequency.setValueAtTime(f,t0);o.connect(g);g.connect(ppAc.destination);g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(vol||0.22,t0+0.012);g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);o.start(t0);o.stop(t0+dur+0.03)}
+function ppUnlockSound(){
+ if(!ppSound)return;
+ try{const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;ppAc=ppAc||new AC();if(ppAc.state==='suspended')ppAc.resume().catch(()=>{})}catch(e){}
+}
 function ppBeep(kind){
  if(!ppSound)return;
  try{
@@ -213,6 +217,6 @@ async function ppReceiveScan(id){
 }
 /* v1.22.0 — API partagée : sons, vibration et caméra réutilisables par les autres écrans de scan
    (envoi de palette retour au scan). Un seul moteur, donc exactement les mêmes sons. */
-window.o24Sound={beep:ppBeep,signal:ppSignal,vibrate:ppVib,on:()=>ppSound,set:v=>{ppSound=!!v;try{localStorage.setItem('o24-pp-sound',ppSound?'1':'0')}catch(e){}document.querySelectorAll('[data-o24-snd]').forEach(b=>{b.textContent=ppSound?'🔊 Son activé':'🔇 Son coupé'});if(ppSound)ppBeep('ok')}};
+window.o24Sound={unlock:ppUnlockSound,beep:ppBeep,signal:ppSignal,vibrate:ppVib,on:()=>ppSound,set:v=>{ppSound=!!v;try{localStorage.setItem('o24-pp-sound',ppSound?'1':'0')}catch(e){}document.querySelectorAll('[data-o24-snd]').forEach(b=>{b.textContent=ppSound?'🔊 Son activé':'🔇 Son coupé'});if(ppSound)ppBeep('ok')}};
 window.o24Cam=ppRxCam;window.o24CamFormats=ppRxCamFormats;window.o24CamSupported=ppRxCamSupported;
 /* === ORIENTAL24 · palette-scan (fin) === */
