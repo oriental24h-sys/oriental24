@@ -224,7 +224,7 @@ class HubPaletteFlowTests(unittest.TestCase):
         with self.conn() as c:
             rows=c.execute('SELECT id,status,current_hub_id,origin_hub_id,amount,invoice_id FROM parcels WHERE id IN (1,2) ORDER BY id').fetchall()
         self.assertEqual([(r['status'],r['current_hub_id'],r['origin_hub_id'],r['amount'],r['invoice_id']) for r in rows],
-                         [('Refusé',None,10,125.5,700),('Retourné',None,None,86.25,701)])
+                         [('Vers Hub Central',None,10,125.5,700),('Vers Hub Central',None,None,86.25,701)])
 
         self.assertEqual(self.receive(doc_id,'TRK-RETURN-1',90,990).status_code,200)
         self.assertEqual(self.receive(doc_id,'TRK-RETURN-2',90,990).status_code,200)
@@ -261,7 +261,7 @@ class HubPaletteFlowTests(unittest.TestCase):
         with self.conn() as c:
             rows=c.execute('SELECT id,status,current_hub_id,origin_hub_id,amount,invoice_id FROM parcels WHERE id IN (1,2) ORDER BY id').fetchall()
         self.assertEqual([(r['status'],r['current_hub_id'],r['origin_hub_id'],r['amount'],r['invoice_id']) for r in rows],
-                         [('Refusé',10,10,125.5,700),('Retourné',10,10,86.25,701)])
+                         [('Retourné',10,10,125.5,700),('Retourné',10,10,86.25,701)])
 
     def test_manager_access_route_is_hub_scoped_and_blocking_revokes_access(self):
         blocked=self.client.post('/api/logistics/hub/drivers/101/access',json={
@@ -297,6 +297,128 @@ class HubPaletteFlowTests(unittest.TestCase):
         response=self.create_palette('agent',10,'standard',10,20,[3],910)
         self.assertEqual(response.status_code,409,response.get_json())
 
+
+    def parcel_state(self,pid):
+        with self.conn() as c:
+            return dict(c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone())
+
+    def test_central_return_status_is_per_scanned_and_received_parcel(self):
+        r=self.create_palette('agent',10,'return_to_central',10,90,[1,2],910)
+        self.assertEqual(r.status_code,200,r.get_json());did=r.get_json()['id']
+        self.assertEqual(self.parcel_state(1)['status'],'Refusé')
+        r=self.scan_departure(did,'TRK-RETURN-1',10,910)
+        self.assertEqual(r.status_code,200,r.get_json())
+        self.assertEqual(self.parcel_state(1)['status'],'Vers Hub Central')
+        self.assertIsNone(self.parcel_state(1)['current_hub_id'])
+        self.assertEqual(self.parcel_state(2)['current_hub_id'],10)
+        self.assertEqual(self.parcel_state(2)['status'],'Retourné')
+        # Wrong Hub cannot receive, nor can the source mark its own shipment returned.
+        self.assertEqual(self.receive(did,'TRK-RETURN-1',20,920).status_code,404)
+        self.assertEqual(self.receive(did,'TRK-RETURN-1',10,910).status_code,404)
+        self.assertEqual(self.receive(did,'TRK-RETURN-2',90,990).status_code,404)
+        self.assertEqual(self.parcel_state(1)['status'],'Vers Hub Central')
+        r=self.receive(did,'TRK-RETURN-1',90,990)
+        self.assertEqual(r.status_code,200,r.get_json())
+        self.assertEqual((self.parcel_state(1)['status'],self.parcel_state(1)['current_hub_id']),('Retourné',90))
+        # The unscanned parcel stays at source, even after a partial Central receipt.
+        self.assertEqual(self.parcel_state(2)['current_hub_id'],10)
+        self.assertEqual(self.scan_departure(did,'TRK-RETURN-2',10,910).status_code,200)
+        self.assertEqual(self.parcel_state(2)['status'],'Vers Hub Central')
+        self.assertEqual(self.receive(did,'TRK-RETURN-2',90,990).status_code,200)
+        with self.conn() as c:self.assertEqual(c.execute('SELECT status FROM ops_documents WHERE id=?',(did,)).fetchone()[0],'Reçu')
+
+    def test_admin_receipt_and_duplicate_scans_are_idempotent(self):
+        r=self.create_palette('agent',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
+        self.assertEqual(self.scan_departure(did,'TRK-RETURN-1',20,920).status_code,404)
+        self.assertEqual(self.scan_departure(did,'TRK-RETURN-1',10,910).status_code,200)
+        revision=self.parcel_state(1)['ops_revision']
+        r=self.scan_departure(did,'TRK-RETURN-1',10,910)
+        self.assertTrue(r.get_json()['already_scanned']);self.assertEqual(self.parcel_state(1)['ops_revision'],revision)
+        r=self.client.post(f'/api/logistics/documents/{did}/receive',json={'tracking':'TRK-RETURN-1'},headers=self.headers('admin'))
+        self.assertEqual(r.status_code,200,r.get_json());self.assertEqual(self.parcel_state(1)['status'],'Retourné')
+        revision=self.parcel_state(1)['ops_revision']
+        r=self.receive(did,'TRK-RETURN-1',90,990);self.assertTrue(r.get_json()['already_received'])
+        self.assertEqual(self.parcel_state(1)['ops_revision'],revision)
+        p=self.parcel_state(1);self.assertEqual((p['amount'],p['invoice_id']),(125.5,700))
+
+    def test_new_transit_marker_rejects_status_tampering(self):
+        r=self.create_palette('agent',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
+        self.assertEqual(self.scan_departure(did,'TRK-RETURN-1',10,910).status_code,200)
+        with self.conn() as c:c.execute("UPDATE parcels SET status='Refusé' WHERE id=1")
+        self.assertEqual(self.receive(did,'TRK-RETURN-1',90,990).status_code,404)
+        r=self.client.post(f'/api/logistics/documents/{did}/receive',json={'tracking':'TRK-RETURN-1'},headers=self.headers('admin'))
+        self.assertEqual(r.status_code,409)
+
+    def test_legacy_inflight_return_can_still_be_received(self):
+        r=self.create_palette('agent',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
+        # Simulate an already dispatched pre-update manifest (no transit marker).
+        with self.conn() as c:
+            c.execute("UPDATE ops_documents SET status='En transit',dispatched_at='2026-10-10T12:00:00' WHERE id=?",(did,))
+            c.execute("UPDATE ops_document_lines SET departure_scanned_at='2026-10-10T12:00:00' WHERE document_id=?",(did,))
+            c.execute('UPDATE parcels SET current_hub_id=NULL WHERE id=1')
+        self.assertEqual(self.receive(did,'TRK-RETURN-1',90,990).status_code,200)
+        self.assertEqual(self.parcel_state(1)['status'],'Retourné')
+
+    def test_standard_transfers_still_use_transit_then_receptionne(self):
+        r=self.create_palette('agent',10,'standard',10,90,[3],910)
+        self.assertEqual(r.status_code,200,r.get_json());did=r.get_json()['id'];track=self.parcel_state(3)['tracking']
+        self.assertEqual(self.scan_departure(did,track,10,910).status_code,200)
+        self.assertEqual(self.parcel_state(3)['status'],'Transit')
+        self.assertEqual(self.receive(did,track,90,990).status_code,200)
+        self.assertEqual(self.parcel_state(3)['status'],'Réceptionné')
+
+    def outbound_transfer(self):
+        with self.conn() as c:
+            c.execute('UPDATE parcels SET current_hub_id=90,city_id=2 WHERE id=3')
+        r=self.create_palette('agent',90,'standard',90,10,[3],990)
+        self.assertEqual(r.status_code,200,r.get_json())
+        return r.get_json()['id'],self.parcel_state(3)['tracking']
+
+    def test_outbound_city_match_is_accepted_once(self):
+        did,tracking=self.outbound_transfer()
+        r=self.scan_departure(did,tracking,90,990)
+        self.assertEqual(r.status_code,200,r.get_json())
+        self.assertEqual(self.parcel_state(3)['status'],'Transit')
+        again=self.scan_departure(did,tracking,90,990)
+        self.assertTrue(again.get_json()['already_scanned'])
+        with self.conn() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND departure_scanned_at IS NOT NULL',(did,)).fetchone()[0],1)
+
+    def test_city_mapping_is_rechecked_at_scan_without_mutation(self):
+        did,tracking=self.outbound_transfer()
+        with self.conn() as c:c.execute('UPDATE cities SET hub_id=20 WHERE id=2')
+        before=self.parcel_state(3)
+        r=self.scan_departure(did,tracking,90,990)
+        self.assertEqual(r.status_code,409,r.get_json())
+        self.assertIn('Choisissez un autre Hub',r.get_json()['error'])
+        self.assertEqual(self.parcel_state(3),before)
+        with self.conn() as c:
+            self.assertIsNone(c.execute('SELECT departure_scanned_at FROM ops_document_lines WHERE document_id=?',(did,)).fetchone()[0])
+            self.assertEqual(c.execute('SELECT status FROM ops_documents WHERE id=?',(did,)).fetchone()[0],'Préparé')
+        r=self.client.post(f'/api/logistics/documents/{did}/departure-scan',json={'tracking':tracking},headers=self.headers('admin'))
+        self.assertEqual(r.status_code,409,r.get_json())
+
+    def test_unassigned_city_and_inactive_destination_are_rejected(self):
+        did,tracking=self.outbound_transfer()
+        with self.conn() as c:c.execute('UPDATE cities SET hub_id=NULL WHERE id=2')
+        self.assertEqual(self.scan_departure(did,tracking,90,990).status_code,409)
+        with self.conn() as c:
+            c.execute('UPDATE cities SET hub_id=10 WHERE id=2')
+            c.execute('UPDATE ops_hubs SET active=0 WHERE id=10')
+        self.assertEqual(self.scan_departure(did,tracking,90,990).status_code,409)
+
+    def test_unlisted_local_wrong_city_explained_but_foreign_not_disclosed(self):
+        did,_=self.outbound_transfer()
+        with self.conn() as c:
+            c.execute('UPDATE parcels SET current_hub_id=90,city_id=3 WHERE id=4')
+            tracking=c.execute('SELECT tracking FROM parcels WHERE id=4').fetchone()[0]
+        r=self.scan_departure(did,tracking,90,990)
+        self.assertEqual(r.status_code,409,r.get_json())
+        self.assertIn('Secondary B',r.get_json()['error'])
+        with self.conn() as c:c.execute('UPDATE parcels SET current_hub_id=20 WHERE id=4')
+        r=self.scan_departure(did,tracking,90,990)
+        self.assertEqual(r.status_code,404,r.get_json())
+        self.assertNotIn('Secondary B',r.get_json()['error'])
 
 if __name__=='__main__':
     unittest.main()

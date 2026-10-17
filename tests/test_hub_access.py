@@ -25,6 +25,7 @@ class HubManagerRoutePolicyTests(unittest.TestCase):
         cases = [
             ('GET', '/api/bootstrap'),
             ('GET', '/api/parcels/1'),
+            ('PATCH', '/api/parcels/1'),
             ('POST', '/api/logistics/parcels/1/tickets'),
             ('GET', '/api/logistics/config'),
             ('GET', '/api/logistics/documents'),
@@ -67,7 +68,9 @@ class HubManagerRoutePolicyTests(unittest.TestCase):
 
     def test_unreviewed_or_wrong_method_routes_fail_closed(self):
         cases = [
-            ('PATCH', '/api/parcels/1'),
+            ('PATCH', '/api/parcels/1/city'),
+            ('PATCH', '/api/parcels/1/reason'),
+            ('DELETE', '/api/parcels/1'),
             ('PATCH', '/api/logistics/hub/drivers/17/access'),
             ('PATCH', '/api/control-tower/settings'),
             ('POST', '/api/control-tower/zones/4'),
