@@ -7,7 +7,14 @@ import re
 import sqlite3
 
 HUB_MANAGER_SCOPED_ROUTES = (
+    ('GET', r'/api/drivers-workspace/\d+'),
+    ('POST', r'/api/drivers-workspace/\d+/scan-preview'),
+    ('POST', r'/api/drivers-workspace/\d+/scan-batch'),
+    ('POST', r'/api/driver-finance/preview'),
+    ('POST', r'/api/driver-finance/preview/[a-f0-9]{32}/confirm'),
+    ('GET', r'/api/driver-finance/statements/\d+'),
     ('GET', r'/api/bootstrap'), ('GET', r'/api/parcels/\d+'),
+    ('PATCH', r'/api/parcels/\d+'),
     ('POST', r'/api/logout'), ('PATCH', r'/api/profile'),
     ('GET', r'/api/tickets'), ('POST', r'/api/tickets'),
     ('GET', r'/api/tickets/\d+'), ('POST', r'/api/tickets/\d+'),
@@ -66,6 +73,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
 )
 
 HUB_OPERATIONAL_PREFIXES = (
+    '/api/drivers-workspace', '/api/driver-finance',
     '/api/parcels/', '/api/logistics/parcels/', '/api/logistics/config', '/api/logistics/documents', '/api/logistics/hub-dashboard', '/api/logistics/hub/', '/api/logistics/hub/drivers', '/api/logistics/cod/', '/api/logistics/notifications', '/api/partner-palettes',
     '/api/partner-palette-incidents', '/api/return-palettes', '/api/alerts',
     '/api/control-tower', '/api/logistics/palettes', '/api/logistics/palette-candidates',
@@ -221,3 +229,29 @@ def parcel_by_manifest_at_hub(conn, reference, hub_id):
         AND l.active=1 AND p.current_hub_id=? ORDER BY l.id LIMIT 1''',
         (reference, hub_id, hub_id),
     ).fetchone()
+
+
+def local_driver_parcel_scope(alias='p'):
+    """Custody at this Hub, or a courier tour dispatched from this Hub.
+
+    Parameters: local Hub twice. Never infer historical custody from today's
+    courier mapping alone. Latest assignment wins, including a NULL snapshot.
+    """
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', alias):
+        raise ValueError('Invalid SQL alias')
+    return f"""({alias}.current_hub_id=? OR ({alias}.current_hub_id IS NULL AND
+        (SELECT a.hub_id FROM ops_assignments a WHERE a.parcel_id={alias}.id
+         AND a.new_driver_id={alias}.driver_id ORDER BY a.id DESC LIMIT 1)=?))"""
+
+
+def driver_financial_hub_sql(alias='p'):
+    """Prefer the recorded closing attempt; otherwise the latest assignment.
+    Legacy rows with no evidence remain Admin-only.
+    """
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', alias):
+        raise ValueError('Invalid SQL alias')
+    return f"""COALESCE(
+        (SELECT a.operational_hub_id FROM ops_attempts a WHERE a.parcel_id={alias}.id
+         AND a.driver_id={alias}.driver_id AND a.outcome={alias}.status ORDER BY a.id DESC LIMIT 1),
+        (SELECT a.hub_id FROM ops_assignments a WHERE a.parcel_id={alias}.id
+         AND a.new_driver_id={alias}.driver_id ORDER BY a.id DESC LIMIT 1))"""

@@ -2,7 +2,7 @@
 import json,re,hashlib
 from flask import request,jsonify
 from audit_guard import install_driver_workspace_audit_guards
-from hub_access import driver_dispatch_allowed
+from hub_access import driver_dispatch_allowed, local_driver_parcel_scope
 from hub_analytics import install_driver_receipt_arrival_trigger
 from werkzeug.security import generate_password_hash
 
@@ -23,8 +23,17 @@ def register_driver_workspace(app,s):
         install_driver_workspace_audit_guards(c)
     def driver(c,uid):
         r=c.execute("SELECT id,name,email,phone,company,active,created_at,driver_hub_id,team_lead_id,driver_city_id,driver_address,driver_revision,driver_blocked,driver_archived FROM users WHERE id=? AND role='livreur'",(uid,)).fetchone()
-        if not r:raise Error('Livreur introuvable.',404)
+        actor=user()
+        if not r or (actor['role']=='agent' and r['driver_hub_id']!=actor.get('agent_hub_id')):
+            raise Error('Livreur introuvable.',404)
         return dict(r)
+    def custody_parcel(c,pid,u):
+        if u['role']!='agent':return parcel(c,pid,u)
+        h=u['agent_hub_id']
+        row=c.execute(f'SELECT p.id FROM parcels p WHERE p.id=? AND {local_driver_parcel_scope()}',(pid,h,h)).fetchone()
+        if not row:raise Error('Colis introuvable dans votre Hub.',404)
+        # Scope checked above. Keep the common lock/financial metadata loader.
+        return parcel(c,pid,{'role':'admin'})
     def body():
         d=request.get_json(silent=True)
         if not isinstance(d,dict):raise Error('Objet JSON requis.')
@@ -35,7 +44,7 @@ def register_driver_workspace(app,s):
         value=d.get(k,'')
         if not isinstance(value,str) or len(value.strip())>limit or (required and not value.strip()):raise Error('Champ invalide : '+k)
         return value.strip()
-    def record(c,uid,u,action,details,pid=None):c.execute('INSERT INTO driver_workspace_audit(driver_id,actor_id,action,parcel_id,details,created_at) VALUES(?,?,?,?,?,?)',(uid,u['id'],action,pid,json.dumps(details,ensure_ascii=False),now()))
+    def record(c,uid,u,action,details,pid=None):c.execute('INSERT INTO driver_workspace_audit(driver_id,actor_id,action,parcel_id,details,created_at) VALUES(?,?,?,?,?,?)',(uid,u['id'],action,pid,json.dumps({**details,'actor_hub_id':u.get('agent_hub_id')},ensure_ascii=False),now()))
     def outstanding(c,uid):return c.execute("SELECT count(*) FROM parcels p WHERE p.driver_id=? AND p.status!='Livré' AND NOT EXISTS(SELECT 1 FROM driver_receipts r WHERE r.parcel_id=p.id AND r.driver_id=p.driver_id)",(uid,)).fetchone()[0]
     @app.get('/api/drivers-workspace')
     @auth('admin')
@@ -46,10 +55,11 @@ def register_driver_workspace(app,s):
                 d=driver(c,r['id']);d['outstanding']=outstanding(c,d['id']);d['delivered']=c.execute("SELECT count(*) FROM parcels WHERE driver_id=? AND status='Livré'",(d['id'],)).fetchone()[0];rows.append(d)
             return jsonify(rows)
     @app.route('/api/drivers-workspace/<int:uid>',methods=['GET','PATCH'])
-    @auth('admin')
+    @auth('admin','agent')
     def driver_info(uid):
         u=user()
         with conn() as c:
+            if request.method=='PATCH' and u['role']!='admin':raise Error('Accès non autorisé.',403)
             if request.method=='PATCH':c.execute('BEGIN IMMEDIATE')
             old=driver(c,uid)
             if request.method=='PATCH':
@@ -74,8 +84,12 @@ def register_driver_workspace(app,s):
                     c.execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash(pw),uid));s['security_revoke_user'](c,uid,'Mot de passe réinitialisé par Admin',u['id'])
                 record(c,uid,u,'informations modifiées',dict(name=name,phone=phone,city_id=cid,address=address,driver_hub_id=new_driver_hub,password_reset=bool(pw)))
                 return jsonify(ok=True,changed=True)
-            ps=[p for p in s['list_parcels'](c,u) if p['driver_id']==uid and not p.get('driver_returned')]
+            if u['role']=='agent':
+                ids=c.execute(f'SELECT p.id FROM parcels p WHERE p.driver_id=? AND {local_driver_parcel_scope()} AND NOT EXISTS(SELECT 1 FROM driver_receipts r WHERE r.parcel_id=p.id AND r.driver_id=p.driver_id)',(uid,u['agent_hub_id'],u['agent_hub_id'])).fetchall()
+                ps=[custody_parcel(c,r['id'],u) for r in ids]
+            else:ps=[p for p in s['list_parcels'](c,u) if p['driver_id']==uid and not p.get('driver_returned')]
             audit=[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM driver_workspace_audit a JOIN users u ON u.id=a.actor_id WHERE driver_id=? ORDER BY a.id DESC LIMIT 200',(uid,))]
+            if u['role']=='agent':audit=[a for a in audit if a['details'].get('actor_hub_id')==u['agent_hub_id']]
             return jsonify(driver=old,parcels=ps,audit=audit)
     @app.post('/api/drivers-workspace/<int:uid>/access')
     @auth('admin')
@@ -117,14 +131,19 @@ def register_driver_workspace(app,s):
         if p['status'] not in CLOSED and (p['invoice_id'] or p['financial_locked']):raise Error('Colis ouvert verrouillé financièrement : régularisez le relevé.',409)
         return False
     @app.post('/api/drivers-workspace/<int:uid>/scan-preview')
-    @auth('admin')
+    @auth('admin','agent')
     def driver_scan_preview(uid):
         d=body();u=user();tracking=text(d,'tracking',80).upper();mode=d.get('mode')
         with conn() as c:
-            dr=driver(c,uid);rows=c.execute('SELECT p.id,cl.company FROM parcels p JOIN users cl ON cl.id=p.client_id WHERE upper(p.tracking)=?',(tracking,)).fetchall()
+            dr=driver(c,uid)
+            lookup='SELECT p.id,cl.company FROM parcels p JOIN users cl ON cl.id=p.client_id WHERE upper(p.tracking)=?'
+            args=[tracking]
+            if u['role']=='agent':
+                lookup+=' AND '+local_driver_parcel_scope();args += [u['agent_hub_id']]*2
+            rows=c.execute(lookup,args).fetchall()
             if not rows:raise Error('Référence introuvable.',404)
             if len(rows)>1:raise Error('Référence identique chez plusieurs sociétés ('+', '.join(sorted({r['company'] or '—' for r in rows[:6]}))+') : ouvrez le bon colis via la recherche avant la remise.',409)
-            p=parcel(c,rows[0]['id'],u);already=check(c,dr,p,mode);p=s['parcel_contact_info'](c,p)
+            p=custody_parcel(c,rows[0]['id'],u);already=check(c,dr,p,mode);p=s['parcel_contact_info'](c,p)
             return jsonify(parcel=p,already=already)
     @app.post('/api/drivers-workspace/<int:uid>/scan')
     @auth('admin')
@@ -146,6 +165,8 @@ def register_driver_workspace(app,s):
             if not already:
                 previous={k:p[k] for k in ['status','driver_id','reason_code','next_attempt_at','current_hub_id']}
                 if d['mode']=='assign':
+                    if p['driver_id']==uid:
+                        c.execute('INSERT INTO ops_assignments(parcel_id,old_driver_id,new_driver_id,actor_id,created_at,hub_id) VALUES(?,?,?,?,?,?)',(p['id'],uid,uid,u['id'],now(),p['current_hub_id']))
                     s['ops_change'](c,p,dict(driver_id=uid,status='Reçu par le livreur',revision=d['revision']),u)
                     c.execute("UPDATE parcels SET driver_id=?,status='Reçu par le livreur',updated_at=? WHERE id=?",(uid,now(),p['id']));c.execute('DELETE FROM driver_receipts WHERE parcel_id=?',(p['id'],));status='Reçu par le livreur';note='Remise physique au livreur : '+dr['name']
                 else:
@@ -161,7 +182,7 @@ def register_driver_workspace(app,s):
             result=dict(ok=True,already=bool(already),parcel_id=p['id'],mode=d['mode']);c.execute('INSERT INTO driver_scan_keys VALUES(?,?,?,?)',(u['id'],key,fp,json.dumps(result)));return jsonify(**result)
 
     @app.post('/api/drivers-workspace/<int:uid>/scan-batch')
-    @auth('admin')
+    @auth('admin','agent')
     def driver_custody_scan_batch(uid):
         """Confirm a collected barcode batch atomically after physical custody is verified."""
         d=body();u=user()
@@ -178,6 +199,10 @@ def register_driver_workspace(app,s):
         if not isinstance(key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,100}',key):
             raise Error('Clé de requête invalide.')
         hub=d.get('hub_id')
+        if u['role']=='agent' and mode=='receive':
+            if hub is not None and (type(hub) is not int or hub!=u['agent_hub_id']):
+                raise Error('La récupération doit se faire dans votre Hub.',403)
+            hub=u['agent_hub_id']
         if hub is not None and (type(hub) is not int or hub<=0):
             raise Error('Hub invalide.')
         normalized=[];seen=set()
@@ -190,7 +215,7 @@ def register_driver_workspace(app,s):
             if pid in seen:
                 raise Error('Un même colis apparaît plusieurs fois dans ce lot.')
             seen.add(pid);normalized.append({'parcel_id':pid,'revision':revision})
-        fingerprint=hashlib.sha256(json.dumps([uid,d],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        fingerprint=hashlib.sha256(json.dumps(([uid,d,u.get('agent_hub_id')] if u['role']=='agent' else [uid,d]),sort_keys=True,ensure_ascii=False).encode()).hexdigest()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
             dr=driver(c,uid)
@@ -205,7 +230,7 @@ def register_driver_workspace(app,s):
                 raise Error('Le départ remet les colis au livreur, pas à un hub.')
             checked=[]
             for item in normalized:
-                p=parcel(c,item['parcel_id'],u)
+                p=custody_parcel(c,item['parcel_id'],u)
                 already=check(c,dr,p,mode)
                 rev({'revision':item['revision']},p['ops_revision'])
                 checked.append((p,already))
@@ -216,6 +241,8 @@ def register_driver_workspace(app,s):
                     continue
                 previous={k:p[k] for k in ['status','driver_id','reason_code','next_attempt_at','current_hub_id']}
                 if mode=='assign':
+                    if p['driver_id']==uid:
+                        c.execute('INSERT INTO ops_assignments(parcel_id,old_driver_id,new_driver_id,actor_id,created_at,hub_id) VALUES(?,?,?,?,?,?)',(p['id'],uid,uid,u['id'],now(),p['current_hub_id']))
                     s['ops_change'](c,p,dict(driver_id=uid,status='Reçu par le livreur',revision=p['ops_revision']),u)
                     c.execute("UPDATE parcels SET driver_id=?,status='Reçu par le livreur',updated_at=? WHERE id=?",(uid,now(),p['id']))
                     c.execute('DELETE FROM driver_receipts WHERE parcel_id=?',(p['id'],))

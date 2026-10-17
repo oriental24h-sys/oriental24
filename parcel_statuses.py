@@ -1,7 +1,9 @@
 """Approved parcel states. New open states never enter closed financial ledgers."""
-STATUSES = ['Transit','Reporté','Programmé','Réceptionné','Reçu par le livreur','Livré','Refusé','Intéressé',
+CENTRAL_RETURN_TRANSIT = 'Vers Hub Central'
+STATUSES = [CENTRAL_RETURN_TRANSIT,'Transit','Reporté','Programmé','Réceptionné','Reçu par le livreur','Livré','Refusé','Intéressé',
             'Créé','Ramassé','Au hub','En livraison','Retourné','Annulé']
 STATUS_HELP = {
+ CENTRAL_RETURN_TRANSIT:'Retour scanné au départ vers le Hub Central. Retourné uniquement après réception physique au Hub destinataire par Admin ou son responsable.',
  'Transit':'Transport entre agences. Aucun encaissement ni livraison au destinataire.',
  'Reporté':'Livraison différée sans rendez-vous fixé. L’ancien rendez-vous est retiré.',
  'Programmé':'Livraison avec un motif et un rendez-vous futur, heure du Maroc.',

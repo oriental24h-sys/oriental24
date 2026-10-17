@@ -79,6 +79,7 @@ def register_logistics(app, services):
         for key,definition in [('palette_purpose',"TEXT NOT NULL DEFAULT 'standard'"),('transport',"TEXT NOT NULL DEFAULT ''"),('tracking_code',"TEXT NOT NULL DEFAULT ''"),('lots','INTEGER NOT NULL DEFAULT 0')]:
             if key not in document_columns:c.execute(f'ALTER TABLE ops_documents ADD COLUMN {key} {definition}')
         line_columns={r['name'] for r in c.execute('PRAGMA table_info(ops_document_lines)')}
+        if 'return_transit_status' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN return_transit_status TEXT')
         if 'return_status' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN return_status TEXT')
         if 'departure_scanned_at' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_scanned_at TEXT')
         if 'departure_scanned_by' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_scanned_by INTEGER')
@@ -840,7 +841,7 @@ def register_logistics(app, services):
                             ORDER BY l.received_at DESC,l.id DESC LIMIT 1''',(pid,src['id'])).fetchone()
                         prior_status=prior_status['return_status'] if prior_status else None
                         if prior_status not in ('Retourné','Refusé'):raise Error('Statut initial du retour non confirmé; révision Admin requise.',409)
-                        line_return_status[pid]=prior_status
+                        line_return_status[pid]=p['status']
                 else:
                     if kind=='return':
                         if p['status'] not in ['Retourné','Refusé']:raise Error('Un bon de retour ne contient que des colis retournés/refusés.')
@@ -914,6 +915,20 @@ def register_logistics(app, services):
             d['audit']=audit_rows
             return jsonify(d)
 
+    def check_transfer_city(c,doc,p):
+        # Ordinary outbound transfers only. Inbound Central routing and physical
+        # returns to origin are separate workflows, not delivery-city routing.
+        if doc['kind']!='transfer' or doc.get('palette_purpose','standard')!='standard':return
+        central_id,_=current_central_hub(c)
+        if doc['destination_hub_id']==central_id:return
+        destination=c.execute('SELECT name,active FROM ops_hubs WHERE id=?',(doc['destination_hub_id'],)).fetchone()
+        city=c.execute('SELECT name,hub_id FROM cities WHERE id=?',(p['city_id'],)).fetchone()
+        if not destination or not destination['active']:
+            raise Error('Hub de destination inactif : colis non scanné. Choisissez un autre Hub.',409)
+        if not city or city['hub_id']!=doc['destination_hub_id']:
+            name=city['name'] if city else 'non renseignée'
+            raise Error(f"Colis non scanné : la ville {name} n’est pas rattachée à {destination['name']}. Choisissez un autre Hub.",409)
+
     @app.post(P+'/documents/<int:did>/departure-scan')
     @auth('admin','agent')
     def ops_document_departure_scan(did):
@@ -926,7 +941,12 @@ def register_logistics(app, services):
             if doc['kind']!='transfer' or not doc['departure_scan_required']:
                 raise Error('Ce document ne requiert pas les scans de sortie.',409)
             line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking and l['active']),None)
-            if not line:raise Error('Ce colis ne figure pas dans ce document actif.',404)
+            if not line:
+                # Give a routing explanation only for a code physically at the
+                # source; never disclose a foreign Hub's parcel or city.
+                candidates=c.execute('SELECT * FROM parcels WHERE upper(tracking)=? AND current_hub_id=?',(tracking,doc['source_hub_id'])).fetchall()
+                if len(candidates)==1:check_transfer_city(c,doc,candidates[0])
+                raise Error('Colis non scanné : cette référence ne figure pas dans ce transfert actif.',404)
             if line['departure_scanned_at']:
                 return jsonify(ok=True,already_scanned=True,departure_scanned=doc['departure_scanned'],count=doc['count'],dispatched=bool(doc['dispatched_at']))
             if doc['status'] not in ['Préparé','Départ partiel']:
@@ -939,11 +959,16 @@ def register_logistics(app, services):
             else:guard(c,p,False)
             if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
                 raise Error('Le colis n’est plus enregistré physiquement au Hub de départ.',409)
+            check_transfer_city(c,doc,p)
             scanned_at=now()
             cur=c.execute('UPDATE ops_document_lines SET departure_scanned_at=?,departure_scanned_by=? WHERE id=? AND departure_scanned_at IS NULL',(scanned_at,u['id'],line['id']))
             if cur.rowcount!=1:raise Error('Le scan vient d’être enregistré. Rechargez le manifeste.',409)
-            if special_return:
-                # Preserve Refusé/Retourné so finance formulas stay unchanged during the physical transfer.
+            if doc.get('palette_purpose')=='return_to_central':
+                c.execute("UPDATE ops_document_lines SET return_transit_status='Vers Hub Central' WHERE id=?",(line['id'],))
+                c.execute("UPDATE parcels SET status='Vers Hub Central',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
+                event(c,p['id'],'Vers Hub Central',doc['reference']+' · retour scanné au départ vers le Hub Central; réception attendue',u)
+            elif special_return:
+                # Onward sorting from Central preserves the received return state.
                 c.execute('UPDATE parcels SET current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?',(scanned_at,p['id']))
                 event(c,p['id'],p['status'],doc['reference']+' · scan de sortie Hub; statut financier inchangé',u)
             else:
@@ -955,7 +980,7 @@ def register_logistics(app, services):
             c.execute('UPDATE ops_documents SET status=?,dispatched_at=?,completed_at=?,revision=revision+1 WHERE id=?',(next_status,scanned_at if complete else None,completed_at,did))
             audit(c,did,u,'Scan de sortie enregistré',{'tracking':tracking,'parcel_id':p['id'],'source_hub_id':doc['source_hub_id']})
             if complete:audit(c,did,u,'Départ physique confirmé',{'count':doc['count'],'source_hub_id':doc['source_hub_id'],'destination_hub_id':doc['destination_hub_id']})
-            return jsonify(ok=True,already_scanned=False,departure_scanned=departure_scanned,count=doc['count'],dispatched=complete)
+            return jsonify(ok=True,already_scanned=False,departure_scanned=departure_scanned,count=doc['count'],dispatched=complete,parcel_status='Vers Hub Central' if doc.get('palette_purpose')=='return_to_central' else p['status'] if special_return else 'Transit')
 
     @app.post(P+'/documents/<int:did>/reconcile-departure')
     @auth('admin')
@@ -1041,6 +1066,7 @@ def register_logistics(app, services):
                     for line in doc['lines']:
                         p=parcel(c,line['parcel_id'],u)
                         if doc['kind']!='return':guard(c,p,False)
+                        check_transfer_city(c,doc,p)
                     c.execute("UPDATE ops_documents SET status='En transit',dispatched_at=?,revision=revision+1 WHERE id=?",(now(),did))
                     audit(c,did,u,'Départ confirmé',{'count':doc['count']})
                     for line in doc['lines']:
@@ -1064,8 +1090,8 @@ def register_logistics(app, services):
                         raise Error(unavailable,404)
                     if doc['status'] not in ['En transit','Partiellement reçu','Départ partiel']:
                         raise Error(unavailable,404)
-                    expected_status=line.get('return_status') if special_return else 'Transit'
-                    if p['current_hub_id'] is not None or (special_return and expected_status not in ('Retourné','Refusé')) or p['status']!=expected_status:
+                    expected_status=(line.get('return_transit_status') or line.get('return_status')) if special_return else 'Transit'
+                    if p['current_hub_id'] is not None or (special_return and line.get('return_status') not in ('Retourné','Refusé')) or p['status']!=expected_status:
                         raise Error(unavailable,404)
                     if doc['departure_scan_required'] and not line['departure_scanned_at']:
                         raise Error(unavailable,404)
@@ -1079,7 +1105,7 @@ def register_logistics(app, services):
                     p=parcel(c,line['parcel_id'],u)
                 if not p:raise Error('Document introuvable.',404)
                 if doc['kind']=='transfer' and doc['departure_scan_required']:
-                    expected_status=line.get('return_status') if special_return else 'Transit'
+                    expected_status=(line.get('return_transit_status') or line.get('return_status')) if special_return else 'Transit'
                     if p['current_hub_id'] is not None or p['status']!=expected_status:
                         raise Error('Le colis n’est pas en transit vers ce Hub ou a déjà été localisé ailleurs.',409)
                 if doc['kind']!='return' and not special_return:
@@ -1087,7 +1113,7 @@ def register_logistics(app, services):
                         try:guard(c,p,False)
                         except Error:raise Error('Colis non disponible pour réception à ce Hub.',404)
                     else:guard(c,p,False)
-                if special_return and (line.get('return_status') not in ('Retourné','Refusé') or p['status']!=line.get('return_status')):
+                if special_return and (line.get('return_status') not in ('Retourné','Refusé') or p['status']!=(line.get('return_transit_status') or line.get('return_status'))):
                     raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
                 received_at=now()
                 c.execute('UPDATE ops_document_lines SET received_at=?,received_by=? WHERE id=?',(received_at,u['id'],line['id']))
@@ -1101,12 +1127,15 @@ def register_logistics(app, services):
                 if doc['kind']!='return' and not special_return:
                     c.execute("UPDATE parcels SET status=?,next_attempt_at=NULL,reason_code=NULL,updated_at=? WHERE id=?",(received_status,received_at,p['id']))
                 if complete:c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,))
-                event_status=p['status'] if doc['kind']=='return' or special_return else received_status
-                event_note=doc['reference']+' · réception physique déclarée'+(' · statut Retourné/Refusé et données financières préservés' if special_return else '')
+                central_return=doc.get('palette_purpose')=='return_to_central'
+                if central_return:
+                    c.execute("UPDATE parcels SET status='Retourné',next_attempt_at=NULL,reason_code=NULL WHERE id=?",(p['id'],))
+                event_status='Retourné' if central_return else p['status'] if doc['kind']=='return' or special_return else received_status
+                event_note=doc['reference']+(' · retour réceptionné physiquement au Hub Central · statut Retourné confirmé' if central_return else ' · réception physique déclarée'+(' · état de retour conservé' if special_return else ''))
                 event(c,p['id'],event_status,event_note,u)
-                audit(c,did,u,'Colis reçu',{'tracking':tracking,'parcel_id':p['id'],'palette_purpose':doc.get('palette_purpose','standard'),'financial_status_preserved':bool(special_return)})
+                audit(c,did,u,'Colis reçu',{'tracking':tracking,'parcel_id':p['id'],'palette_purpose':doc.get('palette_purpose','standard'),'financial_status_preserved':bool(special_return and not central_return),'previous_status':p['status'],'new_status':event_status})
             else:raise Error('Action inconnue.',404)
-            return jsonify(ok=True,already_received=False)
+            return jsonify(ok=True,already_received=False,parcel_status=event_status if action=='receive' else None)
 
     @app.post(P+'/assignments/preview')
     @auth('admin')
@@ -1286,6 +1315,10 @@ def register_logistics(app, services):
                     ) assigned_open_count
                 FROM users u WHERE u.role='livreur' AND u.driver_hub_id=?
                 ORDER BY u.active DESC,u.name COLLATE NOCASE,u.id''',(local_hub['id'],))]
+            from hub_access import local_driver_parcel_scope, driver_financial_hub_sql
+            for d in rows:
+                d['outstanding']=c.execute(f"SELECT count(*) FROM parcels p WHERE p.driver_id=? AND p.status!='Livré' AND {local_driver_parcel_scope()} AND NOT EXISTS(SELECT 1 FROM driver_receipts r WHERE r.parcel_id=p.id AND r.driver_id=p.driver_id)",(d['id'],local_hub['id'],local_hub['id'])).fetchone()[0]
+                d['delivered']=c.execute(f"SELECT count(*) FROM parcels p WHERE p.driver_id=? AND p.status='Livré' AND {driver_financial_hub_sql()}=?",(d['id'],local_hub['id'])).fetchone()[0]
             return jsonify(hub=local_hub,drivers=rows)
 
     @app.post(P+'/hub/drivers')

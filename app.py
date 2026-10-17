@@ -399,12 +399,25 @@ def create_parcel():
         city_support=dict(assigned) if assigned and assigned['id'] else None
     return jsonify(ok=True,tracking=track,city_support=city_support)
 @app.patch('/api/parcels/<int:pid>')
-@auth('admin','livreur','client')
+@auth('admin','livreur','client','agent')
 def update_parcel(pid):
     d=request.get_json() or {};u=user()
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         p=parcel(c,pid,u)
+        if isinstance(d,dict) and d.get('status')=='Vers Hub Central':
+            raise APIError('Cet état est réservé au scan de départ d’un retour vers le Hub Central.',409)
+        if u['role']=='agent':
+            # The existing parcel() loader scopes this operation to the active
+            # manager's physical Hub. Never grant generic parcel editing rights.
+            allowed={'status','revision','note','reason_code','next_attempt_at','otp'}
+            if not isinstance(d,dict) or set(d)-allowed or 'status' not in d or type(d.get('revision')) is not int:
+                raise APIError('Le responsable de Hub peut uniquement modifier la situation avec sa version.',403)
+            if p['status'] in ('Livré','Retourné'):
+                raise APIError('Commande Livré ou Retourné : situation définitivement verrouillée pour le responsable de Hub.',409)
+            if d['status'] not in STATUSES:raise APIError('Statut invalide.')
+            if p['invoice_id'] or p['financial_locked'] or p['operations_locked']:
+                raise APIError('Commande verrouillée dans un relevé financier ou un document actif.',409)
         if u['role']=='client':
             # Clients may only flag their own still-open, non-invoiced parcel as interested.
             # Delivery, returns, refusals, cancellations and all financial/operations locks stay immutable.
@@ -455,6 +468,10 @@ def update_parcel(pid):
             if s=='Livré' and p.get('otp_required'):c.execute('UPDATE parcels SET otp_verified_at=? WHERE id=?',(now(),pid))
             c.execute('UPDATE parcels SET status=?,note=?,updated_at=? WHERE id=?',(s,note or p['note'],now(),pid))
             event(c,pid,s,note or 'Statut mis à jour',u)
+            if u['role']=='agent':
+                append_audit_log(c,actor_id=u['id'],actor_name=u['name'],action='hub_parcel_status_changed',
+                    entity_type='parcel',entity_id=pid,old_value={'status':p['status']},new_value={'status':s},
+                    metadata={'hub_id':u['agent_hub_id'],'note':note},created_at=now())
     return jsonify(ok=True)
 @app.post('/api/parcels/bulk-assign')
 @auth('admin','livreur')

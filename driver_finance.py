@@ -99,6 +99,9 @@ def register_driver_finance(app, services):
         row = c.execute("SELECT id,name,email,phone,active,driver_hub_id FROM users WHERE id=? AND role='livreur'", (did,)).fetchone()
         if not row or (active and not row['active']):
             raise Error('Choisissez un livreur actif.', 400)
+        actor=user()
+        if actor['role']=='agent' and row['driver_hub_id']!=actor.get('agent_hub_id'):
+            raise Error('Livreur introuvable.',404)
         return dict(row)
 
     def audit(c, did, sid, u, action, details):
@@ -120,6 +123,14 @@ def register_driver_finance(app, services):
     def statement(c, sid, u):
         s = c.execute('SELECT * FROM driver_statements WHERE id=?', (sid,)).fetchone()
         check_scope(s, u)
+        if u['role']=='agent' and s['hub_id']!=u.get('agent_hub_id'):
+            raise Error('Relevé introuvable.',404)
+        if u['role']=='agent':
+            from hub_access import driver_financial_hub_sql
+            foreign=c.execute(f'''SELECT 1 FROM driver_statement_lines l
+                LEFT JOIN parcels p ON p.id=l.parcel_id WHERE l.statement_id=?
+                AND ({driver_financial_hub_sql()}) IS NOT ? LIMIT 1''',(sid,u['agent_hub_id'])).fetchone()
+            if foreign:raise Error('Ce relevé contient un historique hors de votre Hub. Contactez Admin.',403)
         return dict(s)
 
     def balances(c, s):
@@ -165,6 +176,10 @@ def register_driver_finance(app, services):
             WHERE p.driver_id=? AND p.status IN ('Livré','Retourné','Refusé')
             AND NOT EXISTS(SELECT 1 FROM driver_statement_lines l WHERE l.parcel_id=p.id AND l.active=1)"""
         args = [dr['id']]
+        if user()['role']=='agent':
+            from hub_access import driver_financial_hub_sql
+            sql+=' AND '+driver_financial_hub_sql()+'=?'
+            args.append(user()['agent_hub_id'])
         if period_from: sql += ' AND substr(p.updated_at,1,10)>=?'; args.append(period_from)
         if period_to: sql += ' AND substr(p.updated_at,1,10)<=?'; args.append(period_to)
         rows = c.execute(sql+' ORDER BY p.id LIMIT 501', args).fetchall()
@@ -260,7 +275,7 @@ def register_driver_finance(app, services):
             return jsonify(statements=statements,summary=summary,transactions=[dict(r) for r in txs])
 
     @app.post(PREFIX+'/preview')
-    @auth('admin')
+    @auth('admin','agent')
     def preview():
         d=payload(); u=user(); start,end=parse_period(d)
         with conn() as c:
@@ -272,14 +287,16 @@ def register_driver_finance(app, services):
             return jsonify(token=token,**snapshot)
 
     @app.post(PREFIX+'/preview/<token>/confirm')
-    @auth('admin')
+    @auth('admin','agent')
     def confirm(token):
         u=user()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
             draft=c.execute('SELECT * FROM driver_statement_previews WHERE id=? AND owner_id=?',(token,u['id'])).fetchone()
             if not draft: raise Error('Prévisualisation introuvable.',404)
+            driver(c,draft['driver_id'])
             if draft['statement_id']:
+                statement(c,draft['statement_id'],u)
                 return jsonify(ok=True,already_created=True,statement_id=draft['statement_id'])
             if datetime.fromisoformat(draft['created_at'])<datetime.now()-timedelta(minutes=30):
                 raise Error('Prévisualisation expirée. Générez un nouvel aperçu.',409)
@@ -300,7 +317,7 @@ def register_driver_finance(app, services):
             return jsonify(ok=True,already_created=False,statement_id=sid)
 
     @app.get(PREFIX+'/statements/<int:sid>')
-    @auth('admin', 'livreur')
+    @auth('admin', 'livreur', 'agent')
     def get_statement(sid):
         with conn() as c:
             c.execute('BEGIN')
