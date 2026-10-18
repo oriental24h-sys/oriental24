@@ -45,6 +45,113 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual(r.status_code,200,r.json)
         self.headers={'X-CSRF-Token':r.json['csrf']}
 
+    def test_read_notification_retention_and_first_read_timestamp(self):
+        from datetime import datetime, timedelta
+        old = (datetime.fromisoformat(self.m.now()) - timedelta(hours=3)).isoformat(timespec='seconds')
+        recent = (datetime.fromisoformat(self.m.now()) - timedelta(minutes=30)).isoformat(timespec='seconds')
+        with self.m.conn() as c:
+            def add(read_at, owner=None):
+                return c.execute("INSERT INTO ops_notifications(user_id,title,body,created_at,read_at) VALUES(?,'Test','',?,?)", (owner or self.manager, old, read_at)).lastrowid
+            expired, fresh, unread, foreign = add(old), add(recent), add(None), add(None, self.other_driver)
+        response = self.client.get('/api/logistics/notifications')
+        self.assertEqual(response.status_code, 200)
+        ids = {n['id'] for n in response.json['items']}
+        self.assertNotIn(expired, ids)
+        self.assertIn(fresh, ids)
+        self.assertIn(unread, ids)
+        self.assertNotIn(foreign, ids)
+        r = self.client.patch('/api/logistics/notifications', json={'all': True}, headers=self.headers)
+        self.assertEqual(r.status_code, 200)
+        with self.m.conn() as c:
+            self.assertEqual(c.execute('SELECT read_at FROM ops_notifications WHERE id=?', (fresh,)).fetchone()[0], recent)
+            self.assertIsNotNone(c.execute('SELECT read_at FROM ops_notifications WHERE id=?', (unread,)).fetchone()[0])
+            self.assertIsNone(c.execute('SELECT read_at FROM ops_notifications WHERE id=?', (foreign,)).fetchone()[0])
+            self.assertIsNone(c.execute('SELECT id FROM ops_notifications WHERE id=?', (expired,)).fetchone())
+
+    def palette_client_fixture(self):
+        with self.m.conn() as c:
+            c.execute("UPDATE users SET role='client',client_type='societe_livraison' WHERE id=?",(self.manager,))
+        def order(owner=None):
+            pid,_=self.parcel(status='Créé')
+            with self.m.conn() as c:
+                c.execute('UPDATE parcels SET client_id=?,current_hub_id=NULL,driver_id=NULL WHERE id=?',(owner or self.manager,pid))
+            return pid
+        self.palette_order=order
+        first=order()
+        r=self.post('partner-palettes',{'parcel_ids':[first],'destination_hub_id':self.hub,'request_key':uuid.uuid4().hex})
+        self.assertEqual(r.status_code,200,r.json)
+        return r.json,first
+
+    def palette_action(self,doc,action,**extra):
+        data={'revision':doc['revision'],'request_key':uuid.uuid4().hex,'confirmed':True,**extra}
+        return self.post('partner-palettes/'+str(doc['id'])+'/'+action,data)
+
+    def test_client_palette_add_dispatch_and_lock(self):
+        doc,first=self.palette_client_fixture();second=self.palette_order()
+        r=self.palette_action(doc,'add',parcel_ids=[second]);self.assertEqual(r.status_code,200,r.json)
+        doc=r.json
+        d=self.client.get('/api/partner-palettes/'+str(doc['id'])).json
+        self.assertEqual(d['count'],2)
+        self.assertEqual(d['status'],'Préparé')
+        r=self.palette_action(doc,'dispatch');self.assertEqual(r.status_code,200,r.json);doc=r.json
+        self.assertEqual(doc['status'],'En transit')
+        for action,extras in [('add',{'parcel_ids':[self.palette_order()]}),('delete',{}),('cancel',{'reason':'No longer wanted'})]:
+            r=self.palette_action(doc,action,**extras);self.assertEqual(r.status_code,409,r.json)
+        with self.m.conn() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND active=1',(doc['id'],)).fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT status FROM parcels WHERE id=?',(first,)).fetchone()[0],'Créé')
+
+    def test_client_palette_add_retry_and_stale_confirmation(self):
+        doc,first=self.palette_client_fixture();second=self.palette_order()
+        data={'revision':doc['revision'],'request_key':uuid.uuid4().hex,'confirmed':True,'parcel_ids':[second]}
+        path='partner-palettes/'+str(doc['id'])+'/add'
+        r=self.post(path,data);self.assertEqual(r.status_code,200,r.json)
+        retry=self.post(path,data);self.assertEqual(retry.status_code,200,retry.json);self.assertTrue(retry.json['replayed'])
+        self.assertEqual(self.client.get('/api/partner-palettes/'+str(doc['id'])).json['count'],2)
+        r=self.palette_action(doc,'dispatch');self.assertEqual(r.status_code,409,r.json)
+        r=self.palette_action(doc,'delete');self.assertEqual(r.status_code,409,r.json)
+        current=retry.json
+        r=self.palette_action(current,'add',parcel_ids=[second]);self.assertEqual(r.status_code,409,r.json)
+
+    def test_client_palette_add_is_atomic_and_scoped(self):
+        doc,first=self.palette_client_fixture();second=self.palette_order();foreign=self.palette_order(self.client_id)
+        r=self.palette_action(doc,'add',parcel_ids=[second,foreign]);self.assertEqual(r.status_code,404,r.json)
+        d=self.client.get('/api/partner-palettes/'+str(doc['id'])).json
+        self.assertEqual(d['count'],1);self.assertEqual(d['revision'],doc['revision'])
+        for ids in [[],[True],[second,second],list(range(1,502))]:
+            r=self.palette_action(doc,'add',parcel_ids=ids);self.assertEqual(r.status_code,400,r.json)
+        other=self.post('partner-palettes',{'parcel_ids':[second],'destination_hub_id':self.hub,'request_key':uuid.uuid4().hex})
+        self.assertEqual(other.status_code,200,other.json)
+        r=self.palette_action(doc,'add',parcel_ids=[second]);self.assertEqual(r.status_code,409,r.json)
+        with self.m.conn() as c:c.execute('UPDATE ops_documents SET client_id=? WHERE id=?',(self.client_id,doc['id']))
+        for action in ['add','delete','dispatch']:
+            r=self.palette_action(doc,action,parcel_ids=[second]);self.assertEqual(r.status_code,404,r.json)
+
+    def test_client_palette_delete_preserves_orders_and_audit(self):
+        doc,first=self.palette_client_fixture()
+        data={'revision':doc['revision'],'request_key':uuid.uuid4().hex,'confirmed':True}
+        path='partner-palettes/'+str(doc['id'])+'/delete'
+        r=self.post(path,data);self.assertEqual(r.status_code,200,r.json);self.assertTrue(r.json['deleted'])
+        retry=self.post(path,data);self.assertEqual(retry.status_code,200,retry.json);self.assertTrue(retry.json['replayed'])
+        listing=self.client.get('/api/partner-palettes').json
+        self.assertNotIn(doc['id'],[r['id'] for r in listing['rows']])
+        self.assertEqual(self.client.get('/api/partner-palettes/'+str(doc['id'])).status_code,404)
+        sync=self.post('partner-palettes/daily-draft',{'destination_hub_id':self.hub})
+        self.assertEqual(sync.status_code,200,sync.json)
+        self.assertFalse(sync.json.get('id'))
+        candidates=self.client.get('/api/partner-palettes/candidates').json
+        self.assertIn(first,[r['id'] for r in candidates['rows']])
+        with self.m.conn() as c:
+            self.assertEqual(c.execute('SELECT status FROM parcels WHERE id=?',(first,)).fetchone()[0],'Créé')
+            self.assertIsNotNone(c.execute("SELECT id FROM ops_audit WHERE document_id=? AND action='Brouillon supprimé par le client'",(doc['id'],)).fetchone())
+
+    def test_client_palette_mutations_require_confirmation_and_csrf(self):
+        doc,first=self.palette_client_fixture()
+        for action in ['add','delete','dispatch']:
+            r=self.palette_action(doc,action,confirmed=False,parcel_ids=[self.palette_order()]);self.assertEqual(r.status_code,400,r.json)
+            r=self.client.post('/api/partner-palettes/'+str(doc['id'])+'/'+action,json={'confirmed':True,'revision':doc['revision'],'request_key':uuid.uuid4().hex})
+            self.assertEqual(r.status_code,403,r.json)
+
     def post(self,path,data):
         return self.client.post('/api/'+path,json=data,headers=self.headers)
 
@@ -216,5 +323,29 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         csrf=admin.get('/api/bootstrap').json['csrf']
         r=admin.patch(f'/api/parcels/{pid}',json={'status':'Reporté','revision':0,'note':'Correction administrative'},headers={'X-CSRF-Token':csrf})
         self.assertEqual(r.status_code,200,r.json)
+
+    def test_company_profile_http_save_and_private_bootstrap(self):
+        with self.m.conn() as c:c.execute("UPDATE users SET role='client',client_type='societe_livraison' WHERE id=?",(self.manager,))
+        data={'name':'My Company','phone':'0600000000','company':'Test','bank_name':'Test Bank','bank_rib':'0'*24}
+        r=self.client.patch('/api/profile',json=data,headers=self.headers)
+        self.assertEqual(r.status_code,200,r.json)
+        r=self.client.get('/api/bootstrap');self.assertEqual(r.json['user']['bank_rib'],'0'*24)
+        self.assertTrue(all('bank_rib' not in u and 'profile_image' not in u for u in r.json['users']))
+        self.assertEqual(self.client.patch('/api/profile',json=data).status_code,403)
+        data['bank_rib']='wrong';data['name']='MUST NOT SAVE'
+        self.assertEqual(self.client.patch('/api/profile',json=data,headers=self.headers).status_code,400)
+        self.assertEqual(self.client.get('/api/bootstrap').json['user']['name'],'My Company')
+
+    def test_company_profile_rolls_back_with_wrong_password(self):
+        with self.m.conn() as c:c.execute("UPDATE users SET role='client',client_type='societe_livraison' WHERE id=?",(self.manager,))
+        data={'name':'Changed','phone':'0600000000','company':'Test','bank_name':'MUST NOT SAVE','password':'NewPassword123!','current_password':'incorrect'}
+        r=self.client.patch('/api/profile',json=data,headers=self.headers);self.assertEqual(r.status_code,400)
+        u=self.client.get('/api/bootstrap').json['user']
+        self.assertEqual(u['bank_name'],'');self.assertEqual(u['name'],'Manager')
+
+    def test_non_company_profile_cannot_add_bank_or_image(self):
+        for fields in ({'bank_name':'Bank'},{'bank_rib':'0'*24},{'profile_image':''}):
+            r=self.client.patch('/api/profile',json={'name':'Manager','phone':'0600000000','company':'Test',**fields},headers=self.headers)
+            self.assertEqual(r.status_code,403,r.json)
 
 if __name__=='__main__': unittest.main()
