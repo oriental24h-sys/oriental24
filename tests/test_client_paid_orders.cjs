@@ -1,0 +1,16 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const code = fs.readFileSync('static/app.js', 'utf8');
+const context = {};
+vm.createContext(context);
+vm.runInContext(code.slice(code.indexOf('function clientPaidOrderMetrics('), code.indexOf('function clientPaidOrderStats(')), context);
+const metric = rows => JSON.parse(JSON.stringify(context.clientPaidOrderMetrics(rows)));
+assert.deepEqual(metric([]), {paid:0,cod:0,pending:0,rate:null});
+const p = (status, invoice_status, amount=100, invoice_id=1) => ({status,invoice_status,amount,invoice_id});
+const rows = [p('Livré','Réglée',123.45),p('Livré','Réglée','76.55'),p('Retourné','Réglée'),p('Livré','Partiellement réglée'),p('Livré','À régler'),p('Livré',null,100,null),p('Transit','Réglée')];
+assert.deepEqual(metric(rows),{paid:2,cod:200,pending:3,rate:40});
+rows[0].invoice_status='À régler';
+assert.deepEqual(metric(rows),{paid:1,cod:76.55,pending:4,rate:20});
+assert.deepEqual(metric([p('Livré','Réglée',0)]),{paid:1,cod:0,pending:0,rate:100});
+console.log('Paid order metrics: empty, paid, partial, returned, reversal, decimals, zero: OK');
