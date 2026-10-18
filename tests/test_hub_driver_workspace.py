@@ -152,6 +152,217 @@ class HubDriverWorkspaceTests(unittest.TestCase):
             r=self.client.post('/api/partner-palettes/'+str(doc['id'])+'/'+action,json={'confirmed':True,'revision':doc['revision'],'request_key':uuid.uuid4().hex})
             self.assertEqual(r.status_code,403,r.json)
 
+    def test_session_history_purges_old_rows_and_keeps_current_session(self):
+        import time
+        t=int(time.time())
+        with self.m.conn() as c:
+            old=c.execute("INSERT INTO auth_sessions(user_id,token_hash,created_at,last_seen,expires_at,user_agent,network) VALUES(?,?,?,?,?,'Test old','masked')",(self.manager,uuid.uuid4().hex,t-31*86400,t-31*86400,t-30*86400)).lastrowid
+            audit=c.execute("INSERT INTO auth_events(user_id,action,network,created_at) VALUES(?,'Test retained event','masked',?)",(self.manager,t-31*86400)).lastrowid
+        r=self.client.get('/api/security/sessions')
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['retention_days'],30)
+        self.assertNotIn(old,[x['id'] for x in r.json['sessions']])
+        self.assertTrue(any(x['current'] and x['active'] for x in r.json['sessions']))
+        with self.m.conn() as c:
+            self.assertIsNone(c.execute('SELECT id FROM auth_sessions WHERE id=?',(old,)).fetchone())
+            self.assertIsNotNone(c.execute('SELECT id FROM auth_events WHERE id=?',(audit,)).fetchone())
+        self.assertEqual(self.client.get('/api/bootstrap').status_code,200)
+
+    def company_order_payload(self,pid,**changes):
+        p=self.client.get('/api/parcels/'+str(pid)).json['parcel']
+        d={k:p[k] for k in ('tracking','recipient','phone','address','city_id','amount','product','note')}
+        d.update(revision=p['ops_revision'],not_allowed_to_open=not p['open_allowed'],is_exchange=bool(p['is_exchange']))
+        return {**d,**changes}
+
+    def test_company_edit_updates_draft_snapshot_and_revision(self):
+        doc,pid=self.palette_client_fixture()
+        payload=self.company_order_payload(pid,tracking='EDIT-'+uuid.uuid4().hex[:12],recipient='Changed recipient',amount=234.56)
+        r=self.client.patch(f'/api/parcels/{pid}/company-edit',json=payload,headers=self.headers)
+        self.assertEqual(r.status_code,200,r.json)
+        updated=self.client.get('/api/parcels/'+str(pid)).json['parcel']
+        self.assertEqual(updated['recipient'],'Changed recipient');self.assertEqual(updated['amount'],234.56)
+        palette=self.client.get('/api/partner-palettes/'+str(doc['id'])).json
+        self.assertEqual(palette['lines'][0]['tracking'],payload['tracking'])
+        self.assertEqual(palette['lines'][0]['recipient'],'Changed recipient')
+        self.assertEqual(palette['revision'],doc['revision']+1)
+        self.assertTrue(updated['company_order_editable'])
+        self.assertEqual(self.palette_action(doc,'dispatch').status_code,409)
+        self.assertEqual(self.client.patch(f'/api/parcels/{pid}/company-edit',json=payload,headers=self.headers).status_code,409)
+
+    def test_company_order_sent_is_locked_and_cannot_be_deleted(self):
+        doc,pid=self.palette_client_fixture();payload=self.company_order_payload(pid)
+        self.assertEqual(self.palette_action(doc,'dispatch').status_code,200)
+        p=self.client.get('/api/parcels/'+str(pid)).json['parcel'];self.assertFalse(p['company_order_editable'])
+        self.assertEqual(self.client.patch(f'/api/parcels/{pid}/company-edit',json=payload,headers=self.headers).status_code,409)
+        r=self.client.delete(f'/api/parcels/{pid}/company-edit',json={'revision':p['ops_revision'],'confirmed':True},headers=self.headers)
+        self.assertEqual(r.status_code,409)
+        self.assertEqual(self.client.get('/api/partner-palettes/'+str(doc['id'])).json['count'],1)
+
+    def test_company_order_delete_draft_and_empty_palette(self):
+        doc,first=self.palette_client_fixture();second=self.palette_order()
+        r=self.palette_action(doc,'add',parcel_ids=[second]);self.assertEqual(r.status_code,200)
+        for pid,remaining in [(first,1),(second,0)]:
+            payload=self.company_order_payload(pid)
+            r=self.client.delete(f'/api/parcels/{pid}/company-edit',json={'revision':payload['revision'],'confirmed':True},headers=self.headers)
+            self.assertEqual(r.status_code,200,r.json)
+            self.assertEqual(self.client.get('/api/parcels/'+str(pid)).status_code,404)
+            self.assertNotIn(pid,[p['id'] for p in self.client.get('/api/bootstrap').json['parcels']])
+            r=self.client.get('/api/partner-palettes/'+str(doc['id']))
+            if remaining:self.assertEqual(r.json['count'],remaining)
+            else:self.assertEqual(r.status_code,404)
+            with self.m.conn() as c:
+                self.assertEqual(c.execute('SELECT status FROM parcels WHERE id=?',(pid,)).fetchone()[0],'Annulé')
+                self.assertIsNotNone(c.execute('SELECT parcel_id FROM company_deleted_orders WHERE parcel_id=?',(pid,)).fetchone())
+        self.assertNotIn(first,[p['id'] for p in self.client.get('/api/partner-palettes/candidates').json['rows']])
+
+    def test_company_order_scope_validation_and_duplicate_tracking(self):
+        doc,pid=self.palette_client_fixture();other=self.palette_order();foreign=self.palette_order(self.client_id)
+        original=self.company_order_payload(pid)
+        duplicate=self.company_order_payload(other)['tracking']
+        for changed,code in [({'tracking':duplicate},409),({'amount':-1},400),({'phone':'bad'},400),({'client_id':self.client_id},400),({'city_id':False},400),({'status':'Livré'},400)]:
+            r=self.client.patch(f'/api/parcels/{pid}/company-edit',json={**original,**changed},headers=self.headers)
+            self.assertEqual(r.status_code,code,r.json)
+        self.assertEqual(self.client.get('/api/partner-palettes/'+str(doc['id'])).json['revision'],doc['revision'])
+        self.assertEqual(self.client.patch(f'/api/parcels/{foreign}/company-edit',json=original,headers=self.headers).status_code,404)
+        self.assertEqual(self.client.patch(f'/api/parcels/{pid}/company-edit',json=original).status_code,403)
+        with self.m.conn() as c:c.execute("UPDATE users SET client_type='vendeur' WHERE id=?",(self.manager,))
+        self.assertEqual(self.client.patch(f'/api/parcels/{pid}/company-edit',json=original,headers=self.headers).status_code,403)
+
+    def test_company_order_unassigned_edit_and_city_tariff(self):
+        doc,first=self.palette_client_fixture();pid=self.palette_order()
+        with self.m.conn() as c:
+            city=c.execute("INSERT INTO cities(name,region,delivery,pickup,fee,return_fee) VALUES(?,'Test',1,1,42,13)",('Edit city '+uuid.uuid4().hex,)).lastrowid
+        payload=self.company_order_payload(pid,city_id=city)
+        r=self.client.patch(f'/api/parcels/{pid}/company-edit',json=payload,headers=self.headers)
+        self.assertEqual(r.status_code,200,r.json)
+        p=self.client.get('/api/parcels/'+str(pid)).json['parcel']
+        self.assertEqual(p['city_id'],city);self.assertTrue(p['company_order_editable'])
+        self.assertEqual(self.client.delete(f'/api/parcels/{pid}/company-edit',json={'revision':p['ops_revision'],'confirmed':False},headers=self.headers).status_code,400)
+
+    def client_extra_fixture(self,kind='vendeur'):
+        with self.m.conn() as c:c.execute("UPDATE users SET role='client',client_type=? WHERE id=?",(kind,self.manager))
+        r=self.client.get('/api/client-profile');self.assertEqual(r.status_code,200,r.json)
+        return {k:r.json[k] for k in ('city','cin','website','language','preferences','address','legal_id','revision','dossier_revision')}
+
+    def test_extra_profile_both_types_preserve_existing_dossier(self):
+        for kind in ['vendeur','societe_livraison']:
+            d=self.client_extra_fixture(kind);d.update(city='Agadir',cin='AB123456',website='https://example.test',language='en',address='Adresse de test',legal_id='123456789012345')
+            r=self.client.patch('/api/client-profile',json=d,headers=self.headers);self.assertEqual(r.status_code,200,r.json)
+            self.assertEqual(r.json['city'],'Agadir')
+            with self.m.conn() as c:
+                dossier=c.execute('SELECT * FROM account_dossiers WHERE user_id=?',(self.manager,)).fetchone()
+                self.assertEqual(dossier['billing_address'],'Adresse de test');self.assertEqual(dossier['legal_id'],d['legal_id'])
+            self.assertEqual(self.client.get('/api/bootstrap').json['user']['profile_language'],'en')
+            self.assertEqual(self.client.patch('/api/client-profile',json=d,headers=self.headers).status_code,409)
+
+    def test_extra_profile_validation_scope_and_bank_for_seller(self):
+        self.assertEqual(self.client.get('/api/client-profile').status_code,403)
+        d=self.client_extra_fixture()
+        for update in [{'website':'javascript:alert(1)'},{'language':'xx'},{'cin':'<script>'},{'preferences':{'payment':False}},{'user_id':self.other_driver}]:
+            self.assertEqual(self.client.patch('/api/client-profile',json={**d,**update},headers=self.headers).status_code,400)
+        self.assertEqual(self.client.patch('/api/client-profile',json=d).status_code,403)
+        r=self.client.patch('/api/profile',json={'name':'Seller','phone':'0600000000','company':'Test','bank_name':'My Bank','bank_rib':'0'*24},headers=self.headers)
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.client.get('/api/bootstrap').json['user']['bank_name'],'My Bank')
+        with self.m.conn() as c:self.assertIsNone(c.execute('SELECT * FROM client_profile_extras WHERE user_id=?',(self.other_driver,)).fetchone())
+
+    def test_extra_profile_notifications_are_applied(self):
+        from client_profile_extras import notification_enabled
+        d=self.client_extra_fixture();d['preferences']['status:Livré']=False;d['preferences']['payment']=False
+        self.assertEqual(self.client.patch('/api/client-profile',json=d,headers=self.headers).status_code,200)
+        pid,_=self.parcel(status='Créé')
+        with self.m.conn() as c:
+            c.execute('UPDATE parcels SET client_id=? WHERE id=?',(self.manager,pid))
+            self.m.ops_notify_event(c,pid,'Livré',{'id':self.other_driver})
+            self.assertIsNone(c.execute('SELECT id FROM ops_notifications WHERE user_id=? AND parcel_id=?',(self.manager,pid)).fetchone())
+            self.assertFalse(notification_enabled(c,self.manager,'payment'))
+            self.m.ops_notify_event(c,pid,'Réceptionné',{'id':self.other_driver})
+            self.assertIsNotNone(c.execute('SELECT id FROM ops_notifications WHERE user_id=? AND parcel_id=?',(self.manager,pid)).fetchone())
+
+    def test_google_disabled_and_invalid_state_fail_closed(self):
+        from unittest.mock import patch
+        self.client_extra_fixture()
+        with patch.dict(os.environ,{'GOOGLE_CLIENT_ID':'','GOOGLE_CLIENT_SECRET':'','GOOGLE_REDIRECT_URI':''}):
+            r=self.client.get('/api/google/status');self.assertFalse(r.json['configured']);self.assertFalse(r.json['linked'])
+            self.assertEqual(self.client.post('/api/google/sheets/preview',json={'sheet_id':'abc'},headers=self.headers).status_code,503)
+        with patch.dict(os.environ,{'GOOGLE_CLIENT_ID':'test-client','GOOGLE_CLIENT_SECRET':'test-secret','GOOGLE_REDIRECT_URI':'https://example.test/google/callback'}):
+            self.assertEqual(self.client.get('/google/callback?state=wrong&code=test').status_code,400)
+            self.assertEqual(self.client.post('/api/google/link',json={'current_password':'bad'},headers=self.headers).status_code,403)
+
+    def test_google_link_preview_is_scoped_and_requires_confirmation(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from urllib.parse import urlsplit,parse_qs
+        self.client_extra_fixture('societe_livraison')
+        config={'GOOGLE_CLIENT_ID':'test-client','GOOGLE_CLIENT_SECRET':'test-secret','GOOGLE_REDIRECT_URI':'https://example.test/google/callback'}
+        with patch.dict(os.environ,config):
+            link=self.client.post('/api/google/link',json={'current_password':'TestPassword!123'},headers=self.headers)
+            self.assertEqual(link.status_code,200,link.json)
+            query=parse_qs(urlsplit(link.json['url']).query)
+            claims={'sub':'fake-sub-'+uuid.uuid4().hex,'email':'linked@example.test','email_verified':True,'nonce':query['nonce'][0]}
+            tokens=SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'access_token':'fake-secret-token','refresh_token':'fake-refresh-token','id_token':'fake-id','expires_in':3600})
+            with patch('requests.post',return_value=tokens),patch('google.oauth2.id_token.verify_oauth2_token',return_value=claims):
+                r=self.client.get('/google/callback',query_string={'state':query['state'][0],'code':'fake-code'})
+            self.assertEqual(r.status_code,302)
+            status=self.client.get('/api/google/status');self.assertTrue(status.json['linked']);self.assertNotIn('tokens',status.json)
+            with self.m.conn() as c:
+                stored=c.execute('SELECT tokens FROM google_accounts WHERE user_id=?',(self.manager,)).fetchone()[0]
+                self.assertNotIn('fake-secret-token',stored)
+                before=c.execute('SELECT count(*) FROM parcels WHERE client_id=?',(self.manager,)).fetchone()[0]
+                city=c.execute('SELECT name FROM cities WHERE id=?',(self.city,)).fetchone()[0]
+            import json
+            values=[['tracking','destinataire','telephone','adresse','ville','montant','produit','note'],['GS-'+uuid.uuid4().hex[:12],'Client test','0600000000','Adresse test',city,'123','Produit','Test']]
+            class SheetResponse:
+                def __enter__(self):return self
+                def __exit__(self,*args):pass
+                def raise_for_status(self):pass
+                def iter_content(self,*args):yield json.dumps({'values':values}).encode()
+            with patch('requests.get',return_value=SheetResponse()) as get:
+                r=self.client.post('/api/google/sheets/preview',json={'sheet_id':'a'*30,'sheet_name':'Feuille 1'},headers=self.headers)
+            self.assertEqual(r.status_code,200,r.json)
+            self.assertEqual(r.json['total'],1)
+            self.assertIn('sheets.googleapis.com',get.call_args.args[0])
+            with self.m.conn() as c:self.assertEqual(c.execute('SELECT count(*) FROM parcels WHERE client_id=?',(self.manager,)).fetchone()[0],before)
+            self.assertEqual(self.client.delete('/api/google/link',headers=self.headers).status_code,200)
+            self.assertFalse(self.client.get('/api/google/status').json['linked'])
+
+    def test_google_login_only_for_linked_account_and_nonce_required(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from urllib.parse import urlsplit,parse_qs
+        self.client_extra_fixture()
+        config={'GOOGLE_CLIENT_ID':'test-client','GOOGLE_CLIENT_SECRET':'test-secret','GOOGLE_REDIRECT_URI':'https://example.test/google/callback'}
+        with patch.dict(os.environ,config):
+            response=self.client.post('/api/google/link',json={'current_password':'TestPassword!123'},headers=self.headers)
+            query=parse_qs(urlsplit(response.json['url']).query)
+            claims={'sub':'linked-login-'+uuid.uuid4().hex,'email':'login@example.test','email_verified':True,'nonce':'wrong-nonce'}
+            tokens=SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'access_token':'test-token','refresh_token':'test-refresh','id_token':'test-id','expires_in':3600})
+            with patch('requests.post',return_value=tokens),patch('google.oauth2.id_token.verify_oauth2_token',return_value=claims):
+                r=self.client.get('/google/callback',query_string={'state':query['state'][0],'code':'fake-code'})
+            self.assertEqual(r.status_code,400)
+            self.assertFalse(self.client.get('/api/google/status').json['linked'])
+            with self.m.conn() as c:
+                c.execute('INSERT INTO google_accounts VALUES(?,?,?,?,?)',(self.manager,claims['sub'],claims['email'],'not-a-real-token',self.m.now()))
+            browser=self.m.app.test_client()
+            response=browser.get('/google/login');self.assertEqual(response.status_code,302)
+            query=parse_qs(urlsplit(response.headers['Location']).query);claims['nonce']=query['nonce'][0]
+            with patch('requests.post',return_value=tokens),patch('google.oauth2.id_token.verify_oauth2_token',return_value=claims):
+                r=browser.get('/google/callback',query_string={'state':query['state'][0],'code':'fake-code'})
+            self.assertEqual(r.status_code,302)
+            self.assertEqual(browser.get('/api/bootstrap').json['user']['id'],self.manager)
+            self.assertEqual(browser.get('/google/callback',query_string={'state':query['state'][0],'code':'fake-code'}).status_code,400)
+
+    def test_extra_profile_billing_summary_matches_own_invoices(self):
+        self.client_extra_fixture()
+        with self.m.conn() as c:
+            c.execute("INSERT INTO invoices(client_id,cod,fees,total,status,created_at) VALUES(?,300,50,250,'À régler',?)",(self.manager,self.m.now()))
+            c.execute("INSERT INTO invoices(client_id,cod,fees,total,status,created_at) VALUES(?,900,100,800,'À régler',?)",(self.client_id,self.m.now()))
+        summary=self.client.get('/api/client-profile').json['billing']
+        self.assertEqual(summary['cod'],300)
+        self.assertEqual(summary['fees'],50)
+        self.assertEqual(summary['remaining'],250)
+        self.assertEqual(summary['owed'],0)
+
     def post(self,path,data):
         return self.client.post('/api/'+path,json=data,headers=self.headers)
 

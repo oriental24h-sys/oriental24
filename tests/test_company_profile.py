@@ -33,7 +33,7 @@ class CompanyProfileTests(unittest.TestCase):
         for v in ['123','a'*24,'١'*24,None,123, '0'*25]:
             with self.subTest(value=v),self.assertRaises(Error):self.save({'bank_rib':v})
     def test_other_roles_and_client_types_cannot_write(self):
-        for role,kind in [('admin','vendeur'),('agent','vendeur'),('livreur','vendeur'),('client','vendeur')]:
+        for role,kind in [('admin','vendeur'),('agent','vendeur'),('livreur','vendeur')]:
             with self.subTest(role=role),self.assertRaises(Error) as ctx:
                 self.save({'bank_name':'Test'},dict(id=1,role=role,client_type=kind))
             self.assertEqual(ctx.exception.status,403)
