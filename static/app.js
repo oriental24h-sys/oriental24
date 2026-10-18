@@ -490,9 +490,9 @@ const titles = {
   analytics: "Statistiques & performance",
   "driver-finance": "Caisse & commissions livreurs",
 };
-// Seller dashboard only: retain shared modules and historical data for other roles.
-function sellerSectionRemoved(key, user = S?.user) {
-  return user?.role === 'client' && (user.client_type || 'vendeur') === 'vendeur'
+// Delivery-company dashboard only: sellers and other roles retain their sections.
+function clientSectionRemoved(key, user = S?.user) {
+  return user?.role === 'client' && user.client_type === 'societe_livraison'
     && ['pickups', 'fulfillment', 'stock', 'stock-analytics', 'print'].includes(key);
 }
 function workspacePageTitle(key, fallback) {
@@ -505,7 +505,7 @@ function shell() {
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => !sellerSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
           ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${workspacePageTitle(key,t)}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
@@ -516,7 +516,7 @@ function shell() {
 }
 async function navigate(v) {
   if (!S) return;
-  if (sellerSectionRemoved(v)) v = 'dashboard';
+  if (clientSectionRemoved(v)) v = 'dashboard';
   // Responsable de hub : navigation limitée aux tâches et vues explicitement sûres.
   if (S.user.role==='agent'&&!['parcels','documents','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
   if (S.user.role==='support'&&!['support-orders','profile'].includes(v)) v='support-orders';
@@ -538,7 +538,7 @@ function footer() {
   return `<footer class="footer"><span>© ${new Date().getFullYear()} ORIENTAL24. Tous droits réservés.</span><span><i class="status-dot"></i>${RUNTIME.demo?"Version de démonstration · Données fictives":"Session sécurisée côté serveur · ORIENTAL24"}</span></footer>`;
 }
 async function renderView(background = false) {
-  if (sellerSectionRemoved(view)) return navigate('dashboard');
+  if (clientSectionRemoved(view)) return navigate('dashboard');
   const pageTitle = workspacePageTitle(view, titles[view] || "Mon espace");
   document.title = `${window.o24Translate ? window.o24Translate(pageTitle) : pageTitle} — ORIENTAL24`;
   const current = view, owner = S?.user?.id;
