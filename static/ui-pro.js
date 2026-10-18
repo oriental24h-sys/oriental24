@@ -38,7 +38,7 @@
       `<button type="button" class="nav-item sidebar-aid" title="Aide &amp; réclamations" onclick="navigate('tickets')">${icon('help')}<span>Aide &amp; réclamations</span></button>` +
       `<div class="sidebar-user" role="group" aria-label="Compte connecté">` +
         `<button type="button" class="sidebar-user-main" title="${esc(u.name)} · Mon profil" aria-label="Mon profil" onclick="navigate('profile')">` +
-          `<span class="avatar sidebar-avatar" aria-hidden="true">${initials(u.name)}</span>` +
+          `<span class="avatar sidebar-avatar" aria-hidden="true">${profileAvatarContent(u)}</span>` +
           `<span class="sidebar-user-text"><b dir="auto">${esc(u.name)}</b><small>${roleName(u.role)}</small></span>` +
         `</button>` +
         `<button type="button" class="icon-btn sidebar-logout" title="Se déconnecter" aria-label="Se déconnecter" onclick="logout()">${icon('logout')}</button>` +

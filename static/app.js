@@ -490,22 +490,33 @@ const titles = {
   analytics: "Statistiques & performance",
   "driver-finance": "Caisse & commissions livreurs",
 };
+// Seller dashboard only: retain shared modules and historical data for other roles.
+function sellerSectionRemoved(key, user = S?.user) {
+  return user?.role === 'client' && (user.client_type || 'vendeur') === 'vendeur'
+    && ['pickups', 'fulfillment', 'stock', 'stock-analytics', 'print'].includes(key);
+}
+function workspacePageTitle(key, fallback) {
+  if (key === 'partner-palettes' && S?.user?.role === 'client') return 'Mes palettes';
+  if (key === 'return-palettes' && S?.user?.role === 'client') return 'Mes retours';
+  return fallback || titles[key] || key;
+}
 function shell() {
   const u = S.user;
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => !sellerSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
-          ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${t}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
+          ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${workspacePageTitle(key,t)}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
       })
       .join(
         "",
-      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon(u.role==='support'?'headset':'help')}<b>${u.role==='support'?'Suivi des commandes':'Besoin d’un coup de main ?'}</b></div>${u.role==='support'?'Vous voyez uniquement les commandes affectées à vos villes.':'Notre équipe vous accompagne.'}<button onclick="${u.role==='support'?'refreshSupportOrders()':"navigate('tickets')"}">${u.role==='support'?'Actualiser le suivi →':'Ouvrir les réclamations →'}</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${titles[view]}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':`<button class="global-search" onclick="navigate('parcels').then(()=>$('#parcel-search')?.focus())">${icon("search")}Rechercher un colis… <kbd>⌘ K</kbd></button>`}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${initials(u.name)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
+      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon(u.role==='support'?'headset':'help')}<b>${u.role==='support'?'Suivi des commandes':'Besoin d’un coup de main ?'}</b></div>${u.role==='support'?'Vous voyez uniquement les commandes affectées à vos villes.':'Notre équipe vous accompagne.'}<button onclick="${u.role==='support'?'refreshSupportOrders()':"navigate('tickets')"}">${u.role==='support'?'Actualiser le suivi →':'Ouvrir les réclamations →'}</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${workspacePageTitle(view)}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':`<button class="global-search" onclick="navigate('parcels').then(()=>$('#parcel-search')?.focus())">${icon("search")}Rechercher un colis… <kbd>⌘ K</kbd></button>`}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${profileAvatarContent(u)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
 }
 async function navigate(v) {
   if (!S) return;
+  if (sellerSectionRemoved(v)) v = 'dashboard';
   // Responsable de hub : navigation limitée aux tâches et vues explicitement sûres.
   if (S.user.role==='agent'&&!['parcels','documents','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
   if (S.user.role==='support'&&!['support-orders','profile'].includes(v)) v='support-orders';
@@ -516,7 +527,7 @@ async function navigate(v) {
   document
     .querySelectorAll("[data-nav]")
     .forEach((x) => x.classList.toggle("active", x.dataset.nav === v));
-  $("#breadcrumb-title").textContent = titles[v] || v;
+  $("#breadcrumb-title").textContent = workspacePageTitle(v);
   await renderView();
   window.scrollTo({ top: 0, behavior: "instant" });
 }
@@ -527,7 +538,8 @@ function footer() {
   return `<footer class="footer"><span>© ${new Date().getFullYear()} ORIENTAL24. Tous droits réservés.</span><span><i class="status-dot"></i>${RUNTIME.demo?"Version de démonstration · Données fictives":"Session sécurisée côté serveur · ORIENTAL24"}</span></footer>`;
 }
 async function renderView(background = false) {
-  const pageTitle = titles[view] || "Mon espace";
+  if (sellerSectionRemoved(view)) return navigate('dashboard');
+  const pageTitle = workspacePageTitle(view, titles[view] || "Mon espace");
   document.title = `${window.o24Translate ? window.o24Translate(pageTitle) : pageTitle} — ORIENTAL24`;
   const current = view, owner = S?.user?.id;
   if (current !== "tour" && window.rtMapStop) window.rtMapStop();
@@ -588,7 +600,7 @@ async function renderView(background = false) {
         else html = partnerPalettesView(await api("/partner-palettes?"+ppQuery()));
         break;
       case "return-palettes":
-        html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Retours vendeurs","La gestion des retours vendeurs nécessite la version serveur.") : returnPalettesView(await api("/return-palettes?"+rpQuery()));
+        html = typeof opsOffline!=="undefined"&&opsOffline ? empty(workspacePageTitle("return-palettes","Retours vendeurs"),"La gestion des retours vendeurs nécessite la version serveur.") : returnPalettesView(await api("/return-palettes?"+rpQuery()));
         break;
       case "palette-hub":
         html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Palettes","Les palettes inter-hubs nécessitent la version serveur.") : hubPalletsView(await api("/logistics/palettes?"+hubPaletteQuery()));
@@ -866,6 +878,19 @@ function driverRankRows(days = 7) {
     .sort((a, b) => b.lv7 - a.lv7 || b.cod - a.cod || a.name.localeCompare(b.name));
 }
 const leaderMedal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : String(i + 1));
+// Use the server-scoped parcel list and invoice settlement status, not COD acknowledgement.
+function clientPaidOrderMetrics(parcels) {
+  const delivered = parcels.filter(p => p.status === 'Livré');
+  const paid = delivered.filter(p => p.invoice_id && p.invoice_status === 'Réglée');
+  const codCents = paid.reduce((sum, p) => sum + Math.round(Number(p.amount || 0) * 100), 0);
+  return {paid: paid.length, cod: codCents / 100, pending: delivered.length - paid.length,
+    rate: delivered.length ? Math.round(paid.length * 100 / delivered.length) : null};
+}
+function clientPaidOrderStats() {
+  if (S.user.role !== 'client') return '';
+  const m = clientPaidOrderMetrics(S.parcels);
+  return `<section class="client-paid-orders" aria-label="Règlement des commandes"><div class="card-head"><div><h3>Règlement des commandes</h3><p>Tout l’historique · Commandes livrées dont la facture est entièrement réglée.</p></div><button class="section-link" onclick="navigate('invoices')">Voir les règlements ${icon('arrow')}</button></div><div class="stats">${stat('Commandes payées', int(m.paid), '', 'checkcircle', 'green', 'Livrées · facture réglée')}${stat('Montant des commandes payées', money(m.cod), 'MAD', 'wallet', 'green', 'COD brut avant frais · pas le net versé')}${stat('Livrées non réglées', int(m.pending), '', 'clock', 'purple', 'Non facturées, non réglées ou partiellement réglées')}${stat('Taux de règlement', m.rate === null ? '—' : m.rate + '%', '', 'chart', 'blue', 'Commandes payées / commandes livrées')}</div></section>`;
+}
 function dashboard() {
   const ps = S.parcels,
     del = ps.filter((p) => p.status === "Livré"),
@@ -888,7 +913,7 @@ function dashboard() {
         : "Voici ce qui se passe chez ORIENTAL24 aujourd’hui.",
       `<span class="date-pill">${icon("calendar")}${new Date().toLocaleDateString(uiLocale(), { day: "numeric", month: "long", year: "numeric" })}</span>${!isDriver ? `<button class="btn primary" onclick="newParcel()">${icon("plus")}Nouveau colis</button>` : `<button class="btn primary" onclick="navigate('parcels')">${icon("truck")}Ma tournée</button>`}`,
     ) +
-    `<section class="hero-banner"><div><div class="eyebrow">Votre partenaire de proximité</div><h2>L’Oriental, plus proche à chaque livraison.</h2><p>${esc(S.settings.announcement || "Suivez vos expéditions et accompagnez votre activité, au même endroit.")}</p></div>${routeArt()}</section><section class="stats">${stat("Total des colis", int(ps.length), "", "box", "", `${icon("box")}Dans votre périmètre`)}${stat("Colis en cours", int(active.length), "", "truck", "blue", `${icon("clock")}Colis non clôturés`)}${stat("Colis livrés", int(del.length), "", "checkcircle", "green", `<span class="green">${icon("up")} ${rate}%</span> du total des colis`)}${stat("Montant collecté", money(cod), "MAD", "wallet", "purple", `${icon("wallet")}COD des colis livrés`)}</section>${(() => { const tried = ps.filter((p) => ["Livré", "Retourné", "Refusé"].includes(p.status)); const tauxL = tried.length ? Math.round((del.length / tried.length) * 100) : null; const avgH = del.length ? Math.round(del.reduce((n, p) => n + (new Date(p.updated_at) - new Date(p.created_at)) / 3600000, 0) / del.length) : null; const attente = active.reduce((n, p) => n + (+p.amount || 0), 0); return `<section class="kpi-grid">${stat("Taux de livraison", tauxL === null ? "—" : tauxL + "%", "", "check", tauxL !== null && tauxL >= 80 ? "green" : "", `${icon("box")}Sur les colis au résultat définitif`)}${stat("Délai moyen de livraison", avgH === null ? "—" : avgH >= 24 ? Math.round(avgH / 24) + " j" : avgH + " h", "", "clock", "blue", `${icon("clock")}De la création au « Livré »`)}${stat("COD encaissé", money(cod), "MAD", "wallet", "", `${icon("checkcircle")}Somme des montants livrés`)}${stat("COD en attente", money(attente), "MAD", "truck", "", `${icon("clock")}Sur les colis encore ouverts`)}</section>`; })()}<section class="two-col"><article class="card"><div class="card-head"><div><h3>Activité des expéditions</h3><p>Par date de création · 7 derniers jours</p></div><div class="chart-legend"><span><i class="dot"></i>Créés</span><span><i class="dot navy"></i>Livrés</span></div></div><div class="chart-wrap">${lineChart()}</div></article><article class="card"><div class="card-head"><div><h3>Vos principales destinations</h3><p>Répartition des colis par ville</p></div>${icon("pin")}</div><div class="city-bars">${cities.map((c) => `<div class="city-row"><div class="flex between"><span>${esc(c.name)}</span><span class="muted">${c.count} colis <b style="color:#53667e;margin-left:10px;font-weight:500">${Math.round((c.count / ps.length) * 100)}%</b></span></div><div class="bar"><span style="width:${(c.count / Math.max(...cities.map((c) => c.count))) * 100}%"></span></div></div>`).join("") || empty("Pas encore de destination", "Ajoutez votre premier colis.")}</div></article></section><section class="card"><div class="card-head"><div><h3>${isDriver ? "Mes derniers colis" : "Derniers colis"}</h3><p>Les dernières expéditions de votre activité</p></div><button class="section-link" onclick="navigate('parcels')">Voir tous les colis ${icon("arrow")}</button></div>${parcelTable(ps.slice(0, 5), false)}<div class="table-footer"><span>${Math.min(ps.length, 5)} colis sur ${ps.length}</span><span>Mise à jour à l’ouverture de la page <button class="icon-btn" onclick="reloadView()" aria-label="Actualiser">${icon("refresh")}</button></span></div></section>`
+    `<section class="hero-banner"><div><div class="eyebrow">Votre partenaire de proximité</div><h2>L’Oriental, plus proche à chaque livraison.</h2><p>${esc(S.settings.announcement || "Suivez vos expéditions et accompagnez votre activité, au même endroit.")}</p></div>${routeArt()}</section><section class="stats">${stat("Total des colis", int(ps.length), "", "box", "", `${icon("box")}Dans votre périmètre`)}${stat("Colis en cours", int(active.length), "", "truck", "blue", `${icon("clock")}Colis non clôturés`)}${stat("Colis livrés", int(del.length), "", "checkcircle", "green", `<span class="green">${icon("up")} ${rate}%</span> du total des colis`)}${stat("Montant collecté", money(cod), "MAD", "wallet", "purple", `${icon("wallet")}COD des colis livrés`)}</section>${clientPaidOrderStats()}${(() => { const tried = ps.filter((p) => ["Livré", "Retourné", "Refusé"].includes(p.status)); const tauxL = tried.length ? Math.round((del.length / tried.length) * 100) : null; const avgH = del.length ? Math.round(del.reduce((n, p) => n + (new Date(p.updated_at) - new Date(p.created_at)) / 3600000, 0) / del.length) : null; const attente = active.reduce((n, p) => n + (+p.amount || 0), 0); return `<section class="kpi-grid">${stat("Taux de livraison", tauxL === null ? "—" : tauxL + "%", "", "check", tauxL !== null && tauxL >= 80 ? "green" : "", `${icon("box")}Sur les colis au résultat définitif`)}${stat("Délai moyen de livraison", avgH === null ? "—" : avgH >= 24 ? Math.round(avgH / 24) + " j" : avgH + " h", "", "clock", "blue", `${icon("clock")}De la création au « Livré »`)}${stat("COD encaissé", money(cod), "MAD", "wallet", "", `${icon("checkcircle")}Somme des montants livrés`)}${stat("COD en attente", money(attente), "MAD", "truck", "", `${icon("clock")}Sur les colis encore ouverts`)}</section>`; })()}<section class="two-col"><article class="card"><div class="card-head"><div><h3>Activité des expéditions</h3><p>Par date de création · 7 derniers jours</p></div><div class="chart-legend"><span><i class="dot"></i>Créés</span><span><i class="dot navy"></i>Livrés</span></div></div><div class="chart-wrap">${lineChart()}</div></article><article class="card"><div class="card-head"><div><h3>Vos principales destinations</h3><p>Répartition des colis par ville</p></div>${icon("pin")}</div><div class="city-bars">${cities.map((c) => `<div class="city-row"><div class="flex between"><span>${esc(c.name)}</span><span class="muted">${c.count} colis <b style="color:#53667e;margin-left:10px;font-weight:500">${Math.round((c.count / ps.length) * 100)}%</b></span></div><div class="bar"><span style="width:${(c.count / Math.max(...cities.map((c) => c.count))) * 100}%"></span></div></div>`).join("") || empty("Pas encore de destination", "Ajoutez votre premier colis.")}</div></article></section><section class="card"><div class="card-head"><div><h3>${isDriver ? "Mes derniers colis" : "Derniers colis"}</h3><p>Les dernières expéditions de votre activité</p></div><button class="section-link" onclick="navigate('parcels')">Voir tous les colis ${icon("arrow")}</button></div>${parcelTable(ps.slice(0, 5), false)}<div class="table-footer"><span>${Math.min(ps.length, 5)} colis sur ${ps.length}</span><span>Mise à jour à l’ouverture de la page <button class="icon-btn" onclick="reloadView()" aria-label="Actualiser">${icon("refresh")}</button></span></div></section>`
   );
 }
 async function reloadView() {
@@ -1230,6 +1255,10 @@ function bindSettings() {
     toast("Paramètres enregistrés");
   }, "settings-form");
 }
+function companyProfileEligible(u=S?.user){return u?.role==='client'&&u.client_type==='societe_livraison'}
+function profileAvatarContent(u){return companyProfileEligible(u)&&/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(u.profile_image||'')?`<img src="${esc(u.profile_image)}" alt="Logo ou photo de profil" style="width:100%;height:100%;object-fit:contain;border-radius:inherit">`:initials(u.name)}
+let companyProfileImageChange;
+function companyProfileFields(u){return `<div class="full company-profile-image"><h3>Logo / photo de profil</h3><p class="sub">Personnalisez votre compte avec le logo de votre société ou votre photo.</p><div class="company-image-row"><span class="avatar" id="company-image-preview">${profileAvatarContent(u)}</span><div><button type="button" class="btn" onclick="document.getElementById('company-image-file').click()">${icon('upload')}Choisir une image</button><input id="company-image-file" type="file" accept="image/jpeg,image/png,image/webp" hidden><button type="button" class="btn sm" id="company-image-remove">Supprimer</button><p class="sub">JPG, PNG ou WebP · 1 Mo maximum</p><p class="sub" id="company-image-message" aria-live="polite">Les changements seront appliqués après enregistrement.</p></div></div></div><div class="full company-profile-bank"><h3>Coordonnées bancaires</h3><p class="sub">Informations privées de votre compte. Aucun virement n’est déclenché.</p></div>${input('bank_name','Votre banque',u.bank_name||'','text',false,'maxlength="120" placeholder="Nom de votre banque"')}${input('bank_rib','RIB',u.bank_rib||'','text',false,'maxlength="80" inputmode="numeric" autocomplete="off" placeholder="24 chiffres"')}<p class="sub full">RIB marocain : 24 chiffres. Les espaces et tirets sont acceptés.</p>`}
 function profileView() {
   const u = S.user;
   return (
@@ -1238,7 +1267,7 @@ function profileView() {
       "Vos informations et la sécurité de votre compte.",
       `<button class="btn" onclick="logout()">${icon("logout")}Se déconnecter</button>`,
     ) +
-    `<section class="card profile-card"><div class="profile-avatar"><span class="avatar">${initials(u.name)}</span><div><h3>${esc(u.name)}</h3><span class="sub">${esc(u.email)} · ${u.role==='client'?clientTypeLabel(u):roleName(u.role)}</span></div></div><form id="profile-form"><div class="form-error"></div><div class="form-grid">${input("name", "Nom complet", u.name)}${input("phone", "Téléphone", u.phone, "tel")}${input("company", "Entreprise / Boutique", u.company, "text", false)}<div class="full" style="border-top:1px solid var(--line);padding-top:22px"><h3 style="font-size:14px">Changer mon mot de passe</h3><p class="sub">Laissez ces champs vides pour conserver votre mot de passe. Sur le serveur, le changement ferme toutes vos anciennes sessions et renouvelle celle-ci.</p></div>${input("current_password", "Mot de passe actuel", "", "password", false, 'autocomplete="current-password"')}${input("password", "Nouveau mot de passe", "", "password", false, 'minlength="10" autocomplete="new-password"')}</div><div class="form-actions"><button class="btn primary" type="submit">${icon("check")}Enregistrer mon profil</button></div></form></section>${u.role === "client" && !window.opsOffline ? `<section class="card profile-card" style="margin-top:16px"><div class="card-head"><div><h3>Portail vendeur public — suivi par lien</h3><p>Partagez vos expéditions sans compte (lecture seule : références, villes, statuts, COD, dates). Gardez ce lien privé — régénérez-le pour révoquer l'accès.</p></div>${icon("scan")}</div><div class="field"><label for="portal-url">Lien privé du portail</label><div class="flex" style="align-items:stretch"><input id="portal-url" readonly value="Chargement…" style="flex:1;min-width:260px;font-family:ui-monospace,monospace;font-size:12px" aria-readonly="true"><button class="btn sm" type="button" onclick="portalCopy()">${icon("copy")}Copier</button><button class="btn sm" type="button" onclick="portalRotate()">${icon("refresh")}Nouvelle clé</button></div><p class="form-hint">Les visiteurs du lien n'ont aucune action possible (pas de tarifs, pas d'autres vendeurs). « Nouvelle clé » invalide immédiatement l'ancien lien.</p></div></section>` : ""}`
+    `<section class="card profile-card ${companyProfileEligible(u)?'company-profile-card':''}"><div class="profile-avatar"><span class="avatar">${profileAvatarContent(u)}</span><div><h3>${esc(u.name)}</h3><span class="sub">${esc(u.email)} · ${u.role==='client'?clientTypeLabel(u):roleName(u.role)}</span></div></div><form id="profile-form"><div class="form-error"></div><div class="form-grid">${input("name", "Nom complet", u.name)}${input("phone", "Téléphone", u.phone, "tel")}${input("company", "Entreprise / Boutique", u.company, "text", false)}${companyProfileEligible(u)?companyProfileFields(u):''}<div class="full" style="border-top:1px solid var(--line);padding-top:22px"><h3 style="font-size:14px">Changer mon mot de passe</h3><p class="sub">Laissez ces champs vides pour conserver votre mot de passe. Sur le serveur, le changement ferme toutes vos anciennes sessions et renouvelle celle-ci.</p></div>${input("current_password", "Mot de passe actuel", "", "password", false, 'autocomplete="current-password"')}${input("password", "Nouveau mot de passe", "", "password", false, 'minlength="10" autocomplete="new-password"')}</div><div class="form-actions"><button class="btn primary" type="submit">${icon("check")}Enregistrer mon profil</button></div></form></section>${u.role === "client" && !window.opsOffline ? `<section class="card profile-card ${companyProfileEligible(u)?'company-profile-card':''}" style="margin-top:16px"><div class="card-head"><div><h3>Portail vendeur public — suivi par lien</h3><p>Partagez vos expéditions sans compte (lecture seule : références, villes, statuts, COD, dates). Gardez ce lien privé — régénérez-le pour révoquer l'accès.</p></div>${icon("scan")}</div><div class="field"><label for="portal-url">Lien privé du portail</label><div class="flex" style="align-items:stretch"><input id="portal-url" readonly value="Chargement…" style="flex:1;min-width:260px;font-family:ui-monospace,monospace;font-size:12px" aria-readonly="true"><button class="btn sm" type="button" onclick="portalCopy()">${icon("copy")}Copier</button><button class="btn sm" type="button" onclick="portalRotate()">${icon("refresh")}Nouvelle clé</button></div><p class="form-hint">Les visiteurs du lien n'ont aucune action possible (pas de tarifs, pas d'autres vendeurs). « Nouvelle clé » invalide immédiatement l'ancien lien.</p></div></section>` : ""}`
   );
 }
 async function loadPortalLink() {
@@ -1268,7 +1297,33 @@ window.portalRotateConfirm = async () => {
   } catch (e) { toast(e.message, true); }
 };
 function bindProfile() {
+  companyProfileImageChange=undefined;
+  let imageReading=false;
+  if(companyProfileEligible()){
+    const file=$('#company-image-file'),preview=$('#company-image-preview'),message=$('#company-image-message'),form=$('#profile-form');
+    let readVersion=0;
+    const paint=value=>{preview.innerHTML=profileAvatarContent({...S.user,profile_image:value});$('#company-image-remove').disabled=!value};
+    paint(S.user.profile_image||'');
+    file.onchange=async()=>{
+      const chosen=file.files[0];if(!chosen)return;
+      const version=++readVersion;imageReading=true;
+      try{
+        if(chosen.size>1024*1024)throw Error('Image trop volumineuse : 1 Mo maximum.');
+        if(!['image/jpeg','image/png','image/webp'].includes(chosen.type))throw Error('Choisissez une image JPG, PNG ou WebP.');
+        const value=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('Impossible de lire cette image.'));reader.readAsDataURL(chosen)});
+        await new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>img.width*img.height>16000000?reject(Error('Image trop grande : 16 mégapixels maximum.')):resolve();img.onerror=()=>reject(Error('Image invalide.'));img.src=value});
+        if(!form.isConnected||version!==readVersion)return;
+        companyProfileImageChange=value;
+        preview.innerHTML=`<img src="${esc(value)}" alt="Aperçu du logo" style="width:100%;height:100%;object-fit:contain;border-radius:inherit">`;
+        $('#company-image-remove').disabled=false;message.textContent='Nouvelle image prête. Cliquez sur Enregistrer mon profil.';
+      }catch(e){if(form.isConnected&&version===readVersion){message.textContent=e.message;toast(e.message,true)}}
+      finally{if(version===readVersion){imageReading=false;file.value=''}}
+    };
+    $('#company-image-remove').onclick=()=>{readVersion++;imageReading=false;companyProfileImageChange='';file.value='';paint('');message.textContent='Image supprimée de l’aperçu. Enregistrez pour confirmer.'};
+  }
   bindForm(async (d) => {
+    if(imageReading)throw Error('Attendez la lecture de votre image.');
+    if(companyProfileEligible()&&companyProfileImageChange!==undefined)d.profile_image=companyProfileImageChange;
     await api("/profile", "PATCH", d);
     await refresh();
     shell();

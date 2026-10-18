@@ -2404,3 +2404,14 @@ td strong {
 .global-refresh-button.is-refreshing .ico,.da-app-refresh.is-refreshing .ico{animation:o24-refresh-spin .8s linear infinite}
 @keyframes o24-refresh-spin{to{transform:rotate(360deg)}}
 @media(max-width:520px){.parcel-create-flag{align-items:flex-start}.parcel-create-flag .switch{margin-top:2px}}
+
+/* Company-only profile fields. */
+.company-profile-image,.company-profile-bank{border-top:1px solid var(--line);padding-top:22px;margin-top:4px}
+.company-profile-image h3,.company-profile-bank h3{font-size:14px;margin-bottom:8px}
+.company-image-row{display:flex;align-items:center;gap:18px;margin-top:16px}
+.company-image-row>.avatar{width:80px;height:80px;flex-shrink:0;border:1px solid var(--line);border-radius:14px;background:#fff}
+.company-image-row .btn{cursor:pointer;display:inline-flex;margin:0 8px 10px 0}
+.company-image-row .sub{line-height:1.7}
+@media(max-width:480px){.company-image-row{align-items:flex-start;gap:12px}.company-image-row>.avatar{width:64px;height:64px}}
+
+@media(max-width:600px){.company-profile-card .field>.flex:has(#portal-url){flex-wrap:wrap}.company-profile-card #portal-url{min-width:0!important;width:100%;flex-basis:100%!important}.company-profile-card .field>.flex:has(#portal-url) .btn{flex:1;justify-content:center}}
