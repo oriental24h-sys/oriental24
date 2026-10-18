@@ -13,6 +13,7 @@ DB = configure(app, BASE)
 from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, policy as status_policy
 from billing import driver_paid_sql
 import client_types
+from company_order_edit import company_order_flags, register_company_order_edit
 from hub_access import hub_manager_route_allowed, hub_manager_requires_active_hub, hub_parcel_scope, driver_dispatch_allowed, driver_team_member_ids
 from hub_schema import ensure_hub_manager_can_leave
 from audit_guard import install_audit_log_guards
@@ -232,7 +233,7 @@ def team_member_ids(c,lead_id):
 def scope(u,alias='p',c=None):
     if u['role']=='support': return f'{alias}.support_id=?',[u['id']]
     if u['role']=='agent': return hub_parcel_scope(c,alias,u.get('agent_hub_id')) if c is not None else ('1=0',[])
-    if u['role']=='client': return f'{alias}.client_id=?',[u['id']]
+    if u['role']=='client': return f'{alias}.client_id=? AND NOT EXISTS(SELECT 1 FROM company_deleted_orders cd WHERE cd.parcel_id={alias}.id)',[u['id']]
     if u['role']=='livreur':
         # Un compte sans Hub reste en revue Admin : aucune tâche colis avant rattachement explicite.
         if type(u.get('driver_hub_id')) is not int or u['driver_hub_id']<=0:return '1=0',[]
@@ -252,14 +253,14 @@ def parcel(c,pid,u):
         FROM parcels p LEFT JOIN users su ON su.id=p.support_id LEFT JOIN invoices i ON i.id=p.invoice_id
         WHERE p.id=? AND {cond}''',[pid]+args).fetchone()
     if not p: raise APIError('Colis introuvable.',404)
-    return dict(p)
+    return company_order_flags(c,[dict(p)],u)[0]
 def event(c,pid,status,note,u):
     c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(pid,u['id'],status,note,now()))
     if 'ops_notify_event' in globals(): ops_notify_event(c,pid,status,u)
     if 'tech_notify_event' in globals(): tech_notify_event(c,pid,status,u)
 def list_parcels(c,u):
     cond,args=scope(u,c=c)
-    return [dict(r) for r in c.execute(f'''SELECT p.*,
+    rows = [dict(r) for r in c.execute(f'''SELECT p.*,
     COALESCE(sc.name,su.name) city_support_name,COALESCE(sc.phone,su.phone) city_support_phone,
     COALESCE(sc.active,su.active) city_support_active,
     i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,
@@ -283,6 +284,7 @@ def list_parcels(c,u):
     LEFT JOIN parcel_support ps ON ps.parcel_id=p.id LEFT JOIN support_contacts sc ON sc.id=ps.contact_id
     LEFT JOIN invoices i ON i.id=p.invoice_id
     WHERE {cond} ORDER BY p.created_at DESC,p.id DESC''',args)]
+    return company_order_flags(c,rows,u)
 
 @app.route('/')
 @app.route('/login')
@@ -1041,6 +1043,7 @@ register_billing(app, globals())
 
 from partner_palettes import register_partner_palettes
 register_partner_palettes(app, globals())
+register_company_order_edit(app, globals())
 from return_palettes import register_return_palettes
 register_return_palettes(app, globals())
 

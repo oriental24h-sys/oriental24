@@ -1,9 +1,17 @@
 """Revocable server-side sessions, bounded authentication attempts and private security history."""
 import hashlib,hmac,secrets,time,ipaddress,re
 from datetime import datetime,timezone
+from threading import Lock
 from flask import request,session,jsonify,g
 from werkzeug.security import generate_password_hash,check_password_hash
 
+
+SESSION_RETENTION_SECONDS = 30 * 24 * 60 * 60
+
+def purge_old_sessions(c, timestamp):
+    """Remove session records older than 30 days; keep security audit events."""
+    return c.execute('DELETE FROM auth_sessions WHERE created_at < ?',
+                     (int(timestamp) - SESSION_RETENTION_SECONDS,)).rowcount
 
 def register_security(app,services):
     conn,auth,user,Error=(services[k] for k in ['conn','auth','user','APIError'])
@@ -12,11 +20,25 @@ def register_security(app,services):
         c.executescript('''
         CREATE TABLE IF NOT EXISTS auth_sessions(id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),token_hash TEXT NOT NULL UNIQUE,created_at INTEGER NOT NULL,last_seen INTEGER NOT NULL,expires_at INTEGER NOT NULL,user_agent TEXT NOT NULL,network TEXT NOT NULL,revoked_at INTEGER,revoke_reason TEXT);
         CREATE INDEX IF NOT EXISTS auth_session_user ON auth_sessions(user_id,id);
+        CREATE INDEX IF NOT EXISTS auth_session_created ON auth_sessions(created_at);
         CREATE TABLE IF NOT EXISTS auth_limits(key TEXT PRIMARY KEY,hits INTEGER NOT NULL,expires_at INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS auth_limit_expiry ON auth_limits(expires_at);
         CREATE TABLE IF NOT EXISTS auth_events(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),actor_id INTEGER REFERENCES users(id),action TEXT NOT NULL,network TEXT NOT NULL,created_at INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS auth_events_user ON auth_events(user_id,id);
         ''')
+        purge_old_sessions(c, int(time.time()))
+    sweep_lock = Lock()
+    last_sweep = [float('-inf')]
+    @app.before_request
+    def clean_old_session_history():
+        # Request-driven maintenance: no scheduler/thread tied to a web worker.
+        if not request.path.startswith('/api/') or time.monotonic()-last_sweep[0]<60:return
+        if not sweep_lock.acquire(blocking=False):return
+        try:
+            if time.monotonic()-last_sweep[0]>=60:
+                with conn() as c:purge_old_sessions(c, int(time.time()))
+                last_sweep[0]=time.monotonic()
+        finally:sweep_lock.release()
     def clock():return int(time.time())
     def digest(s):return hashlib.sha256(s.encode()).hexdigest()
     def bucket(s):return hmac.new(app.secret_key.encode(),s.encode(),hashlib.sha256).hexdigest()
@@ -49,7 +71,7 @@ def register_security(app,services):
     def check_session(c,uid):
         token=session.get('sid');t=clock()
         row=c.execute('SELECT * FROM auth_sessions WHERE token_hash=? AND user_id=?',(digest(token),uid)).fetchone() if isinstance(token,str) else None
-        if not row or row['revoked_at'] is not None or row['expires_at']<=t or row['last_seen']+app.config['AUTH_IDLE_SECONDS']<=t:
+        if not row or row['created_at'] < t-SESSION_RETENTION_SECONDS or row['revoked_at'] is not None or row['expires_at']<=t or row['last_seen']+app.config['AUTH_IDLE_SECONDS']<=t:
             session.clear();raise Error('Session expirée ou révoquée. Reconnectez-vous.',401)
         if t-row['last_seen']>=60 and not (request.method in ('GET','HEAD') and request.headers.get('X-Background-Poll')=='1'):c.execute('UPDATE auth_sessions SET last_seen=? WHERE id=? AND revoked_at IS NULL',(t,row['id']))
         return row
@@ -123,13 +145,14 @@ def register_security(app,services):
     def sessions_list():
         u=user();t=clock()
         with conn() as c:
+            purge_old_sessions(c,t)
             current=check_session(c,u['id'])
             rows=[]
             for r in c.execute('SELECT id,created_at,last_seen,expires_at,user_agent,network,revoked_at,revoke_reason FROM auth_sessions WHERE user_id=? ORDER BY id DESC LIMIT 50',(u['id'],)):
                 d=dict(r);d['current']=r['id']==current['id'];d['active']=r['revoked_at'] is None and r['expires_at']>t and r['last_seen']+app.config['AUTH_IDLE_SECONDS']>t
                 d['idle_expires_at']=r['last_seen']+app.config['AUTH_IDLE_SECONDS'];rows.append(d)
             events=[dict(r) for r in c.execute('SELECT action,network,created_at FROM auth_events WHERE user_id=? ORDER BY id DESC LIMIT 100',(u['id'],))]
-            return jsonify(sessions=rows,events=events,idle_seconds=app.config['AUTH_IDLE_SECONDS'],absolute_seconds=app.config['AUTH_ABSOLUTE_SECONDS'])
+            return jsonify(sessions=rows,events=events,retention_days=30,idle_seconds=app.config['AUTH_IDLE_SECONDS'],absolute_seconds=app.config['AUTH_ABSOLUTE_SECONDS'])
     @app.post('/api/security/sessions/revoke-others')
     @auth()
     def revoke_others():
