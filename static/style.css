@@ -2415,3 +2415,18 @@ td strong {
 @media(max-width:480px){.company-image-row{align-items:flex-start;gap:12px}.company-image-row>.avatar{width:64px;height:64px}}
 
 @media(max-width:600px){.company-profile-card .field>.flex:has(#portal-url){flex-wrap:wrap}.company-profile-card #portal-url{min-width:0!important;width:100%;flex-basis:100%!important}.company-profile-card .field>.flex:has(#portal-url) .btn{flex:1;justify-content:center}}
+
+/* Scoped, real topbar order search. */
+.global-search-form{position:relative;display:flex;align-items:center;gap:10px;margin:0}
+.global-search-form input{min-width:0;width:100%;border:0;background:transparent;outline:none;padding:0;font:inherit;color:var(--navy,#173254)}
+.global-search-form:focus-within{outline:2px solid #ffb27a;outline-offset:1px}
+.global-parcel-results{position:absolute;top:calc(100% + 9px);right:0;width:min(520px,calc(100vw - 32px));max-height:420px;overflow:auto;background:#fff;border:1px solid #dde4ee;border-radius:12px;box-shadow:0 14px 38px #142b4a26;z-index:120;text-align:left;cursor:default}
+.global-parcel-results[hidden]{display:none}
+.global-parcel-results>p{padding:12px 15px;margin:0;font-size:12px;color:#687a91;white-space:normal}
+.global-parcel-result{display:flex;width:100%;gap:12px;align-items:center;justify-content:space-between;text-align:left;padding:13px 15px;border:0;border-top:1px solid #eef1f6;background:#fff;cursor:pointer;color:#173254}
+.global-parcel-result:hover,.global-parcel-result:focus-visible{background:#fff4e9}
+.global-parcel-result>span:first-child{min-width:0;overflow-wrap:anywhere}
+.global-parcel-result strong{display:block;font-size:13px}.global-parcel-result small{display:block;margin-top:5px;color:#697b91;font-size:11px}
+.global-result-state{font-size:11px;flex-shrink:0;color:#526980}
+@media(max-width:1200px){.topbar-pro .global-search-form,.global-search-form{display:flex!important;width:170px!important;min-width:0!important;padding:9px!important}.global-search-form kbd{display:none}.global-parcel-results{position:fixed;top:76px;left:16px;right:16px;width:auto;max-height:60vh}}
+@media(max-width:1200px){.topbar.topbar-pro:has(.global-search-form){height:auto!important;min-height:100px;flex-wrap:wrap;padding-top:8px!important;padding-bottom:8px!important;gap:8px}.topbar-pro:has(.global-search-form) .top-actions{width:100%;min-width:0;flex-wrap:wrap}.topbar-pro .global-search-form{flex:1 1 120px;width:auto!important}.global-parcel-results{top:var(--search-results-top,115px)}}

@@ -234,7 +234,7 @@ document.addEventListener("keydown", (e) => {
   }
   if ((e.ctrlKey || e.metaKey) && e.key === "k" && S) {
     e.preventDefault();
-    navigate("parcels").then(() => $("#parcel-search")?.focus());
+    $("#global-parcel-search")?.focus();
   }
   if (e.key === "Tab" && $(".modal")) {
     const nodes = [
@@ -500,6 +500,45 @@ function workspacePageTitle(key, fallback) {
   if (key === 'return-palettes' && S?.user?.role === 'client') return 'Mes retours';
   return fallback || titles[key] || key;
 }
+let globalSearchTimer=null, globalSearchVersion=0;
+function globalSearchMarkup(){
+ return `<form class="global-search global-search-form" role="search" onsubmit="event.preventDefault();runGlobalParcelSearch()">${icon('search')}<input id="global-parcel-search" aria-label="Rechercher une commande" aria-controls="global-parcel-results" aria-expanded="false" placeholder="Rechercher un colis…" autocomplete="off" maxlength="120" oninput="queueGlobalParcelSearch()"><kbd>⌘ K</kbd><div id="global-parcel-results" class="global-parcel-results" hidden></div></form>`;
+}
+function closeGlobalParcelSearch(){
+ clearTimeout(globalSearchTimer);globalSearchVersion++;
+ const box=$('#global-parcel-results');if(box)box.hidden=true;
+ $('#global-parcel-search')?.setAttribute('aria-expanded','false');
+}
+function queueGlobalParcelSearch(){
+ closeGlobalParcelSearch();
+ if($('#global-parcel-search')?.value.trim())globalSearchTimer=setTimeout(runGlobalParcelSearch,350);
+}
+function globalParcelMatches(parcels,query){
+ const norm=v=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+ const q=norm(query);if(!q)return [];
+ return parcels.filter(p=>[p.tracking,p.recipient,p.phone].some(v=>norm(v).includes(q)) || (q.replace(/[\s()+.-]/g,'').length>=3 && norm(p.phone).replace(/[\s()+.-]/g,'').includes(q.replace(/[\s()+.-]/g,''))))
+  .sort((a,b)=>Number(norm(b.tracking)===q)-Number(norm(a.tracking)===q));
+}
+async function runGlobalParcelSearch(){
+ clearTimeout(globalSearchTimer);
+ const input=$('#global-parcel-search'),box=$('#global-parcel-results'),query=input?.value.trim();
+ if(!query||!box||!S?.user){closeGlobalParcelSearch();return}
+ const version=++globalSearchVersion,owner=S.user.id;
+ const current=()=>version===globalSearchVersion&&S?.user?.id===owner&&box.isConnected&&input.value.trim()===query;
+ box.style.setProperty('--search-results-top',(input.closest('form').getBoundingClientRect().bottom+8)+'px');
+ box.hidden=false;input.setAttribute('aria-expanded','true');box.innerHTML='<p role="status">Recherche en cours…</p>';
+ try{
+  // Bootstrap is server-scoped by account/role; never search public or foreign data.
+  const data=typeof opsOffline!=='undefined'&&opsOffline?S:await api('/bootstrap');
+  if(!current())return;
+  const rows=globalParcelMatches(data.parcels||[],query);
+  box.innerHTML=`<p role="status">${rows.length?rows.length+' commande(s) trouvée(s) · tous les statuts':'Aucune commande accessible trouvée.'}</p>`+rows.slice(0,30).map(p=>`<button type="button" class="global-parcel-result" onclick="openGlobalParcelResult(${Number(p.id)})"><span><strong>${esc(p.tracking)}</strong><small>${esc(p.recipient)} · ${esc(p.phone)}</small></span><span class="global-result-state">${esc(p.status)}</span></button>`).join('')+(rows.length>30?'<p>30 premiers résultats. Précisez le tracking, le nom ou le téléphone.</p>':'');
+ }catch(e){if(current())box.innerHTML=`<p role="alert">${esc(e.message||'Recherche indisponible. Réessayez.')}</p>`}
+}
+function openGlobalParcelResult(id){closeGlobalParcelSearch();parcelDetail(id)}
+document.addEventListener('click',e=>{if(!e.target.closest('.global-search-form'))closeGlobalParcelSearch()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeGlobalParcelSearch()});
+
 function shell() {
   const u = S.user;
   $("#root").innerHTML =
@@ -512,7 +551,7 @@ function shell() {
       })
       .join(
         "",
-      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon(u.role==='support'?'headset':'help')}<b>${u.role==='support'?'Suivi des commandes':'Besoin d’un coup de main ?'}</b></div>${u.role==='support'?'Vous voyez uniquement les commandes affectées à vos villes.':'Notre équipe vous accompagne.'}<button onclick="${u.role==='support'?'refreshSupportOrders()':"navigate('tickets')"}">${u.role==='support'?'Actualiser le suivi →':'Ouvrir les réclamations →'}</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${workspacePageTitle(view)}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':`<button class="global-search" onclick="navigate('parcels').then(()=>$('#parcel-search')?.focus())">${icon("search")}Rechercher un colis… <kbd>⌘ K</kbd></button>`}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${profileAvatarContent(u)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
+      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon(u.role==='support'?'headset':'help')}<b>${u.role==='support'?'Suivi des commandes':'Besoin d’un coup de main ?'}</b></div>${u.role==='support'?'Vous voyez uniquement les commandes affectées à vos villes.':'Notre équipe vous accompagne.'}<button onclick="${u.role==='support'?'refreshSupportOrders()':"navigate('tickets')"}">${u.role==='support'?'Actualiser le suivi →':'Ouvrir les réclamations →'}</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${workspacePageTitle(view)}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':globalSearchMarkup()}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${profileAvatarContent(u)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
 }
 async function navigate(v) {
   if (!S) return;
