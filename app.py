@@ -150,6 +150,8 @@ def init_db():
         seed_client_invoice(2,2,20);seed_client_invoice(2,2,45);seed_client_invoice(2,2,75);seed_client_invoice(2,3,105)
         seed_client_invoice(4,2,75,False);seed_client_invoice(4,3,105,False)
 init_db()
+from company_profile import ensure_schema as ensure_company_profile_schema, eligible as company_profile_eligible, own_profile as own_company_profile, save_profile as save_company_profile
+with conn() as c:ensure_company_profile_schema(c)
 
 class APIError(Exception):
     def __init__(self,msg,code=400): self.msg,self.code=msg,code
@@ -171,6 +173,7 @@ def user():
             session.clear();raise APIError('Connectez-vous pour continuer.',401)
         security_check_session(c,u['id'])
         result=dict(u)
+        if company_profile_eligible(result):result.update(own_company_profile(c,result['id']))
         # Persist hub_manager while retaining the old internal alias for legacy module checks.
         # New route scopes still need to be migrated to explicit Hub Manager policies.
         if result['role'] in ('agent','hub_manager'):
@@ -807,8 +810,11 @@ def edit_user(uid):
 @auth()
 def profile():
     d=request.get_json() or {};u=user()
+    if not isinstance(d,dict):raise APIError('Objet JSON requis.')
     if 'client_type' in d:raise APIError('Le type de client se gère par l’administration.',403)
     with conn() as c:
+        c.execute('BEGIN IMMEDIATE')
+        save_company_profile(c,u,d,now,APIError)
         if u['role']=='livreur':c.execute('UPDATE users SET driver_revision=driver_revision+1 WHERE id=?',(u['id'],))
         c.execute('UPDATE users SET name=?,phone=?,company=? WHERE id=?',(text(d,'name'),text(d,'phone'),text(d,'company',False),u['id']))
         if d.get('password'):
@@ -997,6 +1003,8 @@ from driver_days import register_driver_days
 register_driver_days(app, globals())
 from logistics import register_logistics
 register_logistics(app, globals())
+from notification_retention import install_notification_retention
+install_notification_retention(app, conn, now)
 from hub_cod import register_hub_cod
 register_hub_cod(app, globals())
 from hub_invoices import register_hub_invoices

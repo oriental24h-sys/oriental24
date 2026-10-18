@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from flask import request, jsonify
 
+from notification_retention import purge_read_notifications
 from claims import prepare_claim
 from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES
 from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
@@ -1182,6 +1183,7 @@ def register_logistics(app, services):
     def ops_notifications():
         u=user()
         with conn() as c:
+            purge_read_notifications(c, now())
             if request.method=='PATCH':
                 d=body()
                 if d.get('all') is True:c.execute('UPDATE ops_notifications SET read_at=COALESCE(read_at,?) WHERE user_id=?',(now(),u['id']))

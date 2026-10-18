@@ -16,6 +16,8 @@ def register_partner_palettes(app,s):
         CREATE TABLE IF NOT EXISTS partner_palette_meta(document_id INTEGER PRIMARY KEY REFERENCES ops_documents(id),partner_reference TEXT NOT NULL DEFAULT '',transport TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS partner_palette_keys(actor_id INTEGER NOT NULL REFERENCES users(id),request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(actor_id,request_key));
         ''')
+        if 'deleted_at' not in {r['name'] for r in c.execute('PRAGMA table_info(partner_palette_meta)')}:
+            c.execute('ALTER TABLE partner_palette_meta ADD COLUMN deleted_at TEXT')
     def body():
         d=request.get_json(silent=True)
         if not isinstance(d,dict):raise Error('Objet JSON requis.')
@@ -49,9 +51,10 @@ def register_partner_palettes(app,s):
         r=c.execute('SELECT * FROM ops_hubs WHERE id=? AND active=1',(hid,)).fetchone()
         if not r:raise Error('Choisissez un hub de réception actif. Admin peut le configurer.',409)
         return dict(r)
-    def get(c,did,u):
-        r=c.execute('SELECT d.*,m.partner_reference,m.transport FROM ops_documents d JOIN partner_palette_meta m ON m.document_id=d.id WHERE d.id=? AND d.kind=?',(did,KIND)).fetchone()
+    def get(c,did,u,include_deleted=False):
+        r=c.execute('SELECT d.*,m.partner_reference,m.transport,m.deleted_at FROM ops_documents d JOIN partner_palette_meta m ON m.document_id=d.id WHERE d.id=? AND d.kind=?',(did,KIND)).fetchone()
         if not r or(u['role']=='client' and r['client_id']!=u['id']) or(u['role']=='agent' and (r['destination_hub_id']!=u.get('agent_hub_id') or r['status'] not in ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)'))):raise Error('Palette introuvable.',404)
+        if r['deleted_at'] and not include_deleted:raise Error('Palette supprimée.',404)
         return dict(r)
     def lines(c,did):
         return [dict(r) for r in c.execute('SELECT l.*,p.phone,p.amount,p.status current_status,p.current_hub_id FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=? ORDER BY l.id',(did,))]
@@ -153,7 +156,7 @@ def register_partner_palettes(app,s):
         u=user();access(u)
         with conn() as c:
             if request.method=='GET':
-                where=['d.kind=?'];args=[KIND]
+                where=['d.kind=?','m.deleted_at IS NULL'];args=[KIND]
                 if u['role']=='client':where.append('d.client_id=?');args.append(u['id'])
                 if u['role']=='agent':
                     where.append('d.destination_hub_id=?');args.append(u['agent_hub_id'])
@@ -225,7 +228,7 @@ def register_partner_palettes(app,s):
             day=now()[:10];cid=u['id'] if u['role']=='client' else d.get('client_id');cl=company(c,cid)
             # Candidats du jour : Créé du jour, jamais reçus ni affectés, non facturés et non déjà réservés
             # dans un document actif (une palette manuelle les prend, sinon ils suivent la palette du jour).
-            ids=[r['id'] for r in c.execute("SELECT id FROM parcels WHERE client_id=? AND status='Créé' AND current_hub_id IS NULL AND driver_id IS NULL AND invoice_id IS NULL AND substr(created_at,1,10)=? AND NOT EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.parcel_id=parcels.id AND l.active=1) ORDER BY id",(cl['id'],day))]
+            ids=[r['id'] for r in c.execute("SELECT id FROM parcels WHERE client_id=? AND status='Créé' AND current_hub_id IS NULL AND driver_id IS NULL AND invoice_id IS NULL AND substr(created_at,1,10)=? AND NOT EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.parcel_id=parcels.id AND l.active=1) AND NOT EXISTS(SELECT 1 FROM ops_document_lines dl JOIN partner_palette_meta dm ON dm.document_id=dl.document_id WHERE dl.parcel_id=parcels.id AND dm.deleted_at IS NOT NULL) ORDER BY id",(cl['id'],day))]
             did,st=find_daily_draft(c,cl['id'],day)
             if did is not None:
                 if st['status']=='Préparé':
@@ -295,7 +298,7 @@ def register_partner_palettes(app,s):
     @auth('admin','client','agent','livreur')
     def partner_action(did,action):
         u=user()
-        if action not in ['dispatch','cancel','receive','receive-all']:raise Error('Action inconnue.',404)
+        if action not in ['dispatch','cancel','add','delete','receive','receive-all']:raise Error('Action inconnue.',404)
         # Le blocage de réception est enregistré pour TOUT utilisateur (rôle, hub étranger) avant les autres gardes.
         if action.startswith('receive'):receive_guard(did,u)
         if action=='receive-all' and u['role']=='agent':
@@ -305,10 +308,11 @@ def register_partner_palettes(app,s):
                 audit(c,did,u,'Réception groupée refusée',{'reason':'scan individuel obligatoire','hub_id':doc['destination_hub_id']})
             raise Error('Le responsable du Hub doit scanner chaque colis individuellement.',403)
         access(u);d=body()
-        if action in ['dispatch','cancel']:creator(u)
+        if action in ['dispatch','cancel','add','delete']:creator(u)
+        if action in ['add','delete'] and u['role']!='client':raise Error('Action réservée au client propriétaire.',403)
         if d.get('confirmed') is not True:raise Error('Confirmez explicitement cette opération.')
         with conn() as c:
-            c.execute('BEGIN IMMEDIATE');doc=get(c,did,u);fp,prior=replay(c,u,d,did,action)
+            c.execute('BEGIN IMMEDIATE');doc=get(c,did,u,include_deleted=action=='delete');fp,prior=replay(c,u,d,did,action)
             if prior:return jsonify(prior)
             ls=lines(c,did)
             if action=='receive':
@@ -317,6 +321,31 @@ def register_partner_palettes(app,s):
                 if line['missing_at']:raise Error('Ce colis a été déclaré manquant : il ne peut pas être réceptionné.',404)
                 if line['received_at']:return result(c,u,d,fp,doc,already_received=True,received=0)
             revision(d,doc)
+            if action in ['add','delete']:
+                if doc['status']!='Préparé' or doc['deleted_at']:raise Error('Palette envoyée ou supprimée : aucune modification autorisée.',409)
+                if action=='delete':
+                    # Logical deletion preserves immutable operational audit and parcel data.
+                    c.execute("UPDATE ops_documents SET status='Annulé',cancel_reason='Brouillon supprimé par le client',revision=revision+1 WHERE id=?",(did,))
+                    c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,))
+                    c.execute('UPDATE partner_palette_meta SET deleted_at=? WHERE document_id=?',(now(),did))
+                    audit(c,did,u,'Brouillon supprimé par le client',{'count':len(ls)})
+                    return result(c,u,d,fp,get(c,did,u,include_deleted=True),deleted=True)
+                ids=d.get('parcel_ids')
+                if not isinstance(ids,list) or not 1<=len(ids)<=500 or any(type(i) is not int or i<=0 for i in ids) or len(ids)!=len(set(ids)):
+                    raise Error('Choisissez 1 à 500 commandes distinctes.')
+                if len(ls)+len(ids)>500:raise Error('Maximum 500 commandes par palette.',409)
+                present={l['parcel_id'] for l in ls}
+                ps=[]
+                for pid in ids:
+                    if pid in present:raise Error('Commande déjà présente dans cette palette.',409)
+                    p=c.execute('SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE p.id=? AND p.client_id=?',(pid,doc['client_id'])).fetchone()
+                    if not p:raise Error('Commande inaccessible.',404)
+                    lockcheck(c,p,doc['client_id']);ps.append(p)
+                for p in ps:
+                    c.execute('INSERT INTO ops_document_lines(document_id,parcel_id,tracking,recipient,city,initial_status) VALUES(?,?,?,?,?,?)',(did,p['id'],p['tracking'],p['recipient'],p['city'],p['status']))
+                c.execute('UPDATE ops_documents SET revision=revision+1 WHERE id=?',(did,))
+                audit(c,did,u,'Commandes ajoutées au brouillon',{'parcel_ids':ids,'count':len(ids)})
+                return result(c,u,d,fp,get(c,did,u),added=len(ids))
             if action in ['dispatch','cancel']:
                 if doc['status']!='Préparé':raise Error('Seule une palette brouillon peut être envoyée ou annulée.',409)
                 if action=='cancel':
