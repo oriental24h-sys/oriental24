@@ -1,3 +1,4 @@
+from client_profile_extras import notification_enabled
 """Manual client settlements; integer cents, immutable receipts and auditable reversals."""
 from decimal import Decimal,InvalidOperation,ROUND_HALF_UP
 from datetime import date
@@ -94,6 +95,8 @@ def register_client_finance(app,services):
         note=f'N° : FAC-{i["id"]:04d} · {tag} · règlement {amount_label} MAD via {method} · référence {ref}'
         if status=='Réglée':note+=' · facture entièrement réglée'
         invoice_event(c,i['id'],u,tag,note)
+        if notification_enabled(c,i['client_id'],'payment'):
+            c.execute('INSERT INTO ops_notifications(user_id,title,body,created_at) VALUES(?,?,?,?)',(i['client_id'],'Règlement enregistré',note,now()))
         return {'ok':True,'id':rid,'already_recorded':False}
     def legacy_settle(c,i,u):
         s=info(c,i)

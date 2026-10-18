@@ -305,17 +305,9 @@ def register_operations(app, services):
         b = io.BytesIO(); wb.save(b); wb.close()
         return Response(b.getvalue(), mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
-    @app.post('/api/imports/preview')
-    @auth('admin', 'client')
-    def preview_import():
-        u = user()
-        upload = request.files.get('file')
-        if not upload or not upload.filename:
-            raise Error('Sélectionnez un fichier Excel ou CSV.')
-        filename = upload.filename.replace('\\', '/').split('/')[-1][:180]
-        raw = upload.read(MAX_FILE+1)
+    def preview_data(raw,filename,u,client_fields):
         with conn() as c:
-            client = client_for(c, u, request.form)
+            client = client_for(c, u, client_fields)
             parsed = read_import(raw, filename, Error, client['client_type'])
             cities = {normalize(r['name']): dict(r) for r in c.execute('SELECT * FROM cities WHERE delivery=1')}
             seen = set()
@@ -327,7 +319,20 @@ def register_operations(app, services):
             status = 'À corriger' if invalid else 'Prêt'
             c.execute('INSERT INTO import_batches(id,user_id,client_id,filename,digest,payload,status,created_at) VALUES(?,?,?,?,?,?,?,?)',
                       (token, u['id'], client['id'], filename, hashlib.sha256(raw).hexdigest(), json.dumps(payload, ensure_ascii=False), status, now()))
-        return jsonify(id=token, filename=filename, status=status, created_at=now(), **payload)
+        return dict(id=token, filename=filename, status=status, created_at=now(), **payload)
+
+    services['preview_client_import']=preview_data
+
+    @app.post('/api/imports/preview')
+    @auth('admin', 'client')
+    def preview_import():
+        u = user()
+        upload = request.files.get('file')
+        if not upload or not upload.filename:
+            raise Error('Sélectionnez un fichier Excel ou CSV.')
+        filename = upload.filename.replace('\\', '/').split('/')[-1][:180]
+        raw = upload.read(MAX_FILE+1)
+        return jsonify(preview_data(raw,filename,u,request.form))
 
     def get_batch(c, token, uid):
         b = c.execute('SELECT * FROM import_batches WHERE id=? AND user_id=?', (token, uid)).fetchone()

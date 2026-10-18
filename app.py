@@ -152,7 +152,10 @@ def init_db():
         seed_client_invoice(4,2,75,False);seed_client_invoice(4,3,105,False)
 init_db()
 from company_profile import ensure_schema as ensure_company_profile_schema, eligible as company_profile_eligible, own_profile as own_company_profile, save_profile as save_company_profile
-with conn() as c:ensure_company_profile_schema(c)
+from client_profile_extras import ensure_schema as ensure_client_extras_schema
+with conn() as c:
+    ensure_company_profile_schema(c)
+    ensure_client_extras_schema(c)
 
 class APIError(Exception):
     def __init__(self,msg,code=400): self.msg,self.code=msg,code
@@ -164,7 +167,7 @@ def integrity(e): return jsonify(error='Cette valeur existe déjà ou une réfé
 def headers(r):
     r.headers['X-Content-Type-Options']='nosniff'
     r.headers['Referrer-Policy']='same-origin'
-    if request.path.startswith('/api/'): r.headers['Cache-Control']='no-store'
+    if request.path.startswith(('/api/','/google/')): r.headers['Cache-Control']='no-store'
     return r
 
 def user():
@@ -174,7 +177,10 @@ def user():
             session.clear();raise APIError('Connectez-vous pour continuer.',401)
         security_check_session(c,u['id'])
         result=dict(u)
-        if company_profile_eligible(result):result.update(own_company_profile(c,result['id']))
+        if company_profile_eligible(result):
+            result.update(own_company_profile(c,result['id']))
+            pref=c.execute('SELECT language FROM client_profile_extras WHERE user_id=?',(result['id'],)).fetchone()
+            result['profile_language']=pref['language'] if pref else ''
         # Persist hub_manager while retaining the old internal alias for legacy module checks.
         # New route scopes still need to be migrated to explicit Hub Manager policies.
         if result['role'] in ('agent','hub_manager'):
@@ -289,7 +295,7 @@ def list_parcels(c,u):
 @app.route('/')
 @app.route('/login')
 @app.route('/app')
-def index(): return render_template('index.html',runtime_config={'demo':app.config['DEMO_MODE'],'registration':app.config['PUBLIC_REGISTRATION'],'version':'1.12.0'})
+def index(): return render_template('index.html',runtime_config={'demo':app.config['DEMO_MODE'],'registration':app.config['PUBLIC_REGISTRATION'],'version':'1.12.0','google':__import__('google_profile').configuration()['configured']})
 
 @app.route('/healthz')
 def healthz(): return {'status':'ok','version':'1.12.0','production':app.config['PRODUCTION_MODE']}
@@ -1019,6 +1025,10 @@ from vendor_payables import register_vendor_payables
 register_vendor_payables(app, globals())
 from accounts import register_accounts
 register_accounts(app, globals())
+from google_profile import register_google_profile
+register_google_profile(app, globals())
+from client_profile_extras import register_client_profile_extras
+register_client_profile_extras(app, globals())
 from security import register_security
 register_security(app, globals())
 from parcel_contacts import register_parcel_contacts

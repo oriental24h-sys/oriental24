@@ -11,7 +11,7 @@ MAX_IMAGE_BYTES = 1024 * 1024
 
 
 def eligible(user):
-    return user.get('role') == 'client' and user.get('client_type') == 'societe_livraison'
+    return user.get('role') == 'client'
 
 
 def ensure_schema(c):
@@ -63,7 +63,7 @@ def save_profile(c, user, data, now, Error):
     if not FIELDS.intersection(data):
         return
     if not eligible(user):
-        raise Error('Ces champs sont réservés au profil Société de livraison.', 403)
+        raise Error('Ces champs sont réservés aux profils clients.', 403)
     values = own_profile(c, user['id'])
     if 'bank_name' in data:
         bank = data['bank_name']

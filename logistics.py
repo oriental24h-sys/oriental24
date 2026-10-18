@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from flask import request, jsonify
 
 from notification_retention import purge_read_notifications
+from client_profile_extras import notification_enabled
 from claims import prepare_claim
 from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES
 from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
@@ -214,7 +215,8 @@ def register_logistics(app, services):
     def notify_event(c,pid,status,u):
         p=c.execute('SELECT tracking,client_id,driver_id FROM parcels WHERE id=?',(pid,)).fetchone()
         recipients={p['client_id'],p['driver_id']}-{None,u['id']}
-        for uid in recipients:notify(c,uid,'Suivi colis',p['tracking']+' · '+status,pid)
+        for uid in recipients:
+            if notification_enabled(c,uid,'status:'+status):notify(c,uid,'Suivi colis',p['tracking']+' · '+status,pid)
     def planned(value):
         try:
             if not isinstance(value,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}',value):raise ValueError()
