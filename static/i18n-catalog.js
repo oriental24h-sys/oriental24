@@ -398,6 +398,36 @@ window.O24_AUTO_TRANSLATIONS = [
     "التقطت"
   ],
   [
+    "Confirmé",
+    "Confirmed",
+    "مؤكّد"
+  ],
+  [
+    "Réception ramassage",
+    "Pickup reception",
+    "استلام التجميع"
+  ],
+  [
+    "Bons de ramassage",
+    "Pickup slips",
+    "بونات التجميع"
+  ],
+  [
+    "Scanner la réception",
+    "Scan reception",
+    "مسح الاستلام"
+  ],
+  [
+    "Valider le bon",
+    "Validate the slip",
+    "تأكيد البون"
+  ],
+  [
+    "Bon de ramassage",
+    "Pickup slip",
+    "بون التجميع"
+  ],
+  [
     "Planifié",
     "Planned",
     "المخطط لها"
