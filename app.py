@@ -370,6 +370,8 @@ def bootstrap():
             hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')]
         elif u['role']=='agent' and u.get('agent_hub_id'):
             hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1',(u['agent_hub_id'],))]
+        elif u['role']=='client':
+            hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 ORDER BY h.name')]
         else:hubs=[]
         return jsonify(user=u,csrf=session['csrf'],cities=cities,users=users,parcels=list_parcels(c,u),statuses=STATUSES,status_policy=status_policy(),settings=settings,hubs=hubs)
 @app.get('/api/parcels/<int:pid>')
@@ -1019,6 +1021,8 @@ from hub_invoices import register_hub_invoices
 register_hub_invoices(app, globals())
 from fulfillment import register_fulfillment
 register_fulfillment(app, globals())
+from ramassage_bon import register_ramassage_bon
+register_ramassage_bon(app, globals())
 from client_finance import register_client_finance
 register_client_finance(app, globals())
 from vendor_payables import register_vendor_payables
