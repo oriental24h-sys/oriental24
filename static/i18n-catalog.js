@@ -398,6 +398,36 @@ window.O24_AUTO_TRANSLATIONS = [
     "التقطت"
   ],
   [
+    "Confirmé",
+    "Confirmed",
+    "مؤكّد"
+  ],
+  [
+    "Réception ramassage",
+    "Pickup reception",
+    "استلام التجميع"
+  ],
+  [
+    "Bons de ramassage",
+    "Pickup slips",
+    "بونات التجميع"
+  ],
+  [
+    "Scanner la réception",
+    "Scan reception",
+    "مسح الاستلام"
+  ],
+  [
+    "Valider le bon",
+    "Validate the slip",
+    "تأكيد البون"
+  ],
+  [
+    "Bon de ramassage",
+    "Pickup slip",
+    "بون التجميع"
+  ],
+  [
     "Planifié",
     "Planned",
     "المخطط لها"
@@ -1351,6 +1381,36 @@ window.O24_AUTO_TRANSLATIONS = [
     "Se déconnecter",
     "Log out",
     "تسجيل الخروج"
+  ],
+  [
+    "Profil",
+    "Profile",
+    "الملف الشخصي"
+  ],
+  [
+    "Déconnexion",
+    "Log out",
+    "تسجيل الخروج"
+  ],
+  [
+    "Menu du compte",
+    "Account menu",
+    "قائمة الحساب"
+  ],
+  [
+    "Demandes & réclamations",
+    "Requests & complaints",
+    "الطلبات والشكاوى"
+  ],
+  [
+    "Demandes",
+    "Requests",
+    "الطلبات"
+  ],
+  [
+    "Vos réclamations et vos demandes de modification réunies au même endroit.",
+    "Your complaints and modification requests gathered in one place.",
+    "شكاوى وطلبات التعديل الخاصة بك مجمّعة في مكان واحد."
   ],
   [
     "Changer mon mot de passe Laissez ces champs vides pour conserver votre mot de passe. Sur le serveur, le changement ferme toutes vos anciennes sessions et renouvelle celle-ci.",

@@ -109,9 +109,9 @@ const roleName = (r) =>
 function tag(s) {
   const cls = ["Invoice", "Invoice : Paid", "Facture créée", "Règlement facture", "Règlement facture annulé"].includes(s)
     ? "invoice"
-    : ["Livré", "Réglée", "Résolu", "Réceptionnée", "Acceptée", "Ramassé"].includes(s)
+    : ["Livré", "Réglée", "Résolu", "Réceptionnée", "Acceptée", "Ramassé", "Reçu"].includes(s)
       ? "good"
-      : ["En livraison", "Au hub", "En cours", "Planifié", "En transit", "Transit", "Réceptionné", "Reçu par le livreur", "Intéressé", "Appel client", "WhatsApp client"].includes(s)
+      : ["En livraison", "Au hub", "En cours", "Planifié", "En transit", "Transit", "Vers Hub Central", "Réceptionné", "Reçu par le livreur", "Intéressé", "Confirmé", "Appel client", "WhatsApp client"].includes(s)
         ? "blue"
         : ["Retourné", "Refusé", "Refusée", "Annulé"].includes(s)
           ? "bad"
@@ -234,7 +234,7 @@ document.addEventListener("keydown", (e) => {
   }
   if ((e.ctrlKey || e.metaKey) && e.key === "k" && S) {
     e.preventDefault();
-    navigate("parcels").then(() => $("#parcel-search")?.focus());
+    $("#global-parcel-search")?.focus();
   }
   if (e.key === "Tab" && $(".modal")) {
     const nodes = [
@@ -352,7 +352,7 @@ function renderLogin(register = false) {
   history.replaceState(null, "", "/login");
   document.title = "Connexion — ORIENTAL24";
   $("#root").innerHTML =
-    `<div class="login-page"><aside class="login-brand-panel"><a href="/" aria-label="ORIENTAL24"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div><div class="eyebrow" style="color:#e89a61">La proximité fait la différence</div><h1>Votre activité avance.<br><span>Nous livrons la suite.</span></h1><p>Un espace unique pour vos colis, vos équipes et vos encaissements. Bienvenue chez vous.</p><div class="login-illustration"><img src="/static/van.png" alt="Livraison ORIENTAL24"></div></div><small>ORIENTAL24 · Livraison à domicile · ${new Date().getFullYear()}</small></aside><main class="login-form-side"><div class="login-form"><a href="/" class="back-link">${icon("back")}Retour au site</a><div class="eyebrow">Votre espace ORIENTAL24</div><h2>${register ? "Bienvenue dans le réseau." : "Heureux de vous retrouver."}</h2><p>${register ? "Créez votre compte client et préparez vos premières expéditions." : "Connectez-vous pour suivre votre activité."}</p><form id="login-form"><div class="form-error" role="alert"></div>${register ? input("name", "Nom complet") + select("client_type", "Type de client", clientTypeOptions) + input("company", "Boutique / Société") + input("phone", "Téléphone", "", "tel") : ""}${input("email", "Adresse e-mail", "", "email", true, 'autocomplete="username"')}${input("password", "Mot de passe", "", "password", true, `minlength="${register ? 10 : 1}" autocomplete="${register ? "new-password" : "current-password"}"`)}<button class="btn primary" type="submit">${register ? "Créer mon compte" : "Se connecter"} ${icon("arrow")}</button></form><div class="login-register">${register ? "Déjà partenaire ?" : "Pas encore de compte ?"} <a onclick="RUNTIME.registration?renderLogin(${!register}):toast('Inscription publique fermée. Contactez l’administration.',true)">${register ? "Se connecter" : "Devenir client"}</a></div>${!register && RUNTIME.demo ? `<div class="demo-accounts"><p>EXPLORER LA VERSION DE DÉMONSTRATION</p><div class="demo-buttons"><button class="btn" onclick="demoLogin('admin')">${icon("shield")}Admin</button><button class="btn" onclick="demoLogin('client')">${icon("box")}Client</button><button class="btn" onclick="demoLogin('livreur')">${icon("truck")}Livreur</button><button class="btn" onclick="demoLogin('agent')">${icon("bell")}Responsable de hub</button></div>${window.opsOffline && opsOffline ? `<p style="margin-top:16px">CRÉER UN COMPTE DE TEST — CONNEXION IMMÉDIATE</p><div class="demo-buttons" style="flex-wrap:wrap"><button class="btn" onclick="demoCreate('vendeur')">${icon("box")}Nouveau client</button><button class="btn" onclick="demoCreate('societe')">${icon("layers")}Nouvelle société</button><button class="btn" onclick="demoCreate('livreur')">${icon("truck")}Nouveau livreur</button><button class="btn" onclick="demoCreate('agent')">${icon("bell")}Nouvel agent</button></div><p class="form-hint" style="margin-top:8px">Mot de passe de tous les comptes créés ici : <b>Oriental24!Demo</b> — ils persistent dans cette démo (même après rechargement).</p><div id="demo-created"></div>` : ""}</div>` : ""}<div class="login-note">${RUNTIME.demo?"Données fictives · Ne saisissez pas de données sensibles dans cette démo.":RUNTIME.registration?"Compte client · Vérification d’e-mail non activée.":"Inscription publique fermée. Demandez votre compte à l’administration."}</div></div></main></div>`;
+    `<div class="login-page"><aside class="login-brand-panel"><a href="/" aria-label="ORIENTAL24"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div><div class="eyebrow" style="color:#e89a61">La proximité fait la différence</div><h1>Votre activité avance.<br><span>Nous livrons la suite.</span></h1><p>Un espace unique pour vos colis, vos équipes et vos encaissements. Bienvenue chez vous.</p><div class="login-illustration"><img src="/static/van.png" alt="Livraison ORIENTAL24"></div></div><small>ORIENTAL24 · Livraison à domicile · ${new Date().getFullYear()}</small></aside><main class="login-form-side"><div class="login-form"><a href="/" class="back-link">${icon("back")}Retour au site</a><div class="eyebrow">Votre espace ORIENTAL24</div><h2>${register ? "Bienvenue dans le réseau." : "Heureux de vous retrouver."}</h2><p>${register ? "Créez votre compte client et préparez vos premières expéditions." : "Connectez-vous pour suivre votre activité."}</p><form id="login-form"><div class="form-error" role="alert"></div>${register ? input("name", "Nom complet") + select("client_type", "Type de client", clientTypeOptions) + input("company", "Boutique / Société") + input("phone", "Téléphone", "", "tel") : ""}${input("email", "Adresse e-mail", "", "email", true, 'autocomplete="username"')}${input("password", "Mot de passe", "", "password", true, `minlength="${register ? 10 : 1}" autocomplete="${register ? "new-password" : "current-password"}"`)}<button class="btn primary" type="submit">${register ? "Créer mon compte" : "Se connecter"} ${icon("arrow")}</button></form><div class="login-register">${register ? "Déjà partenaire ?" : "Pas encore de compte ?"} <a onclick="RUNTIME.registration?renderLogin(${!register}):toast('Inscription publique fermée. Contactez l’administration.',true)">${register ? "Se connecter" : "Devenir client"}</a></div>${!register && RUNTIME.google ? `<a class="btn" href="/google/login">Se connecter avec Google</a>` : ""}${!register && RUNTIME.demo ? `<div class="demo-accounts"><p>EXPLORER LA VERSION DE DÉMONSTRATION</p><div class="demo-buttons"><button class="btn" onclick="demoLogin('admin')">${icon("shield")}Admin</button><button class="btn" onclick="demoLogin('client')">${icon("box")}Client</button><button class="btn" onclick="demoLogin('livreur')">${icon("truck")}Livreur</button><button class="btn" onclick="demoLogin('agent')">${icon("bell")}Responsable de hub</button></div>${window.opsOffline && opsOffline ? `<p style="margin-top:16px">CRÉER UN COMPTE DE TEST — CONNEXION IMMÉDIATE</p><div class="demo-buttons" style="flex-wrap:wrap"><button class="btn" onclick="demoCreate('vendeur')">${icon("box")}Nouveau client</button><button class="btn" onclick="demoCreate('societe')">${icon("layers")}Nouvelle société</button><button class="btn" onclick="demoCreate('livreur')">${icon("truck")}Nouveau livreur</button><button class="btn" onclick="demoCreate('agent')">${icon("bell")}Nouvel agent</button></div><p class="form-hint" style="margin-top:8px">Mot de passe de tous les comptes créés ici : <b>Oriental24!Demo</b> — ils persistent dans cette démo (même après rechargement).</p><div id="demo-created"></div>` : ""}</div>` : ""}<div class="login-note">${RUNTIME.demo?"Données fictives · Ne saisissez pas de données sensibles dans cette démo.":RUNTIME.registration?"Compte client · Vérification d’e-mail non activée.":"Inscription publique fermée. Demandez votre compte à l’administration."}</div></div></main></div>`;
   bindForm(async (d) => {
     await api(register ? "/register" : "/login", "POST", d);
     await enterApp();
@@ -419,11 +419,14 @@ async function demoCreate(kind) {
   } catch (e) { toast(e.message, true); }
 }
 async function enterApp() {
+  const googleResult=new URLSearchParams(location.search).get('google');
   await refresh();
   history.replaceState(null, "", "/app");
   view = S?.user?.role === "agent" ? "partner-palettes" : S?.user?.role === "support" ? "support-orders" : "dashboard";
+  if(googleResult&&S.user.role==='client')view='profile';
   shell();
   await renderView();
+  if(googleResult==='linked')toast('Compte Google associé');
 }
 const menu = [
   [
@@ -431,7 +434,7 @@ const menu = [
     [
       ["dashboard", "grid", "Tableau de bord"],
       ["analytics", "chart", "Statistiques", ["admin"]],
-      ["tour", "pin", "Tour de contrôle", ["admin"]],
+      ["tour", "pin", "Tour de contrôle", ["admin", "agent"]],
     ],
   ],
   [
@@ -440,6 +443,7 @@ const menu = [
             ["driver-app", "smartphone", "Mon app", ["livreur"]],
 ["parcels", "box", "Colis"],
       ["pickups", "truck", "Ramassages", ["admin", "client"]],
+      ["ramassage-reception", "scan", "Réception ramassage", ["admin", "agent"]],
       ["pallets", "layers", "Palettes", ["admin"]],
       ["stock", "layers", "Stock & produits", ["admin", "client"]],
       ["print", "print", "Impression"],
@@ -451,19 +455,18 @@ const menu = [
       ["invoices", "wallet", "Facturation", ["admin", "client", "livreur"]],
       ["driver-finance", "wallet", "Caisse livreurs", ["admin", "livreur"]],
       ["drivers", "users", "Livreurs", ["admin"]],
+      ["hub-drivers", "users", "Livreurs de mon Hub", ["agent"]],
       ["clients", "user", "Clients", ["admin"]],
       ["supports", "headset", "Supports", ["admin"]],
       ["support-orders", "headset", "Suivre les commandes", ["support"]],
       ["audit-log", "shield", "Journal d’audit", ["admin"]],
-      ["requests", "return", "Demandes"],
-      ["tickets", "ticket", "Réclamations"],
+      ["tickets", "ticket", "Demandes & réclamations"],
     ],
   ],
   [
     "ESPACE PERSONNEL",
     [
       ["settings", "settings", "Paramètres", ["admin"]],
-      ["profile", "user", "Mon profil"],
     ],
   ],
 ];
@@ -472,40 +475,102 @@ const titles = {
   tour: "Tour de contrôle",
   parcels: "Gestion des colis",
   pickups: "Ramassages",
+  "ramassage-reception": "Réception ramassage",
   pallets: "Palettes",
   stock: "Stock & produits",
   print: "Centre d’impression",
   invoices: "Facturation",
   drivers: "Livreurs",
+  "hub-drivers": "Livreurs de mon Hub",
   clients: "Clients",
   supports: "Comptes Support",
   "support-orders": "Suivi des commandes",
   "audit-log": "Journal d’audit",
-  requests: "Demandes de modification",
-  tickets: "Réclamations",
+  requests: "Demandes & réclamations",
+  tickets: "Demandes & réclamations",
   settings: "Paramètres",
   profile: "Mon profil",
   analytics: "Statistiques & performance",
   "driver-finance": "Caisse & commissions livreurs",
 };
+// Delivery-company dashboard only: sellers and other roles retain their sections.
+function clientSectionRemoved(key, user = S?.user) {
+  if (user?.role !== 'client') return false;
+  // Société de livraison : périmètre historique déjà en place.
+  if (user.client_type === 'societe_livraison'
+      && ['pickups', 'fulfillment', 'stock', 'stock-analytics', 'print'].includes(key)) return true;
+  // Vendeurs (client_type « vendeur », y compris comptes hérités sans type) :
+  // Analyse produits, Dossiers comptes, Documents & transferts et Préparation stock
+  // sont retirés de leur tableau de bord. Une navigation directe est redirigée vers
+  // l'accueil par navigate()/renderView(), pas seulement masquée dans le menu.
+  if (user.client_type !== 'societe_livraison'
+      && ['fulfillment', 'stock-analytics', 'documents', 'account-dossiers'].includes(key)) return true;
+  return false;
+}
+function workspacePageTitle(key, fallback) {
+  if (key === 'partner-palettes' && S?.user?.role === 'client') return 'Mes palettes';
+  if (key === 'return-palettes' && S?.user?.role === 'client') return 'Mes retours';
+  return fallback || titles[key] || key;
+}
+let globalSearchTimer=null, globalSearchVersion=0;
+function globalSearchMarkup(){
+ return `<form class="global-search global-search-form" role="search" onsubmit="event.preventDefault();runGlobalParcelSearch()">${icon('search')}<input id="global-parcel-search" aria-label="Rechercher une commande" aria-controls="global-parcel-results" aria-expanded="false" placeholder="Rechercher un colis…" autocomplete="off" maxlength="120" oninput="queueGlobalParcelSearch()"><kbd>⌘ K</kbd><div id="global-parcel-results" class="global-parcel-results" hidden></div></form>`;
+}
+function closeGlobalParcelSearch(){
+ clearTimeout(globalSearchTimer);globalSearchVersion++;
+ const box=$('#global-parcel-results');if(box)box.hidden=true;
+ $('#global-parcel-search')?.setAttribute('aria-expanded','false');
+}
+function queueGlobalParcelSearch(){
+ closeGlobalParcelSearch();
+ if($('#global-parcel-search')?.value.trim())globalSearchTimer=setTimeout(runGlobalParcelSearch,350);
+}
+function globalParcelMatches(parcels,query){
+ const norm=v=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+ const q=norm(query);if(!q)return [];
+ return parcels.filter(p=>[p.tracking,p.recipient,p.phone].some(v=>norm(v).includes(q)) || (q.replace(/[\s()+.-]/g,'').length>=3 && norm(p.phone).replace(/[\s()+.-]/g,'').includes(q.replace(/[\s()+.-]/g,''))))
+  .sort((a,b)=>Number(norm(b.tracking)===q)-Number(norm(a.tracking)===q));
+}
+async function runGlobalParcelSearch(){
+ clearTimeout(globalSearchTimer);
+ const input=$('#global-parcel-search'),box=$('#global-parcel-results'),query=input?.value.trim();
+ if(!query||!box||!S?.user){closeGlobalParcelSearch();return}
+ const version=++globalSearchVersion,owner=S.user.id;
+ const current=()=>version===globalSearchVersion&&S?.user?.id===owner&&box.isConnected&&input.value.trim()===query;
+ box.style.setProperty('--search-results-top',(input.closest('form').getBoundingClientRect().bottom+8)+'px');
+ box.hidden=false;input.setAttribute('aria-expanded','true');box.innerHTML='<p role="status">Recherche en cours…</p>';
+ try{
+  // Bootstrap is server-scoped by account/role; never search public or foreign data.
+  const data=typeof opsOffline!=='undefined'&&opsOffline?S:await api('/bootstrap');
+  if(!current())return;
+  const rows=globalParcelMatches(data.parcels||[],query);
+  box.innerHTML=`<p role="status">${rows.length?rows.length+' commande(s) trouvée(s) · tous les statuts':'Aucune commande accessible trouvée.'}</p>`+rows.slice(0,30).map(p=>`<button type="button" class="global-parcel-result" onclick="openGlobalParcelResult(${Number(p.id)})"><span><strong>${esc(p.tracking)}</strong><small>${esc(p.recipient)} · ${esc(p.phone)}</small></span><span class="global-result-state">${esc(p.status)}</span></button>`).join('')+(rows.length>30?'<p>30 premiers résultats. Précisez le tracking, le nom ou le téléphone.</p>':'');
+ }catch(e){if(current())box.innerHTML=`<p role="alert">${esc(e.message||'Recherche indisponible. Réessayez.')}</p>`}
+}
+function openGlobalParcelResult(id){closeGlobalParcelSearch();parcelDetail(id)}
+document.addEventListener('click',e=>{if(!e.target.closest('.global-search-form'))closeGlobalParcelSearch()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeGlobalParcelSearch()});
+
 function shell() {
   const u = S.user;
+  if(u.profile_language&&window.o24CurrentLanguage?.()!==u.profile_language)window.setO24Language?.(u.profile_language);
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','hub-dashboard','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','ramassage-reception','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
-          ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${t}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
+          ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${workspacePageTitle(key,t)}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
       })
       .join(
         "",
-      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon(u.role==='support'?'headset':'help')}<b>${u.role==='support'?'Suivi des commandes':'Besoin d’un coup de main ?'}</b></div>${u.role==='support'?'Vous voyez uniquement les commandes affectées à vos villes.':'Notre équipe vous accompagne.'}<button onclick="${u.role==='support'?'refreshSupportOrders()':"navigate('tickets')"}">${u.role==='support'?'Actualiser le suivi →':'Ouvrir les réclamations →'}</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${titles[view]}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':`<button class="global-search" onclick="navigate('parcels').then(()=>$('#parcel-search')?.focus())">${icon("search")}Rechercher un colis… <kbd>⌘ K</kbd></button>`}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${initials(u.name)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
+      )}</nav><div class="sidebar-bottom"><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${workspacePageTitle(view)}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':globalSearchMarkup()}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<div class="top-profile-wrap"><button type="button" class="top-profile" id="user-menu-btn" aria-haspopup="true" aria-expanded="false" onclick="toggleUserMenu(event)"><span class="avatar orange">${profileAvatarContent(u)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button><div class="user-popover" id="user-popover" role="menu" hidden><button type="button" role="menuitem" onclick="userMenuGo('profile')"><span class="user-pop-ico" aria-hidden="true">${icon("user")}</span><span>Profil</span></button><button type="button" role="menuitem" class="danger" onclick="userMenuGo('logout')"><span class="user-pop-ico" aria-hidden="true">${icon("logout")}</span><span>Déconnexion</span></button></div></div></div></header><main class="content" id="content"></main></div>`;
 }
 async function navigate(v) {
   if (!S) return;
+  if (clientSectionRemoved(v)) v = 'dashboard';
   // Responsable de hub : navigation limitée aux tâches et vues explicitement sûres.
-  if (S.user.role==='agent'&&!['parcels','documents','hub-dashboard','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
+  if (S.user.role==='agent'&&!['parcels','documents','ramassage-reception','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
   if (S.user.role==='support'&&!['support-orders','profile'].includes(v)) v='support-orders';
   if (S.user.role === "livreur" && ["parcels","dashboard","print"].includes(v)) { try { const owner=S.user.id,fresh=await api("/bootstrap"); if(S?.user?.id!==owner||fresh.user.id!==owner)return; S=fresh; } catch(e) {toast(e.message,true);return;} }
   view = v;
@@ -514,7 +579,7 @@ async function navigate(v) {
   document
     .querySelectorAll("[data-nav]")
     .forEach((x) => x.classList.toggle("active", x.dataset.nav === v));
-  $("#breadcrumb-title").textContent = titles[v] || v;
+  $("#breadcrumb-title").textContent = workspacePageTitle(v);
   await renderView();
   window.scrollTo({ top: 0, behavior: "instant" });
 }
@@ -525,7 +590,8 @@ function footer() {
   return `<footer class="footer"><span>© ${new Date().getFullYear()} ORIENTAL24. Tous droits réservés.</span><span><i class="status-dot"></i>${RUNTIME.demo?"Version de démonstration · Données fictives":"Session sécurisée côté serveur · ORIENTAL24"}</span></footer>`;
 }
 async function renderView(background = false) {
-  const pageTitle = titles[view] || "Mon espace";
+  if (clientSectionRemoved(view)) return navigate('dashboard');
+  const pageTitle = workspacePageTitle(view, titles[view] || "Mon espace");
   document.title = `${window.o24Translate ? window.o24Translate(pageTitle) : pageTitle} — ORIENTAL24`;
   const current = view, owner = S?.user?.id;
   if (current !== "tour" && window.rtMapStop) window.rtMapStop();
@@ -553,6 +619,7 @@ async function renderView(background = false) {
         break;
       case "profile":
         html = profileView();
+        if(S.user.role==='client'&&!opsOffline)html+=clientProfileExtrasView(await api('/client-profile'),await api('/google/status'));
         break;
       case "drivers":
         html = driverWorkspaceView(await api("/drivers-workspace"));
@@ -576,20 +643,23 @@ async function renderView(background = false) {
         html = printView();
         break;
       case "tickets":
-        html = ticketsView(await api("/tickets"));
+        html = await loadSupportInbox("tickets");
         break;
       case "pickups":
-        html = pickupsView(await api("/pickups"));
+        html = await ramassageBonsView();
+        break;
+      case "ramassage-reception":
+        html = await ramassageReceptionView();
         break;
       case "partner-palettes":
         if (['admin','agent'].includes(S.user.role)) html = await partnerAdminWorkspace();
         else html = partnerPalettesView(await api("/partner-palettes?"+ppQuery()));
         break;
       case "return-palettes":
-        html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Retours vendeurs","La gestion des retours vendeurs nécessite la version serveur.") : returnPalettesView(await api("/return-palettes?"+rpQuery()));
+        html = typeof opsOffline!=="undefined"&&opsOffline ? empty(workspacePageTitle("return-palettes","Retours vendeurs"),"La gestion des retours vendeurs nécessite la version serveur.") : returnPalettesView(await api("/return-palettes?"+rpQuery()));
         break;
       case "palette-hub":
-        html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Palettes","Les palettes inter-hubs nécessitent la version serveur.") : hubPalletsView(await api("/logistics/documents"));
+        html = typeof opsOffline!=="undefined"&&opsOffline ? empty("Palettes","Les palettes inter-hubs nécessitent la version serveur.") : hubPalletsView(await api("/logistics/palettes?"+hubPaletteQuery()));
         break;
       case "alerts":
         html = alertsView(await api("/alerts"));
@@ -617,6 +687,20 @@ async function renderView(background = false) {
         break;
       case "hub-dashboard":
         html = hubDashboardView(await api('/logistics/hub-dashboard?'+new URLSearchParams(opsPeriod)));
+        break;
+      case "hub-drivers":
+        html = hubDriversView(await api('/logistics/hub/drivers'));
+        break;
+      case "hub-invoices":
+        html = S.user.role==='admin'
+          ? hubInvoicesAdminView(await api('/logistics/hub-invoices'))
+          : hubInvoicesView(await api('/logistics/hub/invoices'));
+        break;
+      case "hub-driver-statements":
+        html = hubDriverStatementsView(await api('/logistics/hub/driver-statements'));
+        break;
+      case "hub-cod":
+        html = hubCodView(await api(S.user.role==='admin'?'/logistics/cod/admin':'/logistics/cod/hub'));
         break;
       case "ops-settings":
         html = opsSettingsView(await api('/logistics/config'));
@@ -650,11 +734,8 @@ async function renderView(background = false) {
         );
         break;
       case "requests": {
-        const [priceRequests, recipientRequests] = await Promise.all([
-          api("/requests"),
-          api("/recipient-change-requests"),
-        ]);
-        html = requestsView(priceRequests, recipientRequests);
+        /* Ancien chemin conservé : ouvre directement l'onglet « Demandes » de la vue fusionnée. */
+        html = await loadSupportInbox("requests");
         break;
       }
     }
@@ -671,8 +752,8 @@ async function renderView(background = false) {
         if (S?.user?.role === "support" && view === "support-orders" && document.visibilityState === "visible") refreshSupportOrders(false);
       }, 45000);
     }
-    if (view === "drivers") drawDriverWorkspace();
-    if (view === "profile") bindProfile();
+    if (view === "drivers" || view === "hub-drivers") drawDriverWorkspace();
+    if (view === "profile") {bindProfile();if(S.user.role==='client'&&!opsOffline)bindClientProfileExtras();}
     if (view === "settings" && settingsTab === "general") bindSettings();
     if ($("#finance-days")) loadFinanceDays();   // v1.5.3 : onglet « Fin de journée » se recalcule à chaque rendu.
   } catch (e) {
@@ -850,6 +931,19 @@ function driverRankRows(days = 7) {
     .sort((a, b) => b.lv7 - a.lv7 || b.cod - a.cod || a.name.localeCompare(b.name));
 }
 const leaderMedal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : String(i + 1));
+// Use the server-scoped parcel list and invoice settlement status, not COD acknowledgement.
+function clientPaidOrderMetrics(parcels) {
+  const delivered = parcels.filter(p => p.status === 'Livré');
+  const paid = delivered.filter(p => p.invoice_id && p.invoice_status === 'Réglée');
+  const codCents = paid.reduce((sum, p) => sum + Math.round(Number(p.amount || 0) * 100), 0);
+  return {paid: paid.length, cod: codCents / 100, pending: delivered.length - paid.length,
+    rate: delivered.length ? Math.round(paid.length * 100 / delivered.length) : null};
+}
+function clientPaidOrderStats() {
+  if (S.user.role !== 'client') return '';
+  const m = clientPaidOrderMetrics(S.parcels);
+  return `<section class="client-paid-orders" aria-label="Règlement des commandes"><div class="card-head"><div><h3>Règlement des commandes</h3><p>Tout l’historique · Commandes livrées dont la facture est entièrement réglée.</p></div><button class="section-link" onclick="navigate('invoices')">Voir les règlements ${icon('arrow')}</button></div><div class="stats">${stat('Commandes payées', int(m.paid), '', 'checkcircle', 'green', 'Livrées · facture réglée')}${stat('Montant des commandes payées', money(m.cod), 'MAD', 'wallet', 'green', 'COD brut avant frais · pas le net versé')}${stat('Livrées non réglées', int(m.pending), '', 'clock', 'purple', 'Non facturées, non réglées ou partiellement réglées')}${stat('Taux de règlement', m.rate === null ? '—' : m.rate + '%', '', 'chart', 'blue', 'Commandes payées / commandes livrées')}</div></section>`;
+}
 function dashboard() {
   const ps = S.parcels,
     del = ps.filter((p) => p.status === "Livré"),
@@ -872,7 +966,7 @@ function dashboard() {
         : "Voici ce qui se passe chez ORIENTAL24 aujourd’hui.",
       `<span class="date-pill">${icon("calendar")}${new Date().toLocaleDateString(uiLocale(), { day: "numeric", month: "long", year: "numeric" })}</span>${!isDriver ? `<button class="btn primary" onclick="newParcel()">${icon("plus")}Nouveau colis</button>` : `<button class="btn primary" onclick="navigate('parcels')">${icon("truck")}Ma tournée</button>`}`,
     ) +
-    `<section class="hero-banner"><div><div class="eyebrow">Votre partenaire de proximité</div><h2>L’Oriental, plus proche à chaque livraison.</h2><p>${esc(S.settings.announcement || "Suivez vos expéditions et accompagnez votre activité, au même endroit.")}</p></div>${routeArt()}</section><section class="stats">${stat("Total des colis", int(ps.length), "", "box", "", `${icon("box")}Dans votre périmètre`)}${stat("Colis en cours", int(active.length), "", "truck", "blue", `${icon("clock")}Colis non clôturés`)}${stat("Colis livrés", int(del.length), "", "checkcircle", "green", `<span class="green">${icon("up")} ${rate}%</span> du total des colis`)}${stat("Montant collecté", money(cod), "MAD", "wallet", "purple", `${icon("wallet")}COD des colis livrés`)}</section>${(() => { const tried = ps.filter((p) => ["Livré", "Retourné", "Refusé"].includes(p.status)); const tauxL = tried.length ? Math.round((del.length / tried.length) * 100) : null; const avgH = del.length ? Math.round(del.reduce((n, p) => n + (new Date(p.updated_at) - new Date(p.created_at)) / 3600000, 0) / del.length) : null; const attente = active.reduce((n, p) => n + (+p.amount || 0), 0); return `<section class="kpi-grid">${stat("Taux de livraison", tauxL === null ? "—" : tauxL + "%", "", "check", tauxL !== null && tauxL >= 80 ? "green" : "", `${icon("box")}Sur les colis au résultat définitif`)}${stat("Délai moyen de livraison", avgH === null ? "—" : avgH >= 24 ? Math.round(avgH / 24) + " j" : avgH + " h", "", "clock", "blue", `${icon("clock")}De la création au « Livré »`)}${stat("COD encaissé", money(cod), "MAD", "wallet", "", `${icon("checkcircle")}Somme des montants livrés`)}${stat("COD en attente", money(attente), "MAD", "truck", "", `${icon("clock")}Sur les colis encore ouverts`)}</section>`; })()}<section class="two-col"><article class="card"><div class="card-head"><div><h3>Activité des expéditions</h3><p>Par date de création · 7 derniers jours</p></div><div class="chart-legend"><span><i class="dot"></i>Créés</span><span><i class="dot navy"></i>Livrés</span></div></div><div class="chart-wrap">${lineChart()}</div></article><article class="card"><div class="card-head"><div><h3>Vos principales destinations</h3><p>Répartition des colis par ville</p></div>${icon("pin")}</div><div class="city-bars">${cities.map((c) => `<div class="city-row"><div class="flex between"><span>${esc(c.name)}</span><span class="muted">${c.count} colis <b style="color:#53667e;margin-left:10px;font-weight:500">${Math.round((c.count / ps.length) * 100)}%</b></span></div><div class="bar"><span style="width:${(c.count / Math.max(...cities.map((c) => c.count))) * 100}%"></span></div></div>`).join("") || empty("Pas encore de destination", "Ajoutez votre premier colis.")}</div></article></section><section class="card"><div class="card-head"><div><h3>${isDriver ? "Mes derniers colis" : "Derniers colis"}</h3><p>Les dernières expéditions de votre activité</p></div><button class="section-link" onclick="navigate('parcels')">Voir tous les colis ${icon("arrow")}</button></div>${parcelTable(ps.slice(0, 5), false)}<div class="table-footer"><span>${Math.min(ps.length, 5)} colis sur ${ps.length}</span><span>Mise à jour à l’ouverture de la page <button class="icon-btn" onclick="reloadView()" aria-label="Actualiser">${icon("refresh")}</button></span></div></section>`
+    `<section class="hero-banner"><div><div class="eyebrow">Votre partenaire de proximité</div><h2>L’Oriental, plus proche à chaque livraison.</h2><p>${esc(S.settings.announcement || "Suivez vos expéditions et accompagnez votre activité, au même endroit.")}</p></div>${routeArt()}</section><section class="stats">${stat("Total des colis", int(ps.length), "", "box", "", `${icon("box")}Dans votre périmètre`)}${stat("Colis en cours", int(active.length), "", "truck", "blue", `${icon("clock")}Colis non clôturés`)}${stat("Colis livrés", int(del.length), "", "checkcircle", "green", `<span class="green">${icon("up")} ${rate}%</span> du total des colis`)}${stat("Montant collecté", money(cod), "MAD", "wallet", "purple", `${icon("wallet")}COD des colis livrés`)}</section>${clientPaidOrderStats()}${(() => { const tried = ps.filter((p) => ["Livré", "Retourné", "Refusé"].includes(p.status)); const tauxL = tried.length ? Math.round((del.length / tried.length) * 100) : null; const avgH = del.length ? Math.round(del.reduce((n, p) => n + (new Date(p.updated_at) - new Date(p.created_at)) / 3600000, 0) / del.length) : null; const attente = active.reduce((n, p) => n + (+p.amount || 0), 0); return `<section class="kpi-grid">${stat("Taux de livraison", tauxL === null ? "—" : tauxL + "%", "", "check", tauxL !== null && tauxL >= 80 ? "green" : "", `${icon("box")}Sur les colis au résultat définitif`)}${stat("Délai moyen de livraison", avgH === null ? "—" : avgH >= 24 ? Math.round(avgH / 24) + " j" : avgH + " h", "", "clock", "blue", `${icon("clock")}De la création au « Livré »`)}${stat("COD encaissé", money(cod), "MAD", "wallet", "", `${icon("checkcircle")}Somme des montants livrés`)}${stat("COD en attente", money(attente), "MAD", "truck", "", `${icon("clock")}Sur les colis encore ouverts`)}</section>`; })()}<section class="two-col"><article class="card"><div class="card-head"><div><h3>Activité des expéditions</h3><p>Par date de création · 7 derniers jours</p></div><div class="chart-legend"><span><i class="dot"></i>Créés</span><span><i class="dot navy"></i>Livrés</span></div></div><div class="chart-wrap">${lineChart()}</div></article><article class="card"><div class="card-head"><div><h3>Vos principales destinations</h3><p>Répartition des colis par ville</p></div>${icon("pin")}</div><div class="city-bars">${cities.map((c) => `<div class="city-row"><div class="flex between"><span>${esc(c.name)}</span><span class="muted">${c.count} colis <b style="color:#53667e;margin-left:10px;font-weight:500">${Math.round((c.count / ps.length) * 100)}%</b></span></div><div class="bar"><span style="width:${(c.count / Math.max(...cities.map((c) => c.count))) * 100}%"></span></div></div>`).join("") || empty("Pas encore de destination", "Ajoutez votre premier colis.")}</div></article></section><section class="card"><div class="card-head"><div><h3>${isDriver ? "Mes derniers colis" : "Derniers colis"}</h3><p>Les dernières expéditions de votre activité</p></div><button class="section-link" onclick="navigate('parcels')">Voir tous les colis ${icon("arrow")}</button></div>${parcelTable(ps.slice(0, 5), false)}<div class="table-footer"><span>${Math.min(ps.length, 5)} colis sur ${ps.length}</span><span>Mise à jour à l’ouverture de la page <button class="icon-btn" onclick="reloadView()" aria-label="Actualiser">${icon("refresh")}</button></span></div></section>`
   );
 }
 async function reloadView() {
@@ -908,11 +1002,14 @@ function parcelTable(rows, selectable = true) {
     );
   const isAdmin = S.user.role === "admin";
   const isClient = S.user.role === "client";
-  return `${S.user.role === "livreur" && view !== "print" ? driverCards(rows) : ""}<div class="table-wrap ${S.user.role === "livreur" && view !== "print" ? "driver-desktop-table" : ""}"><table><thead><tr>${selectable ? '<th style="width:30px"><input type="checkbox" style="width:13px" aria-label="Sélectionner tous" onchange="document.querySelectorAll(\'.parcel-select\').forEach(x=>x.checked=this.checked)"></th>' : ""}<th>Référence</th><th>Destinataire</th><th>Destination</th><th>Montant COD</th><th>Statut</th><th>${isClient ? "Livreur" : "Client / Boutique"}</th>${isAdmin ? "<th>Livreur / Agence</th>" : ""}<th></th></tr></thead><tbody>${rows.map((p) => {
+  const isHubManager = S.user.role === "agent";
+  return `${S.user.role === "livreur" && view !== "print" ? driverCards(rows) : ""}<div class="table-wrap ${S.user.role === "livreur" && view !== "print" ? "driver-desktop-table" : ""}"><table><thead><tr>${selectable ? '<th style="width:30px"><input type="checkbox" style="width:13px" aria-label="Sélectionner tous" onchange="document.querySelectorAll(\'.parcel-select\').forEach(x=>x.checked=this.checked)"></th>' : ""}<th>Référence</th><th>Destinataire</th><th>Destination</th><th>Montant COD</th><th>Statut</th><th>${isClient ? "Livreur" : "Client / Boutique"}</th>${isAdmin ? "<th>Livreur / Agence</th>" : isHubManager ? "<th>Livreur local</th>" : ""}<th></th></tr></thead><tbody>${rows.map((p) => {
     const driverCell = p.driver
       ? `<strong>${esc(p.driver)}</strong>`
       : `<span class="tag ${p.driver_returned ? "warn" : "info"}">${p.driver_returned ? "Retourné au hub" : "À l’agence"}</span>`;
-    return `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span>${parcelPolicyBadges(p, true)}</td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${isClient && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(isClient ? p.driver || "Non affecté" : p.company || p.client)}${view==='print'||!p.city_support_name?'':`<span class="sub">Support : ${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}</span>`}</td>${isAdmin ? `<td>${driverCell}</td>` : ""}<td><div class="parcel-row-actions">${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}${view!=='print'&&isAdmin&&p.invoice_status==='Réglée'?`<span class="client-paid-pill" title="Facture ${esc(p.invoice_reference||'')} réglée">Paid</span>`:''}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`;
+    const managerDriverIsLocal=(S.users||[]).some(u=>Number(u.id)===Number(p.driver_id)&&u.role==='livreur'&&Number(u.driver_hub_id)===Number(S.user.agent_hub_id));
+    const managerDriverLabel=p.driver_id?(managerDriverIsLocal?(p.driver||'Livreur local'):'Affectation à examiner par Admin'):'Non affecté';
+    return `<tr>${selectable ? `<td><input class="parcel-select" value="${p.id}" type="checkbox" style="width:13px" aria-label="Sélectionner ${esc(p.tracking)}"></td>` : ""}<td><button class="tracking" onclick="parcelDetail(${p.id})">${esc(p.tracking)}</button><span class="sub">${date(p.created_at)}</span>${parcelPolicyBadges(p, true)}</td><td><div class="recipient">${view==='print'?`<span class="avatar">${initials(p.recipient)}</span>`:parcelCopyButton(p)}<div><strong>${esc(p.recipient)}</strong><span class="sub">${esc(p.phone)}</span>${view==='print'?'':riskChip(p.phone)}</div></div></td><td><span class="flex" style="gap:5px">${icon("pin")} ${esc(p.city)}</span>${view==='print'?'':rdvTag(p)}</td><td><strong>${money(p.amount)}</strong> <span class="muted" style="font-size:9px">MAD</span>${p.invoice_id ? '<span class="sub green">Facturé</span>' : ""}${isClient && p.status === "Livré" && !p.invoice_id ? (p.cod_ack_at ? `<span class="sub green">${icon("check")}COD accusé</span>` : `<button class="btn sm cod-ack-btn" style="padding:4px 9px;font-size:11px;margin-top:4px" onclick="codAck(${p.id})">${icon("wallet")}Accuser le règlement</button>`) : ""}${codChip(p)}</td><td>${view==='print'?tag(p.status):parcelStateControls(p)}</td><td>${esc(isClient ? p.driver || "Non affecté" : p.company || p.client)}${view==='print'||!p.city_support_name?'':`<span class="sub">Support : ${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}</span>`}</td>${isAdmin ? `<td>${driverCell}</td>` : isHubManager ? `<td>${esc(managerDriverLabel)}<span class="sub">${p.driver_returned?'Retourné au Hub':!p.driver_id?'Aucun livreur local':managerDriverIsLocal?'Affectation locale':'À examiner'}</span></td>` : ""}<td><div class="parcel-row-actions">${view==='print'?'':companyOrderButtons(p)}${view==='print'?'':parcelCityButton(p)+parcelClaimButton(p)}${view!=='print'&&isHubManager&&!['Livré','Retourné','Refusé','Annulé','Transit','Reçu par le livreur'].includes(p.status)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked?`<button class="btn sm" onclick="hubAssignParcel(${p.id})">${icon('user')}Affecter</button>`:''}${view!=='print'&&isAdmin&&p.invoice_status==='Réglée'?`<span class="client-paid-pill" title="Facture ${esc(p.invoice_reference||'')} réglée">Paid</span>`:''}<button class="icon-btn" title="Ouvrir le colis" onclick="parcelDetail(${p.id})">${icon("chevron")}</button></div></td></tr>`;
   }).join("")}</tbody></table></div>`;
 }
 function parcelsView() {
@@ -920,12 +1017,12 @@ function parcelsView() {
   const create = !["livreur", "agent"].includes(S.user.role);
   const title = hubManager ? "Colis reçus au Hub" : create ? "Gestion des colis" : "Mes colis";
   const subtitle = hubManager
-    ? "Seuls les colis physiquement reçus dans votre Hub sont affichés."
+    ? "Seuls les colis physiquement reçus dans votre Hub sont affichés. Cliquez sur la situation pour la modifier ; Livré, Retourné et les colis verrouillés ne sont pas modifiables."
     : "Chaque colis a son histoire. Retrouvez-la ici.";
   const actions = hubManager ? "" : `<a class="btn export-btn" href="/api/export">${icon("download")}Exporter CSV</a>${create ? `<button class="btn import-trigger" onclick="openImports()">${icon("upload")}Importer</button>` : ""}${create ? `<button class="btn primary" onclick="newParcel()">${icon("plus")}Nouveau colis</button>` : ""}`;
   return (
     heading(title, subtitle, actions) +
-    `<section class="card"><div class="tabs"><button class="active">${hubManager ? "Présents dans votre Hub" : S.user.role === "livreur" ? "Mes colis assignés" : "Tous les colis"} <span class="tag" style="margin-left:6px">${S.parcels.length}</span></button><button onclick="filters.status='En livraison';$('#status-filter').value=filters.status;drawParcelTable()">En livraison</button><button onclick="filters.status='Livré';$('#status-filter').value=filters.status;drawParcelTable()">Livrés</button></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="parcel-search" placeholder="Référence, nom, téléphone…" value="${esc(filters.q)}" oninput="filters.q=this.value;listPage=1;drawParcelTable()"></div><select id="status-filter" aria-label="Filtrer par statut" onchange="filters.status=this.value;listPage=1;drawParcelTable()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option value="${esc(s)}" ${s === filters.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select id="treatment-filter" aria-label="Statut de traitement" onchange="filters.treatment=this.value;listPage=1;drawParcelTable()"><option value="">Statut de traitement</option><option value="treated" ${filters.treatment === "treated" ? "selected" : ""}>Traité</option><option value="untreated" ${filters.treatment === "untreated" ? "selected" : ""}>Non traité</option></select><select aria-label="Filtrer par ville" onchange="filters.city=this.value;listPage=1;drawParcelTable()"><option value="">Toutes les villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === filters.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div>${hubManager ? "" : `<button class="btn sm" onclick="openScanner()">${icon("scan")}Scanner</button><button class="btn sm" onclick="printSelected()">${icon("print")}Étiquettes</button>`}${S.user.role === "admin" || (S.user.role === "livreur" && S.users.some((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active)) ? `<button class="btn sm" onclick="bulkAssign()" title="Affectation en masse des colis cochés">${icon("user")}Affecter</button>` : ""}<button class="icon-btn" onclick="filters={q:'',city:'',status:'',from:'',to:'',treatment:''};listPage=1;renderView()" title="Réinitialiser les filtres">${icon("refresh")}</button></div><div id="parcel-table"></div></section>`
+    `<section class="card"><div class="tabs"><button class="active">${hubManager ? "Présents dans votre Hub" : S.user.role === "livreur" ? "Mes colis assignés" : "Tous les colis"} <span class="tag" style="margin-left:6px">${S.parcels.length}</span></button><button onclick="filters.status='En livraison';$('#status-filter').value=filters.status;drawParcelTable()">En livraison</button><button onclick="filters.status='Livré';$('#status-filter').value=filters.status;drawParcelTable()">Livrés</button></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="parcel-search" placeholder="Référence, nom, téléphone…" value="${esc(filters.q)}" oninput="filters.q=this.value;listPage=1;drawParcelTable()"></div><select id="status-filter" aria-label="Filtrer par statut" onchange="filters.status=this.value;listPage=1;drawParcelTable()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option value="${esc(s)}" ${s === filters.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select id="treatment-filter" aria-label="Statut de traitement" onchange="filters.treatment=this.value;listPage=1;drawParcelTable()"><option value="">Statut de traitement</option><option value="treated" ${filters.treatment === "treated" ? "selected" : ""}>Traité</option><option value="untreated" ${filters.treatment === "untreated" ? "selected" : ""}>Non traité</option></select><select aria-label="Filtrer par ville" onchange="filters.city=this.value;listPage=1;drawParcelTable()"><option value="">Toutes les villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === filters.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div>${hubManager ? "" : `<button class="btn sm" onclick="openScanner()">${icon("scan")}Scanner</button><button class="btn sm" onclick="printSelected()">${icon("print")}Étiquettes</button>`}${hubManager ? `<button class="btn sm" onclick="hubBulkAssign()" title="Affecter les colis sélectionnés à un livreur local">${icon("user")}Affecter</button>` : S.user.role === "admin" || (S.user.role === "livreur" && S.users.some((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active)) ? `<button class="btn sm" onclick="bulkAssign()" title="Affectation en masse des colis cochés">${icon("user")}Affecter</button>` : ""}<button class="icon-btn" onclick="filters={q:'',city:'',status:'',from:'',to:'',treatment:''};listPage=1;renderView()" title="Réinitialiser les filtres">${icon("refresh")}</button></div><div id="parcel-table"></div></section>`
   );
 }
 function drawParcelTable() {
@@ -944,7 +1041,7 @@ function drawParcelTable() {
   const pages = Math.max(1, Math.ceil(rows.length / 10));
   listPage = Math.min(listPage, pages);
   $("#parcel-table").innerHTML =
-    parcelTable(rows.slice((listPage - 1) * 10, listPage * 10), S.user.role !== "agent") +
+    parcelTable(rows.slice((listPage - 1) * 10, listPage * 10), true) +
     `<div class="table-footer"><span>${rows.length ? (listPage - 1) * 10 + 1 : 0}–${Math.min(rows.length, listPage * 10)} sur ${rows.length} colis</span><div class="pagination"><button onclick="listPage=Math.max(1,listPage-1);drawParcelTable()" aria-label="Page précédente">‹</button>${Array.from({ length: pages }, (_, i) => `<button class="${listPage === i + 1 ? "active" : ""}" onclick="listPage=${i + 1};drawParcelTable()">${i + 1}</button>`).join("")}<button onclick="listPage=Math.min(${pages},listPage+1);drawParcelTable()" aria-label="Page suivante">›</button></div></div>`;
 }
 function clientOptions() {
@@ -984,7 +1081,7 @@ async function parcelDetail(id) {
       p = { ...S.parcels.find((p) => p.id === id), ...d.parcel };
     modal(
       p.tracking,
-      `<div class="detail-grid"><div><div class="detail-info"><div class="flex between"><h3 data-no-translate>${esc(p.recipient)}</h3>${tag(p.status)}</div><p class="muted" style="font-size:12px" data-no-translate>${esc(p.address)}<br>${esc(p.city)} · ${esc(p.phone)}</p><div class="detail-line"><span>À collecter</span><strong>${money(p.amount)} MAD</strong></div><div class="detail-line"><span>Frais de livraison</span><span>${money(p.fee)} MAD</span></div><div class="detail-line"><span>Produit</span><span data-no-translate>${esc(p.product || "—")}</span></div>${parcelPolicyBadges(p)}<div class="detail-line"><span>Livreur</span><span>${esc(p.driver || "Non affecté")}</span></div><div class="detail-line"><span>Support responsable</span><span>${p.city_support_name?`${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}`:'Non affecté'}</span></div><div class="form-hint">${p.note ? `<span data-no-translate>${esc(p.note)}</span>` : "Aucune note pour ce colis."}</div>${p.financial_locked ? `<div class="form-hint">${icon("lock")}Colis verrouillé dans un relevé livreur.</div>` : ""}</div><div class="flex" style="flex-wrap:wrap">${S.user.role === "support" ? "" : `<button class="btn sm" onclick="printLabels([${id}])">${icon("print")}Étiquette</button>`}${!p.invoice_id && !p.financial_locked && !p.operations_locked && !["client", "support"].includes(S.user.role) ? `<button class="btn primary sm" onclick="changeStatus(${id})">${icon("edit")}Changer le statut</button>` : ""}${S.user.role === "admin" ? `<button class="btn sm" onclick="openParcelOtp(${id})">${icon("shield")}Code client</button>` : ""}${S.user.role === "admin" && !p.invoice_id && !p.financial_locked && !p.operations_locked ? `<button class="btn sm" onclick="assignDriver(${id})">${icon("user")}Affecter un livreur</button>` : ""}${S.user.role !== "support" && !p.invoice_id && !p.financial_locked && !p.operations_locked && !["Livré", "Retourné", "Refusé"].includes(p.status) ? `<button class="btn sm" onclick="requestPrice(${id})">${icon("return")}Demande de prix</button>` : ""}</div>${((d.media || []).length || ["admin", "livreur"].includes(S.user.role)) ? `<div class="pod-media"><h3 style="font-size:13px;margin:10px 0 6px">${icon("shield")}Preuves de livraison</h3>${(d.media || []).length ? `<div class="flex" style="flex-wrap:wrap;gap:6px">${(d.media || []).map((m) => `<a class="btn sm" target="_blank" rel="noopener" href="${podHref(p, m)}">${m.kind === "signature" ? icon("edit") : icon("file")}${m.kind === "signature" ? "Signature" : "Photo"} · ${date(m.created_at)}</a>`).join("")}</div>` : `<p class="form-hint">Aucune preuve encore enregistrée.</p>`}${["admin", "livreur"].includes(S.user.role) ? `<div class="flex" style="flex-wrap:wrap;gap:6px;margin-top:6px"><label class="btn sm" style="margin:0">${icon("scan")}Ajouter une photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="podUpload(${id},'photo',this).then(()=>parcelDetail(${id})).catch((e)=>toast(e.message,true))"></label><button class="btn sm" onclick="closeModal();podSig(${id})">${icon("edit")}Signature</button></div>` : ""}</div>` : ""}</div><div><h3 style="font-size:14px">Chronologie d’activité</h3><div class="timeline">${d.events.map((e) => `<div class="timeline-item"><b>${esc(e.status)}</b><p data-no-translate>${esc(e.note)}</p><small data-no-translate>${esc(e.actor)} · ${date(e.created_at)} ${new Date(e.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</small></div>`).join("")}</div></div></div>`,
+      `<div class="detail-grid"><div><div class="detail-info"><div class="flex between"><h3 data-no-translate>${esc(p.recipient)}</h3>${tag(p.status)}</div><p class="muted" style="font-size:12px" data-no-translate>${esc(p.address)}<br>${esc(p.city)} · ${esc(p.phone)}</p><div class="detail-line"><span>À collecter</span><strong>${money(p.amount)} MAD</strong></div><div class="detail-line"><span>Frais de livraison</span><span>${money(p.fee)} MAD</span></div><div class="detail-line"><span>Produit</span><span data-no-translate>${esc(p.product || "—")}</span></div>${parcelPolicyBadges(p)}<div class="detail-line"><span>Livreur</span><span>${esc(p.driver || "Non affecté")}</span></div><div class="detail-line"><span>Support responsable</span><span>${p.city_support_name?`${esc(p.city_support_name)}${p.city_support_phone?` · <a href="tel:${esc(String(p.city_support_phone).replace(/[^+\d]/g,''))}">${esc(p.city_support_phone)}</a>`:''}`:'Non affecté'}</span></div><div class="form-hint">${p.note ? `<span data-no-translate>${esc(p.note)}</span>` : "Aucune note pour ce colis."}</div>${p.financial_locked ? `<div class="form-hint">${icon("lock")}Colis verrouillé dans un relevé livreur.</div>` : ""}</div><div class="flex" style="flex-wrap:wrap">${companyOrderButtons(p)}${S.user.role === "support" ? "" : `<button class="btn sm" onclick="printLabels([${id}])">${icon("print")}Étiquette</button>`}${!p.invoice_id && !p.financial_locked && !p.operations_locked && !["client", "support"].includes(S.user.role) ? `<button class="btn primary sm" onclick="changeStatus(${id})">${icon("edit")}Changer le statut</button>` : ""}${S.user.role === "admin" ? `<button class="btn sm" onclick="openParcelOtp(${id})">${icon("shield")}Code client</button>` : ""}${S.user.role === "admin" && !p.invoice_id && !p.financial_locked && !p.operations_locked ? `<button class="btn sm" onclick="assignDriver(${id})">${icon("user")}Affecter un livreur</button>` : ""}${S.user.role !== "support" && !p.invoice_id && !p.financial_locked && !p.operations_locked && !["Livré", "Retourné", "Refusé"].includes(p.status) ? `<button class="btn sm" onclick="requestPrice(${id})">${icon("return")}Demande de prix</button>` : ""}</div>${((d.media || []).length || ["admin", "livreur"].includes(S.user.role)) ? `<div class="pod-media"><h3 style="font-size:13px;margin:10px 0 6px">${icon("shield")}Preuves de livraison</h3>${(d.media || []).length ? `<div class="flex" style="flex-wrap:wrap;gap:6px">${(d.media || []).map((m) => `<a class="btn sm" target="_blank" rel="noopener" href="${podHref(p, m)}">${m.kind === "signature" ? icon("edit") : icon("file")}${m.kind === "signature" ? "Signature" : "Photo"} · ${date(m.created_at)}</a>`).join("")}</div>` : `<p class="form-hint">Aucune preuve encore enregistrée.</p>`}${["admin", "livreur"].includes(S.user.role) ? `<div class="flex" style="flex-wrap:wrap;gap:6px;margin-top:6px"><label class="btn sm" style="margin:0">${icon("scan")}Ajouter une photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="podUpload(${id},'photo',this).then(()=>parcelDetail(${id})).catch((e)=>toast(e.message,true))"></label><button class="btn sm" onclick="closeModal();podSig(${id})">${icon("edit")}Signature</button></div>` : ""}</div>` : ""}</div><div><h3 style="font-size:14px">Chronologie d’activité</h3><div class="timeline">${d.events.map((e) => `<div class="timeline-item"><b>${esc(e.status)}</b><p data-no-translate>${esc(e.note)}</p><small data-no-translate>${esc(e.actor)} · ${date(e.created_at)} ${new Date(e.created_at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</small></div>`).join("")}</div></div></div>`,
       true,
     );
   } catch (e) {
@@ -995,7 +1092,7 @@ function changeStatus(id) {
   const p = S.parcels.find((p) => p.id === id);
   const transitions = S.status_policy.driver_transitions;
   const options =
-    S.user.role === "admin" ? S.statuses : transitions[p.status] || [];
+    S.user.role === "admin" ? S.statuses.filter(s=>s!=="Vers Hub Central") : transitions[p.status] || [];
   if (!options.length) {
     toast("Ce colis est clôturé. Contactez l’administration.", true);
     return;
@@ -1086,21 +1183,22 @@ function auditFilter(q) {
 }
 function assignDriver(id) {
   const p = S.parcels.find((p) => p.id === id);
+  const localHub=(S.hubs||[]).find(h=>h.active&&Number(h.id)===Number(p?.current_hub_id));
   modal(
     "Affecter un livreur",
     form(
-      select(
+      `${localHub?`<div class="full form-hint">Seuls les livreurs du Hub actif ${esc(localHub.name)} sont proposés pour ce colis reçu physiquement.</div>`:`<div class="full form-hint orange">Aucun Hub actif ne correspond à la localisation physique du colis. Réceptionnez-le dans un Hub avant une nouvelle affectation.</div>`}${select(
         "driver_id",
         "Livreur",
         [
           ["", "Sans affectation"],
           ...S.users
-            .filter((u) => u.role === "livreur" && u.active)
-            .map((u) => [u.id, u.name]),
+            .filter((u) => u.role === "livreur" && u.active && (u.id===p?.driver_id || (localHub&&Number(u.driver_hub_id)===Number(localHub.id))))
+            .map((u) => [u.id, `${u.name} · ${(S.hubs||[]).find(h=>Number(h.id)===Number(u.driver_hub_id))?.name||'Hub à examiner'}`]),
         ],
         p.driver_id,
         false,
-      ),
+      )}`,
     ),
   );
   bindForm(async (d) => {
@@ -1210,6 +1308,10 @@ function bindSettings() {
     toast("Paramètres enregistrés");
   }, "settings-form");
 }
+function companyProfileEligible(u=S?.user){return u?.role==='client'}
+function profileAvatarContent(u){return companyProfileEligible(u)&&/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(u.profile_image||'')?`<img src="${esc(u.profile_image)}" alt="Logo ou photo de profil" style="width:100%;height:100%;object-fit:contain;border-radius:inherit">`:initials(u.name)}
+let companyProfileImageChange;
+function companyProfileFields(u){return `<div class="full company-profile-image"><h3>Logo / photo de profil</h3><p class="sub">Personnalisez votre compte avec votre logo ou votre photo.</p><div class="company-image-row"><span class="avatar" id="company-image-preview">${profileAvatarContent(u)}</span><div><button type="button" class="btn" onclick="document.getElementById('company-image-file').click()">${icon('upload')}Choisir une image</button><input id="company-image-file" type="file" accept="image/jpeg,image/png,image/webp" hidden><button type="button" class="btn sm" id="company-image-remove">Supprimer</button><p class="sub">JPG, PNG ou WebP · 1 Mo maximum</p><p class="sub" id="company-image-message" aria-live="polite">Les changements seront appliqués après enregistrement.</p></div></div></div><div class="full company-profile-bank"><h3>Coordonnées bancaires</h3><p class="sub">Informations privées de votre compte. Aucun virement n’est déclenché.</p></div>${input('bank_name','Votre banque',u.bank_name||'','text',false,'maxlength="120" placeholder="Nom de votre banque"')}${input('bank_rib','RIB',u.bank_rib||'','text',false,'maxlength="80" inputmode="numeric" autocomplete="off" placeholder="24 chiffres"')}<p class="sub full">RIB marocain : 24 chiffres. Les espaces et tirets sont acceptés.</p>`}
 function profileView() {
   const u = S.user;
   return (
@@ -1218,7 +1320,7 @@ function profileView() {
       "Vos informations et la sécurité de votre compte.",
       `<button class="btn" onclick="logout()">${icon("logout")}Se déconnecter</button>`,
     ) +
-    `<section class="card profile-card"><div class="profile-avatar"><span class="avatar">${initials(u.name)}</span><div><h3>${esc(u.name)}</h3><span class="sub">${esc(u.email)} · ${u.role==='client'?clientTypeLabel(u):roleName(u.role)}</span></div></div><form id="profile-form"><div class="form-error"></div><div class="form-grid">${input("name", "Nom complet", u.name)}${input("phone", "Téléphone", u.phone, "tel")}${input("company", "Entreprise / Boutique", u.company, "text", false)}<div class="full" style="border-top:1px solid var(--line);padding-top:22px"><h3 style="font-size:14px">Changer mon mot de passe</h3><p class="sub">Laissez ces champs vides pour conserver votre mot de passe. Sur le serveur, le changement ferme toutes vos anciennes sessions et renouvelle celle-ci.</p></div>${input("current_password", "Mot de passe actuel", "", "password", false, 'autocomplete="current-password"')}${input("password", "Nouveau mot de passe", "", "password", false, 'minlength="10" autocomplete="new-password"')}</div><div class="form-actions"><button class="btn primary" type="submit">${icon("check")}Enregistrer mon profil</button></div></form></section>${u.role === "client" && !window.opsOffline ? `<section class="card profile-card" style="margin-top:16px"><div class="card-head"><div><h3>Portail vendeur public — suivi par lien</h3><p>Partagez vos expéditions sans compte (lecture seule : références, villes, statuts, COD, dates). Gardez ce lien privé — régénérez-le pour révoquer l'accès.</p></div>${icon("scan")}</div><div class="field"><label for="portal-url">Lien privé du portail</label><div class="flex" style="align-items:stretch"><input id="portal-url" readonly value="Chargement…" style="flex:1;min-width:260px;font-family:ui-monospace,monospace;font-size:12px" aria-readonly="true"><button class="btn sm" type="button" onclick="portalCopy()">${icon("copy")}Copier</button><button class="btn sm" type="button" onclick="portalRotate()">${icon("refresh")}Nouvelle clé</button></div><p class="form-hint">Les visiteurs du lien n'ont aucune action possible (pas de tarifs, pas d'autres vendeurs). « Nouvelle clé » invalide immédiatement l'ancien lien.</p></div></section>` : ""}`
+    `<section class="card profile-card ${companyProfileEligible(u)?'company-profile-card':''}"><div class="profile-avatar"><span class="avatar">${profileAvatarContent(u)}</span><div><h3>${esc(u.name)}</h3><span class="sub">${esc(u.email)} · ${u.role==='client'?clientTypeLabel(u):roleName(u.role)}</span></div></div><form id="profile-form"><div class="form-error"></div><div class="form-grid">${input("name", "Nom complet", u.name)}${input("phone", "Téléphone", u.phone, "tel")}${input("company", "Entreprise / Boutique", u.company, "text", false)}${companyProfileEligible(u)?companyProfileFields(u):''}<div class="full" style="border-top:1px solid var(--line);padding-top:22px"><h3 style="font-size:14px">Changer mon mot de passe</h3><p class="sub">Laissez ces champs vides pour conserver votre mot de passe. Sur le serveur, le changement ferme toutes vos anciennes sessions et renouvelle celle-ci.</p></div>${input("current_password", "Mot de passe actuel", "", "password", false, 'autocomplete="current-password"')}${input("password", "Nouveau mot de passe", "", "password", false, 'minlength="10" autocomplete="new-password"')}</div><div class="form-actions"><button class="btn primary" type="submit">${icon("check")}Enregistrer mon profil</button></div></form></section>${u.role === "client" && !window.opsOffline ? `<section class="card profile-card ${companyProfileEligible(u)?'company-profile-card':''}" style="margin-top:16px"><div class="card-head"><div><h3>Portail vendeur public — suivi par lien</h3><p>Partagez vos expéditions sans compte (lecture seule : références, villes, statuts, COD, dates). Gardez ce lien privé — régénérez-le pour révoquer l'accès.</p></div>${icon("scan")}</div><div class="field"><label for="portal-url">Lien privé du portail</label><div class="flex" style="align-items:stretch"><input id="portal-url" readonly value="Chargement…" style="flex:1;min-width:260px;font-family:ui-monospace,monospace;font-size:12px" aria-readonly="true"><button class="btn sm" type="button" onclick="portalCopy()">${icon("copy")}Copier</button><button class="btn sm" type="button" onclick="portalRotate()">${icon("refresh")}Nouvelle clé</button></div><p class="form-hint">Les visiteurs du lien n'ont aucune action possible (pas de tarifs, pas d'autres vendeurs). « Nouvelle clé » invalide immédiatement l'ancien lien.</p></div></section>` : ""}`
   );
 }
 async function loadPortalLink() {
@@ -1248,7 +1350,33 @@ window.portalRotateConfirm = async () => {
   } catch (e) { toast(e.message, true); }
 };
 function bindProfile() {
+  companyProfileImageChange=undefined;
+  let imageReading=false;
+  if(companyProfileEligible()){
+    const file=$('#company-image-file'),preview=$('#company-image-preview'),message=$('#company-image-message'),form=$('#profile-form');
+    let readVersion=0;
+    const paint=value=>{preview.innerHTML=profileAvatarContent({...S.user,profile_image:value});$('#company-image-remove').disabled=!value};
+    paint(S.user.profile_image||'');
+    file.onchange=async()=>{
+      const chosen=file.files[0];if(!chosen)return;
+      const version=++readVersion;imageReading=true;
+      try{
+        if(chosen.size>1024*1024)throw Error('Image trop volumineuse : 1 Mo maximum.');
+        if(!['image/jpeg','image/png','image/webp'].includes(chosen.type))throw Error('Choisissez une image JPG, PNG ou WebP.');
+        const value=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('Impossible de lire cette image.'));reader.readAsDataURL(chosen)});
+        await new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>img.width*img.height>16000000?reject(Error('Image trop grande : 16 mégapixels maximum.')):resolve();img.onerror=()=>reject(Error('Image invalide.'));img.src=value});
+        if(!form.isConnected||version!==readVersion)return;
+        companyProfileImageChange=value;
+        preview.innerHTML=`<img src="${esc(value)}" alt="Aperçu du logo" style="width:100%;height:100%;object-fit:contain;border-radius:inherit">`;
+        $('#company-image-remove').disabled=false;message.textContent='Nouvelle image prête. Cliquez sur Enregistrer mon profil.';
+      }catch(e){if(form.isConnected&&version===readVersion){message.textContent=e.message;toast(e.message,true)}}
+      finally{if(version===readVersion){imageReading=false;file.value=''}}
+    };
+    $('#company-image-remove').onclick=()=>{readVersion++;imageReading=false;companyProfileImageChange='';file.value='';paint('');message.textContent='Image supprimée de l’aperçu. Enregistrez pour confirmer.'};
+  }
   bindForm(async (d) => {
+    if(imageReading)throw Error('Attendez la lecture de votre image.');
+    if(companyProfileEligible()&&companyProfileImageChange!==undefined)d.profile_image=companyProfileImageChange;
     await api("/profile", "PATCH", d);
     await refresh();
     shell();
@@ -1256,6 +1384,37 @@ function bindProfile() {
     toast("Profil enregistré");
   }, "profile-form");
   loadPortalLink();
+}
+/* Menu utilisateur de la barre supérieure : Profil / Déconnexion, tous rôles. */
+function toggleUserMenu(event) {
+  if (event) event.stopPropagation();
+  const pop = document.getElementById("user-popover"),
+    btn = document.getElementById("user-menu-btn");
+  if (!pop || !btn) return;
+  if (pop.hasAttribute("hidden")) {
+    pop.removeAttribute("hidden");
+    btn.setAttribute("aria-expanded", "true");
+  } else closeUserMenu();
+}
+function closeUserMenu() {
+  const pop = document.getElementById("user-popover"),
+    btn = document.getElementById("user-menu-btn");
+  if (pop) pop.setAttribute("hidden", "");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+function userMenuGo(action) {
+  closeUserMenu();
+  if (action === "logout") return logout();
+  return navigate("profile");
+}
+if (!window.__o24UserMenuEvents) {
+  window.__o24UserMenuEvents = true;
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest || !e.target.closest(".top-profile-wrap")) closeUserMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeUserMenu();
+  });
 }
 async function logout() {
   try {
@@ -1354,6 +1513,12 @@ function supportCityPicker(u, id) {
     return `<label class="support-city-option ${occupied ? "locked" : ""}"><input type="checkbox" name="city_ids" value="${city.id}" ${checked ? "checked" : ""} ${occupied ? "disabled" : ""}><span><b>${icon("pin")}${esc(city.name)}</b><small>${occupied ? `Déjà suivie par ${esc(owner.name)}` : checked ? "Affectée à ce compte" : "Disponible"}</small></span></label>`;
   }).join("") || `<p class="form-hint">Aucune ville ouverte à la livraison.</p>`}</div><p class="form-hint">Une ville ne peut appartenir qu’à un seul support. Pour la déplacer, retirez-la d’abord de l’ancien compte puis enregistrez.</p><p class="form-hint">Les commandes déjà créées gardent leur support actuel ; le changement concerne les nouvelles commandes.</p></div>`;
 }
+function driverHubPicker(u,isNew) {
+  const hubs=S.hubs||[],active=hubs.filter(h=>h.active),current=hubs.find(h=>Number(h.id)===Number(u.driver_hub_id));
+  const options=[["","À examiner · aucun Hub associé"],...active.map(h=>[h.id,`${h.name} · ${h.city}`])];
+  if(current&&!current.active)options.push([current.id,`${current.name} · inactif`]);
+  return select("driver_hub_id","Hub local du livreur",options,u.driver_hub_id||"",Boolean(isNew&&active.length));
+}
 function userForm(id, role) {
   const u = S.users.find((u) => u.id === id) || {
     name: "",
@@ -1371,13 +1536,14 @@ function userForm(id, role) {
           ? "Nouveau compte Support"
           : "Nouveau client",
     form(
-      `${role === "client" ? select("client_type", "Type de client", clientTypeOptions, u.client_type || "vendeur") + `<div class="form-hint"><b>Vendeur</b> : tracking ORIENTAL24 automatique.<br><b>Société de livraison</b> : tracking saisi par la société et conservé.${id?"<br>Le type est verrouillé après le premier colis ou la première préparation.":""}</div>` : ""}${input("name", "Nom complet", u.name)}${!id ? input("email", "Adresse e-mail", "", "email") : `<div class="form-hint">${esc(u.email)}<br>L’identifiant du compte est conservé.</div>`}${input("phone", "Téléphone", u.phone, "tel")}${role === "support" ? supportCityPicker(u,id) : input("company", "Entreprise / Boutique", u.company, "text", false)}${role === "livreur" ? select("team_lead_id", "Chef d’équipe (optionnel) — le chef voit et réaffecte les colis de son équipe", [["", "Sans chef d’équipe (compte autonome)"]].concat(S.users.filter((x) => x.role === "livreur" && x.active && x.id !== id && !x.team_lead_id).map((x) => [x.id, x.name])), u.team_lead_id || "", false) : ""}${input("password", id ? "Nouveau mot de passe (facultatif)" : "Mot de passe initial", "", "password", !id, 'minlength="10" autocomplete="new-password"')}${id ? `<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active ? "checked" : ""}><label for="user-active">Compte actif</label></div>` : ""}<div class="full form-hint">Minimum 10 caractères pour le mot de passe. ${id ? "Un compte désactivé ne peut plus accéder à la plateforme." : "Transmettez les identifiants au titulaire par un canal sûr."}</div>`,
+      `${role === "client" ? select("client_type", "Type de client", clientTypeOptions, u.client_type || "vendeur") + `<div class="form-hint"><b>Vendeur</b> : tracking ORIENTAL24 automatique.<br><b>Société de livraison</b> : tracking saisi par la société et conservé.${id?"<br>Le type est verrouillé après le premier colis ou la première préparation.":""}</div>` : ""}${input("name", "Nom complet", u.name)}${!id ? input("email", "Adresse e-mail", "", "email") : `<div class="form-hint">${esc(u.email)}<br>L’identifiant du compte est conservé.</div>`}${input("phone", "Téléphone", u.phone, "tel")}${role === "support" ? supportCityPicker(u,id) : input("company", "Entreprise / Boutique", u.company, "text", false)}${role === "livreur" ? driverHubPicker(u,!id)+`<div class="full form-hint">Un livreur doit être rattaché à un Hub actif avant toute nouvelle affectation. Les affectations historiques ambiguës restent à examiner par l’Admin.</div>` : ""}${role === "livreur" ? select("team_lead_id", "Chef d’équipe (optionnel) — visible et réaffectable uniquement dans le même Hub", [["", "Sans chef d’équipe (compte autonome)"]].concat(S.users.filter((x) => x.role === "livreur" && x.active && x.id !== id && !x.team_lead_id).map((x) => [x.id, x.name])), u.team_lead_id || "", false) : ""}${input("password", id ? "Nouveau mot de passe (facultatif)" : "Mot de passe initial", "", "password", !id, 'minlength="10" autocomplete="new-password"')}${id ? `<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active ? "checked" : ""}><label for="user-active">Compte actif</label></div>` : ""}<div class="full form-hint">Minimum 10 caractères pour le mot de passe. ${id ? "Un compte désactivé ne peut plus accéder à la plateforme." : "Transmettez les identifiants au titulaire par un canal sûr."}</div>`,
     ),
   );
   bindForm(async (d) => {
     await api("/users" + (id ? "/" + id : ""), id ? "PATCH" : "POST", {
       ...d,
       ...(d.team_lead_id !== undefined ? { team_lead_id: d.team_lead_id ? Number(d.team_lead_id) : null } : {}),
+      ...(role === "livreur" ? { driver_hub_id: d.driver_hub_id ? Number(d.driver_hub_id) : null } : {}),
       ...(role === "support" ? { city_ids: [...document.querySelectorAll('#modal-form input[name="city_ids"]:checked')].map((x) => Number(x.value)) } : {}),
       role,
     });
@@ -1411,26 +1577,92 @@ function simpleTable(headers, rows) {
     ? `<div class="table-wrap"><table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((v) => `<td>${v}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
     : empty();
 }
-function ticketsView(rows) {
+/* Vues fusionnées « Demandes & réclamations » : un seul point de menu, deux onglets. */
+let supportInboxTab = "tickets";
+function supportInboxCanRequest() {
+  return ["admin", "client", "livreur"].includes(S.user.role);
+}
+function ticketsPane(rows) {
+  return `<div class="card"><div class="card-head"><h3>Mes échanges</h3><span class="tag">${rows.length} ticket${rows.length > 1 ? "s" : ""}</span></div>${simpleTable(
+    ["Ticket", "Sujet", "Auteur", "Catégorie", "Statut", "Créé le", ""],
+    rows.map((t) => [
+      `<span class="tracking">TKT-${String(t.id).padStart(4, "0")}</span>`,
+      `<strong>${esc(t.subject)}</strong>${t.tracking?`<span class="sub">${esc(t.tracking)} · ${esc(t.priority)}</span>`:""}`,
+      esc(t.author),
+      esc(t.category),
+      tag(t.status),
+      date(t.created_at),
+      `<button class="btn sm" onclick="ticketDetail(${t.id})">Ouvrir ${icon("chevron")}</button>`,
+    ]),
+  )}</div>`;
+}
+function requestsPane(rows, recipientRows = []) {
+  recipientRequestRows=recipientRows;
+  const isAdmin = S.user.role === "admin";
+  const priceTable = `<section class="card"><div class="card-head"><h3>Demandes de changement de prix</h3><span class="tag">${rows.length} demandes</span></div>${simpleTable(
+    ["Demande", "Colis", "Demandeur", "Montant demandé", "Motif", "Statut", ""],
+    rows.map((r) => [
+      `<span class="tracking">DEM-${String(r.id).padStart(4, "0")}</span>`,
+      esc(r.tracking), esc(r.author), `<strong>${money(r.amount)} MAD</strong>`, `<span data-no-translate>${esc(r.reason)}</span>`, tag(r.status),
+      isAdmin && r.status === "En attente"
+        ? `<div class="flex"><button class="btn sm" onclick="decideRequest(${r.id},true)">${icon("check")}Accepter</button><button class="btn sm danger" onclick="decideRequest(${r.id},false)">Refuser</button></div>`
+        : "—",
+    ]),
+  )}</section>`;
+  const recipientTable = !isAdmin ? "" : `<section class="card recipient-requests-card"><div class="card-head"><div><h3>Demandes de changement de destinataire</h3><p>Les coordonnées avant et après restent consultables dans la demande et la Chronologie.</p></div><span class="tag">${recipientRows.filter(r => r.status === "En attente").length} en attente</span></div>${recipientRows.length ? simpleTable(
+    ["Demande", "Colis", "Client", "Coordonnées avant", "Nouvelles coordonnées", "Motif", "Date", "Statut", ""],
+    recipientRows.map((r) => [
+      `<span class="tracking">DEST-${String(r.id).padStart(4, "0")}</span>`,
+      `<button class="tracking" onclick="parcelDetail(${Number(r.parcel_id)})">${esc(r.tracking)}</button><span class="sub">Statut colis : ${esc(r.parcel_status||"—")}</span>`,
+      `${esc(r.company || r.author)}<span class="sub">${esc(r.author)}</span>`,
+      recipientRequestSnapshot(r,false),recipientRequestSnapshot(r,true),
+      `<span data-no-translate>${esc(r.reason || "—")}</span>`, `<span>${date(r.created_at)}</span>`, tag(r.status),
+      isAdmin && r.status === "En attente"
+        ? `<div class="flex">${['Livré','Retourné'].includes(r.parcel_status)?`<span class="sub recipient-change-accept-locked">Acceptation impossible · ${esc(r.parcel_status)}</span>`:`<button class="btn sm" onclick="decideRecipientChange(${r.id},true)">${icon("check")}Accepter</button>`}<button class="btn sm danger" onclick="decideRecipientChange(${r.id},false)">Refuser</button></div>`
+        : (r.admin_note ? `<span data-no-translate>${esc(r.admin_note)}</span>` : "—"),
+    ]),
+  ) : empty("Aucune demande de changement", "Les prochaines demandes des clients apparaîtront ici.")}</section>`;
+  return priceTable + recipientTable + `<p class="sub" style="margin-top:18px">Pour créer une demande de prix, ouvrez un colis non clôturé. Le changement de destinataire se demande depuis la ligne du colis client, uniquement avant les statuts Livré ou Retourné.</p>`;
+}
+function supportInboxTabButton(key, label, count) {
+  const active = supportInboxTab === key;
+  return `<button type="button" class="${active ? "active" : ""}" aria-pressed="${active}" onclick="switchSupportInbox('${key}')">${label}<span class="pilotage-tab-count">${count}</span></button>`;
+}
+function supportInboxView(data) {
+  const withRequests = supportInboxCanRequest();
+  if (!withRequests) supportInboxTab = "tickets";
+  const requestCount = (data.priceRequests?.length || 0) + (data.recipientRequests?.length || 0);
+  const tabs = withRequests
+    ? `<div class="tabs support-inbox-tabs" role="group" aria-label="Demandes et réclamations">${supportInboxTabButton("tickets", "Réclamations", data.tickets.length)}${supportInboxTabButton("requests", "Demandes", requestCount)}</div>`
+    : "";
   return (
     heading(
-      "Réclamations",
-      "Un échange, une solution. Suivez toutes vos demandes.",
+      "Demandes & réclamations",
+      "Vos réclamations et vos demandes de modification réunies au même endroit.",
       `<button class="btn primary" onclick="newTicket()">${icon("plus")}Nouvelle réclamation</button>`,
     ) +
-    `<div class="card"><div class="card-head"><h3>Mes échanges</h3><span class="tag">${rows.length} tickets</span></div>${simpleTable(
-      ["Ticket", "Sujet", "Auteur", "Catégorie", "Statut", "Créé le", ""],
-      rows.map((t) => [
-        `<span class="tracking">TKT-${String(t.id).padStart(4, "0")}</span>`,
-        `<strong>${esc(t.subject)}</strong>${t.tracking?`<span class="sub">${esc(t.tracking)} · ${esc(t.priority)}</span>`:""}`,
-        esc(t.author),
-        esc(t.category),
-        tag(t.status),
-        date(t.created_at),
-        `<button class="btn sm" onclick="ticketDetail(${t.id})">Ouvrir ${icon("chevron")}</button>`,
-      ]),
-    )}</div>`
+    `${tabs}<div id="support-tab-tickets" ${supportInboxTab !== "tickets" ? "hidden" : ""}>${ticketsPane(data.tickets)}</div>${withRequests ? `<div id="support-tab-requests" ${supportInboxTab !== "requests" ? "hidden" : ""}>${requestsPane(data.priceRequests, data.recipientRequests)}</div>` : ""}`
   );
+}
+function switchSupportInbox(tab) {
+  supportInboxTab = tab;
+  const ticketsPaneEl = document.getElementById("support-tab-tickets"),
+    requestsPaneEl = document.getElementById("support-tab-requests");
+  if (ticketsPaneEl) ticketsPaneEl.toggleAttribute("hidden", tab !== "tickets");
+  if (requestsPaneEl) requestsPaneEl.toggleAttribute("hidden", tab !== "requests");
+  document.querySelectorAll(".support-inbox-tabs button").forEach((b, i) => {
+    const active = (tab === "tickets" && i === 0) || (tab === "requests" && i === 1);
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-pressed", String(active));
+  });
+}
+async function loadSupportInbox(initialTab = "tickets") {
+  supportInboxTab = supportInboxCanRequest() ? initialTab : "tickets";
+  const tickets = await api("/tickets");
+  if (!supportInboxCanRequest()) return supportInboxView({ tickets, priceRequests: [], recipientRequests: [] });
+  const priceRequests = await api("/requests");
+  const recipientRequests = S.user.role === "admin" ? await api("/recipient-change-requests") : [];
+  return supportInboxView({ tickets, priceRequests, recipientRequests });
 }
 function newTicket() {
   modal(
@@ -1734,36 +1966,9 @@ function recipientRequestSnapshot(r,after=false){
   const address=after?(r.requested_address_display||r.requested_address||r.current_address):(r.old_address_display||r.old_address||r.current_address);
   return `<div class="recipient-request-contact" data-no-translate><strong>${esc(name||'—')}</strong><span class="sub">☎ ${esc(phone||'—')} · ${esc(city||'—')}</span><span class="sub">${esc(address||'Adresse non renseignée')}</span></div>`;
 }
+/* Conservée comme enveloppe de compatibilité (ancien appelant éventuel). */
 function requestsView(rows, recipientRows = []) {
-  recipientRequestRows=recipientRows;
-  const priceTable = `<section class="card"><div class="card-head"><h3>Demandes de changement de prix</h3><span class="tag">${rows.length} demandes</span></div>${simpleTable(
-    ["Demande", "Colis", "Demandeur", "Montant demandé", "Motif", "Statut", ""],
-    rows.map((r) => [
-      `<span class="tracking">DEM-${String(r.id).padStart(4, "0")}</span>`,
-      esc(r.tracking), esc(r.author), `<strong>${money(r.amount)} MAD</strong>`, `<span data-no-translate>${esc(r.reason)}</span>`, tag(r.status),
-      S.user.role === "admin" && r.status === "En attente"
-        ? `<div class="flex"><button class="btn sm" onclick="decideRequest(${r.id},true)">${icon("check")}Accepter</button><button class="btn sm danger" onclick="decideRequest(${r.id},false)">Refuser</button></div>`
-        : "—",
-    ]),
-  )}</section>`;
-  const recipientTable = `<section class="card recipient-requests-card"><div class="card-head"><div><h3>Demandes de changement de destinataire</h3><p>Les coordonnées avant et après restent consultables dans la demande et la Chronologie.</p></div><span class="tag">${recipientRows.filter(r => r.status === "En attente").length} en attente</span></div>${recipientRows.length ? simpleTable(
-    ["Demande", "Colis", "Client", "Coordonnées avant", "Nouvelles coordonnées", "Motif", "Date", "Statut", ""],
-    recipientRows.map((r) => [
-      `<span class="tracking">DEST-${String(r.id).padStart(4, "0")}</span>`,
-      `<button class="tracking" onclick="parcelDetail(${Number(r.parcel_id)})">${esc(r.tracking)}</button><span class="sub">Statut colis : ${esc(r.parcel_status||'—')}</span>`,
-      `${esc(r.company || r.author)}<span class="sub">${esc(r.author)}</span>`,
-      recipientRequestSnapshot(r,false),recipientRequestSnapshot(r,true),
-      `<span data-no-translate>${esc(r.reason || "—")}</span>`, `<span>${date(r.created_at)}</span>`, tag(r.status),
-      S.user.role === "admin" && r.status === "En attente"
-        ? `<div class="flex">${['Livré','Retourné'].includes(r.parcel_status)?`<span class="sub recipient-change-accept-locked">Acceptation impossible · ${esc(r.parcel_status)}</span>`:`<button class="btn sm" onclick="decideRecipientChange(${r.id},true)">${icon("check")}Accepter</button>`}<button class="btn sm danger" onclick="decideRecipientChange(${r.id},false)">Refuser</button></div>`
-        : (r.admin_note ? `<span data-no-translate>${esc(r.admin_note)}</span>` : "—"),
-    ]),
-  ) : empty("Aucune demande de changement", "Les prochaines demandes des clients apparaîtront ici.")}</section>`;
-  return heading(
-    "Demandes de modification",
-    "Demandes de prix et changements de destinataire, traités par l’administration.",
-    `<button class="btn" onclick="navigate('parcels')">${icon("box")}Ouvrir un colis</button>`,
-  ) + priceTable + recipientTable + `<p class="sub" style="margin-top:18px">Pour créer une demande de prix, ouvrez un colis non clôturé. Le changement de destinataire se demande depuis la ligne du colis client, uniquement avant les statuts Livré ou Retourné.</p>`;
+  return requestsPane(rows, recipientRows);
 }
 function decideRecipientChange(id, accept) {
   const r=recipientRequestRows.find(x=>Number(x.id)===Number(id));
@@ -1828,7 +2033,7 @@ function bulkAssign() {
   }
   const targets =
     S.user.role === "admin"
-      ? [["", "— Désaffecter (retirer le livreur) —"]].concat(S.users.filter((u) => u.role === "livreur" && u.active).map((u) => [u.id, u.name]))
+      ? [["", "— Désaffecter (retirer le livreur) —"]].concat(S.users.filter((u) => u.role === "livreur" && u.active).map((u) => { const h=(S.hubs||[]).find(x=>Number(x.id)===Number(u.driver_hub_id)); return [u.id,`${u.name} · ${h?h.name:'Hub à examiner'}`]; }))
       : [[S.user.id, "Moi — " + S.user.name]].concat(S.users.filter((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active).map((u) => [u.id, u.name]));
   rdvSel = "";
   modal(

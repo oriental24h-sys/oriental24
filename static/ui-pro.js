@@ -35,10 +35,9 @@
     const u = S.user, version = (typeof RUNTIME !== 'undefined' && /^\d+\.\d+\.\d+/.test(String(RUNTIME.version || ''))) ? RUNTIME.version : '1.6.2';
     bottom.classList.add('sidebar-bottom-pro');
     bottom.innerHTML =
-      `<button type="button" class="nav-item sidebar-aid" title="Aide &amp; réclamations" onclick="navigate('tickets')">${icon('help')}<span>Aide &amp; réclamations</span></button>` +
       `<div class="sidebar-user" role="group" aria-label="Compte connecté">` +
         `<button type="button" class="sidebar-user-main" title="${esc(u.name)} · Mon profil" aria-label="Mon profil" onclick="navigate('profile')">` +
-          `<span class="avatar sidebar-avatar" aria-hidden="true">${initials(u.name)}</span>` +
+          `<span class="avatar sidebar-avatar" aria-hidden="true">${profileAvatarContent(u)}</span>` +
           `<span class="sidebar-user-text"><b dir="auto">${esc(u.name)}</b><small>${roleName(u.role)}</small></span>` +
         `</button>` +
         `<button type="button" class="icon-btn sidebar-logout" title="Se déconnecter" aria-label="Se déconnecter" onclick="logout()">${icon('logout')}</button>` +
@@ -54,7 +53,7 @@
     const lang = top.querySelector('.lang');
     if (lang) { lang.setAttribute('title', 'Interface en français'); lang.setAttribute('aria-label', 'Langue : français'); }
     const profile = top.querySelector('.top-profile');
-    if (profile) profile.setAttribute('aria-label', 'Mon profil');
+    if (profile) profile.setAttribute('aria-label', 'Menu du compte');
     onScroll();
   }
   function onScroll() {
