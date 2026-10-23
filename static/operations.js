@@ -162,13 +162,13 @@ function drawImportRows() {
   const rows = importPreview.rows.filter(
       (r) => !importOnlyErrors || r.errors.length,
     ),
-    pages = Math.max(1, Math.ceil(rows.length / 25));
+    pages = Math.max(1, Math.ceil(rows.length / listPageSize()));
   importPage = Math.min(importPage, pages);
   $("#import-rows").innerHTML =
     simpleTable(
       ["Ligne / Référence", "Destinataire", "Ville", "COD / Frais", "Contrôle"],
       rows
-        .slice((importPage - 1) * 25, importPage * 25)
+        .slice((importPage - 1) * listPageSize(), importPage * listPageSize())
         .map((r) => [
           `<strong>${r.line}</strong><span class="sub mono">${esc(r.reference || "—")}</span>`,
           `<strong>${esc(r.recipient || "—")}</strong><span class="sub">${esc(r.phone || "—")}</span>`,
@@ -179,7 +179,7 @@ function drawImportRows() {
             : operationTag("Prêt"),
         ]),
     ) +
-    `<div class="table-footer"><span>${rows.length} lignes ${importOnlyErrors ? "à corriger" : ""}</span><div class="pagination"><button onclick="importPage=Math.max(1,importPage-1);drawImportRows()" aria-label="Page précédente">‹</button><span>${importPage} / ${pages}</span><button onclick="importPage=Math.min(${pages},importPage+1);drawImportRows()" aria-label="Page suivante">›</button></div></div>`;
+    `<div class="table-footer">${listSizeControl(listPageSize(),"saveListPageSize(this.value);importPage=1;drawImportRows()")}<span>${rows.length} lignes ${importOnlyErrors ? "à corriger" : ""}</span><div class="pagination"><button onclick="importPage=Math.max(1,importPage-1);drawImportRows()" aria-label="Page précédente">‹</button><span>${importPage} / ${pages}</span><button onclick="importPage=Math.min(${pages},importPage+1);drawImportRows()" aria-label="Page suivante">›</button></div></div>`;
 }
 async function commitImport() {
   const button = $("#commit-import"),

@@ -15,7 +15,7 @@
    100 % local (Web Audio / BarcodeDetector) : aucune ressource ni API payante. */
 let rpSc=null;
 function rpScKey(){try{return [...crypto.getRandomValues(new Uint8Array(16))].map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){return 'k'+Date.now()+Math.random().toString(16).slice(2)}}
-function rpScSound(kind){try{if(window.o24Sound)return o24Sound.signal(kind)}catch(e){}}
+function rpScSound(kind){try{if(typeof ppReceptionSignal==='function')return ppReceptionSignal(kind);if(window.o24Sound)return o24Sound.signal(kind)}catch(e){}}
 function rpScWeek(){return (rpSc&&rpSc.week_days)||7}
 function rpScNorm(v){return String(v||'').trim()}
 function rpScErr(e){rpMsg('err',esc(e&&e.message||'Erreur'))}
@@ -25,8 +25,9 @@ function rpFlash(kind){const box=document.getElementById('rp-sc-box');if(!box)re
 
 window.rpScanStart=async()=>{
  rpSc={step:1,client_id:0,hub_id:0,transport:'',lots:0,tracking_code:'',note:'',week_days:7,lot:[],seen:{},pending:null,cfg:null,loading:false};
- let cfg=null;
+ const state=rpSc,owner=ppIdentity();let cfg=null;
  try{cfg=await rpConfig()}catch(e){toast(e.message||'Configuration indisponible',true);return}
+ if(rpSc!==state||owner!==ppIdentity())return;
  rpSc.cfg=cfg;
  rpModal();
 };
@@ -54,8 +55,8 @@ function rpModal(){
      <button class="btn" type="button" onclick="closeModal()">Annuler</button></div>
    </div>
    <div class="rp-sc-scan" id="rp-sc-scan" hidden>
-    <div class="rp-sc-head"><b id="rp-sc-who"></b><span class="sub" id="rp-sc-count">0 colis scanné</span></div>
-    <div class="rp-sc-tools">
+    <div class="pp-document-head"><b id="rp-sc-who"></b><span class="eyebrow orange">ENVOI AU SCAN · COLLECTE</span></div><div class="pp-progress"><strong id="rp-sc-count">0 colis scanné</strong></div>
+    <div class="pp-rxbox"><div class="rp-sc-tools">
      ${input('rp-sc-input','Scanner le colis (lecteur USB, clavier ou caméra)','','text',false,'maxlength="80" autocomplete="off" placeholder="Tracking ORIENTAL24 puis Entrée"')}
      <button class="btn primary" type="button" id="rp-sc-add">Ajouter ce colis</button>
      <button class="btn sm" type="button" id="rp-sc-cam">📷 Caméra du téléphone</button>
@@ -63,15 +64,17 @@ function rpModal(){
      <button class="btn sm" type="button" id="rp-sc-reset">↺ Vider les scans</button>
     </div>
     <div class="rp-sc-cambox" id="rp-sc-cambox" hidden><video playsinline muted></video><span id="rp-sc-camstate" class="sub">Caméra arrêtée</span></div>
-    <div class="pp-rx-msg" id="rp-sc-msg"></div>
-    <div class="rp-sc-list" id="rp-sc-list"></div>
-    <div class="rp-sc-foot">
+    <div class="pp-rx-msg" id="rp-sc-msg" aria-live="polite"></div></div>
+    <div class="pp-rx-list" id="rp-sc-list"></div>
+    <div class="pp-validate">
      <button class="btn primary" type="button" id="rp-sc-validate" disabled>Valider et envoyer le retour</button>
      <button class="btn" type="button" onclick="closeModal()">Fermer</button>
      <span class="sub" id="rp-sc-hint">Le lot n'est pas encore envoyé : rien n'est enregistré avant la validation.</span>
     </div>
    </div>
   </div>`,true);
+ rpSc.node=document.getElementById('rp-sc-box');rpSc.owner=ppIdentity();
+ const current=rpSc;modalCleanup=()=>{current.closed=true;try{current.cam?.stop()}catch(e){}};
  rpBind();
 }
 
@@ -83,7 +86,7 @@ function rpBind(){
  const snd=document.getElementById('rp-sc-snd');
  if(snd)snd.onclick=()=>{try{o24Sound?(o24Sound.set(!o24Sound.on())):0}catch(e){}const on=window.o24Sound?o24Sound.on():false;snd.textContent=on?'🔊 Son activé':'🔇 Son coupé';if(on)rpScSound('ok')};
  const reset=document.getElementById('rp-sc-reset');
- if(reset)reset.onclick=()=>{rpSc.lot=[];rpSc.seen={};rpSc.pending=null;rpMsg('','Lot vidé — recommencez le scan.');rpPaint();rpFocus()};
+ if(reset)reset.onclick=()=>{if(rpSc.loading||rpSc.sending||rpSc.pendingPayload)return;rpSc.lot=[];rpSc.seen={};rpSc.pending=null;rpMsg('','Lot vidé — recommencez le scan.');rpPaint();rpFocus()};
  const cam=document.getElementById('rp-sc-cam');
  if(cam)cam.onclick=()=>{
   const box=document.getElementById('rp-sc-cambox'),state=document.getElementById('rp-sc-camstate');
@@ -115,24 +118,26 @@ window.rpScanStep2=function(){
  document.getElementById('rp-sc-s2').className='on';
  const who=document.getElementById('rp-sc-who');
  if(who)who.textContent=(c.company||c.name||'Vendeur')+' ← '+(h.name||'Hub')+(h.city?' · '+h.city:'');
- rpMsg('','Présentez le premier colis. Son « validé » = ajouté ; son grave = refusé ou à confirmer.');
+ rpMsg('',ppReceptionGuide());
  rpPaint();rpFocus();
 };
 
 async function rpScanCode(raw,fromCam){
+ const state=rpSc;if(!state||state.closed||state.pendingPayload||state.sending||state.owner!==ppIdentity())return;
  const code=rpScNorm(raw);
  if(!code)return;
  const inp=rpField('rp-sc-input');
  if(inp)inp.value='';
  if(rpSc.seen[code.toUpperCase()]){
   rpScSound('dup');rpFlash('dup');
-  rpMsg('dup','Déjà scanné : <b>'+esc(code)+'</b>');rpFocus();return;
+  rpMsg('dup','DOUBLE — commande déjà scannée : <b>'+esc(code)+'</b>. Aucun ajout.');rpFocus();return;
  }
  if(rpSc.loading)return;
  rpSc.loading=true;
  let v;
  try{v=await rpLookup(code)}
- catch(e){rpSc.loading=false;rpScSound('err');rpMsg('err',esc(e.message||'Vérification impossible'));rpFocus();return}
+ catch(e){if(rpSc!==state||state.closed||state.owner!==ppIdentity())return;rpSc.loading=false;rpScSound('err');rpMsg('err',esc(e.message||'Vérification impossible'));rpFocus();return}
+ if(rpSc!==state||state.closed||state.owner!==ppIdentity())return;
  rpSc.loading=false;
  if(v&&v.week_days)rpSc.week_days=v.week_days;
  const p=v.parcel||{};
@@ -167,6 +172,7 @@ window.rpScanRejectTooRecent=function(){
 };
 
 function rpAdd(it){
+ if(rpSc.closed||rpSc.pendingPayload||rpSc.sending)return;
  const k=String(it.tracking).toUpperCase();
  if(rpSc.seen[k])return;
  rpSc.seen[k]=1;
@@ -174,6 +180,7 @@ function rpAdd(it){
  rpPaint();
 }
 function rpDel(tracking){
+ if(rpSc.closed||rpSc.pendingPayload||rpSc.sending||rpSc.loading)return;
  const k=String(tracking).toUpperCase();
  delete rpSc.seen[k];
  rpSc.lot=rpSc.lot.filter(x=>String(x.tracking).toUpperCase()!==k);
@@ -184,19 +191,15 @@ function rpPaint(){
  const box=document.getElementById('rp-sc-list');
  const n=rpSc.lot.length;
  const cnt=document.getElementById('rp-sc-count');
- if(cnt)cnt.textContent=n+' colis scanné'+(n>1?'s':'')+' · semaine '+rpScWeek()+' jours';
+ if(cnt)cnt.innerHTML=n+'<small> colis scanné'+(n>1?'s':'')+'</small>';
  const v=document.getElementById('rp-sc-validate');
- if(v){v.disabled=!n;v.textContent=n?('Valider et envoyer le retour ('+n+' colis)'):'Valider et envoyer le retour'}
+ if(v){v.disabled=!n||rpSc.loading||rpSc.sending;v.textContent=n?('Valider et envoyer le retour ('+n+' colis)'):'Valider et envoyer le retour'}
  const hint=document.getElementById('rp-sc-hint');
  if(hint)hint.textContent=n?('À la validation : la palette retour est créée et expédiée au vendeur — '+n+' colis.'):'Le lot n’est pas encore envoyé : rien n’est enregistré avant la validation.';
  if(!box)return;
  if(!n){box.innerHTML='<p class="sub">Aucun colis scanné pour l’instant.</p>';return}
- box.innerHTML='<table class="rp-sc-table"><thead><tr><th>Tracking</th><th>Destinataire / Ville</th><th>Ancienneté</th><th>État</th><th></th></tr></thead><tbody>'+
-  rpSc.lot.map(x=>'<tr><td><b>'+esc(x.tracking)+'</b>'+(x.confirmed?'<span class="rp-sc-tag">confirmé</span>':'')+'</td>'+
-   '<td>'+esc(x.recipient||'')+'<span class="sub"> '+esc(x.city||'')+'</span></td>'+
-   '<td>'+(x.days||0)+' j</td><td>'+esc(x.status||'')+'</td>'+
-   '<td><button class="btn sm" type="button" onclick="rpScanRemove(\''+esc(x.tracking)+'\')">✕</button></td></tr>').join('')+
-  '</tbody></table>';
+ box.innerHTML=rpSc.lot.map(x=>`<div class="pp-rx-line scanned"><span class="mono">${esc(x.tracking)}</span><span class="sub">${esc(x.recipient||'')} · ${esc(x.city||'')} · ${x.days||0} j${x.confirmed?' · ancienneté confirmée':''}</span><span class="tag good">✓ Scanné</span><button type="button" class="btn sm pp-rx-x" data-rp-remove="${esc(x.tracking)}" ${rpSc.pendingPayload?'disabled':''}>✕</button></div>`).join('');
+ box.querySelectorAll('[data-rp-remove]').forEach(b=>b.onclick=()=>rpDel(b.dataset.rpRemove));
 }
 window.rpScanRemove=rpDel;
 
@@ -206,26 +209,30 @@ async function rpLookup(code){
 }
 
 async function rpScanSend(){
+ const state=rpSc;if(!state||state.closed||state.loading||state.sending||state.owner!==ppIdentity())return;
  const n=rpSc.lot.length;
  if(!n){toast('Scannez au moins un colis.',true);return}
  const btn=document.getElementById('rp-sc-validate');
  if(btn){btn.disabled=true;btn.textContent='Envoi…'}
- const payload={client_id:rpSc.client_id,hub_id:rpSc.hub_id,transport:rpSc.transport,lots:rpSc.lots,
+ const payload=state.pendingPayload||(state.pendingPayload={client_id:rpSc.client_id,hub_id:rpSc.hub_id,transport:rpSc.transport,lots:rpSc.lots,
   tracking_code:rpSc.tracking_code,note:rpSc.note,parcel_ids:rpSc.lot.map(x=>x.parcel_id),
-  confirmed:rpSc.lot.filter(x=>x.confirmed).map(x=>x.parcel_id),request_key:rpScKey()};
+  confirmed:rpSc.lot.filter(x=>x.confirmed).map(x=>x.parcel_id),request_key:rpScKey()});
+ state.sending=true;state.node.querySelectorAll('input,select,button:not(#rp-sc-validate)').forEach(x=>x.disabled=true);
  try{
   const r=(typeof opsOffline!=='undefined'&&opsOffline)?o24RpScanOfflineSend(payload):await api('/return-palettes/scan-send','POST',payload);
+  if(rpSc!==state||state.closed||state.owner!==ppIdentity())return;
   rpScSound('done');
   if(rpSc.cam)try{rpSc.cam.stop()}catch(e){}
   closeModal();
   toast('Retour '+r.reference+' envoyé au vendeur — '+r.count+' colis ✓');
   if(typeof renderView==='function')renderView();
  }catch(e){
+  if(rpSc!==state||state.closed||state.owner!==ppIdentity())return;
   rpScSound('err');
-  rpMsg('err','✗ Envoi refusé : '+esc(e.message||''));
+  rpMsg('err','✗ '+esc(e.message||'')+' Réessayez la même validation, ou fermez puis rouvrez et contrôlez le lot.');
   if(btn){btn.disabled=false;btn.textContent='Valider et envoyer le retour ('+n+' colis)'}
   toast(e.message||'Envoi refusé',true);
- }
+ }finally{state.sending=false}
 }
 
 /* --- miroir démo (HTML hors serveur) : mêmes règles, mêmes messages --- */

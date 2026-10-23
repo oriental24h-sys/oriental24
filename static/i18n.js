@@ -11,6 +11,13 @@
 
   // French is the source language used by the existing screens. Keep API/status values untouched.
   const ENTRIES = [
+    ["Transit vers Hub Central", "In transit to Central Hub", "في الطريق إلى المركز الرئيسي"],
+    ["Transit vers ville de destination", "In transit to destination city", "في الطريق إلى مدينة الوجهة"],
+    ["Transit inter-hubs", "Inter-hub transit", "في الطريق بين المراكز"],
+    ["Transit · trajet à vérifier", "In transit · route to verify", "في الطريق · يلزم التحقق من المسار"],
+    ["Sélectionner tout", "Select all", "تحديد الكل"],
+    ["Tout désélectionner", "Deselect all", "إلغاء تحديد الكل"],
+
     ["Les CMD ramassées", "Collected orders", "الطلبات المستلمة من البائعين"],
     ["En transit vers le Central", "In transit to Central Hub", "في الطريق إلى المركز الرئيسي"],
     ["Transfert préparé", "Transfer prepared", "تحويل قيد التحضير"],

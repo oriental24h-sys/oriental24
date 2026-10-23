@@ -192,10 +192,10 @@ function agentForm(id){
   `<div class="full form-hint">Le responsable travaille <b>uniquement</b> dans le Hub qui lui est affecté : réception, scans et opérations autorisées. Son périmètre sera vérifié côté serveur.</div>
   ${input('name','Nom complet',u.name)}${!id?input('email','Adresse e-mail','','email'):`<div class="form-hint">${esc(u.email)}</div>`}${input('phone','Téléphone',u.phone,'tel')}
   ${select('agent_hub_id','Hub de réception',hubs.map(h=>[h.id,h.name+' · '+h.city]),u.agent_hub_id)}
-  ${input('password',id?'Nouveau mot de passe (facultatif)':'Mot de passe initial','','password',!id,'minlength="10" autocomplete="new-password"')}
+  ${adminPasswordControl(id)}
   ${id?`<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active?'checked':''}><label for="user-active">Compte actif</label></div>`:''}
   <div class="full form-hint">Révoqué immédiatement en cas de désactivation : toutes ses sessions ferment.</div>`));
- bindForm(async d=>{await api('/users'+(id?'/'+id:''),id?'PATCH':'POST',{...d,role:'hub_manager',agent_hub_id:Number(d.agent_hub_id)});await saved('Compte responsable de Hub enregistré')});
+ bindForm(async d=>{const owner=S.user.id,node=document.querySelector('#modal-root .modal');const r=await api('/users'+(id?'/'+id:''),id?'PATCH':'POST',{...d,...(!id?{generate_password:true}:{}),role:'hub_manager',agent_hub_id:Number(d.agent_hub_id)});if(S?.user?.id!==owner||!node.isConnected){r.temporary_password='';return}if(r.temporary_password)showTemporaryPassword(r);else await saved('Compte responsable de Hub enregistré')});
 }
 
 const rxBaseUsersView=usersView;

@@ -122,12 +122,12 @@ async function hubPaletteNew(purpose='standard'){
   hubPaletteDialog={purpose,cfg,agent,myHub,central,sourceHubs:sourceChoices,targets,fixedSource,fixedDestination,defaultSource};
   const title=purpose==='standard'?'Envoyer Palette':purpose==='return_to_central'?'Envoyer Retour au Central':'Envoyer vers le Hub d’origine';
   const sourceControl=fixedSource?`<input id="hp-source" type="hidden" value="${fixedSource}"><div class="full form-hint">Départ : <b>${esc(sourceHub.name||cfg.central_hub.name)}</b></div>`:`<label class="field"><span>Hub de départ</span><select id="hp-source" onchange="hubPaletteUpdateTargets()">${sourceChoices.map(h=>`<option value="${h.id}" ${Number(h.id)===Number(defaultSource)?'selected':''}>${esc(h.name)} · ${esc(h.city||'')}</option>`).join('')}</select></label>`;
-  const destinationControl=fixedDestination?`<input id="hp-destination" type="hidden" value="${fixedDestination}"><div class="full form-hint">Destination : <b>${esc((targets.find(h=>Number(h.id)===fixedDestination)||cfg.central_hub).name)}</b></div>`:`<label class="field"><span>Hub de destination</span><select id="hp-destination">${destOptions.map(([id,label])=>`<option value="${id}">${esc(label)}</option>`).join('')}</select></label>`;
+  const destinationControl=fixedDestination?`<input id="hp-destination" type="hidden" value="${fixedDestination}"><div class="full form-hint">Destination : <b>${esc((targets.find(h=>Number(h.id)===fixedDestination)||cfg.central_hub).name)}</b></div>`:`<label class="field"><span>Hub de destination</span><select id="hp-destination" onchange="hubPaletteResetCandidates();hubPaletteLoadCandidates()">${destOptions.map(([id,label])=>`<option value="${id}">${esc(label)}</option>`).join('')}</select></label>`;
   modal(title,`<div class="form-grid">${sourceControl}${destinationControl}<label class="field"><span>Transporteur (facultatif)</span><input id="hp-transport" maxlength="120"></label><label class="field"><span>Tracking palette (facultatif)</span><input id="hp-track" maxlength="80"></label><label class="field"><span>Nombre de lots</span><input id="hp-lots" type="number" min="0" max="500" value="0"></label><label class="field full"><span>Note (facultatif)</span><textarea id="hp-note" maxlength="600"></textarea></label></div><p class="form-hint">Chargez la liste; le serveur n’affiche que les colis physiquement au Hub de départ et admissibles pour ce type de flux.</p><div class="form-actions"><button class="btn" type="button" onclick="hubPaletteLoadCandidates()">Charger les colis admissibles</button><button class="btn primary" id="hp-create" type="button" disabled onclick="hubPaletteCreate()">Créer la palette</button></div><div id="hp-candidates" class="hub-palette-candidates"><p class="sub">Aucun colis chargé.</p></div>`);
  }catch(e){toast(e.message,true)}
 }
 function hubPaletteUpdateTargets(){
- const d=hubPaletteDialog;if(!d||d.fixedDestination)return;
+ const d=hubPaletteDialog;if(!d)return;if(d.fixedDestination){hubPaletteResetCandidates();return;}
  const src=Number(document.getElementById('hp-source')?.value||d.defaultSource),dest=document.getElementById('hp-destination');if(!dest)return;
  let list=d.targets.filter(h=>Number(h.id)!==src);
   if(d.purpose==='return_to_origin')list=list.filter(h=>Number(h.id)!==d.central);
@@ -136,23 +136,36 @@ function hubPaletteUpdateTargets(){
  dest.innerHTML=list.map(h=>`<option value="${h.id}">${esc(h.name)}${h.city?' · '+esc(h.city):''}</option>`).join('');
  hubPaletteResetCandidates();
 }
-function hubPaletteResetCandidates(){const host=document.getElementById('hp-candidates');if(host)host.innerHTML='<p class="sub">Chargez les colis après avoir confirmé le trajet.</p>';const button=document.getElementById('hp-create');if(button)button.disabled=true}
-async function hubPaletteLoadCandidates(){
- const d=hubPaletteDialog;if(!d)return;
- const source=Number(document.getElementById('hp-source')?.value||d.defaultSource),destination=Number(document.getElementById('hp-destination')?.value||d.fixedDestination);
- if(!source||!destination){toast('Choisissez le Hub de départ et de destination.',true);return}
- try{
-  const qs=new URLSearchParams({mode:d.purpose,source_hub_id:String(source),destination_hub_id:String(destination)}),result=await api('/logistics/palette-candidates?'+qs.toString()),host=document.getElementById('hp-candidates');
-  const rows=result.rows||[];
-  if(host)host.innerHTML=rows.length?`<div class="full form-hint">${rows.length} colis admissible(s) · sélection uniquement après présence physique au Hub.</div>${rows.map(p=>`<label class="check-label hub-palette-candidate"><input class="hp-pick" type="checkbox" value="${p.id}" onchange="hubPaletteSelectionChanged()"><span><b>${esc(p.tracking)}</b> · ${esc(p.recipient)}<small class="sub">${esc(p.city||'')} · ${esc(p.status)}${p.origin_hub?' · origine vérifiée : '+esc(p.origin_hub):' · origine non renseignée'}</small></span></label>`).join('')}`:empty('Aucun colis admissible','Le serveur n’a trouvé aucun colis physiquement présent et compatible avec ce trajet.');
-  hubPaletteSelectionChanged();
- }catch(e){toast(e.message,true)}
+function hubPaletteResetCandidates(){
+ if(hubPaletteDialog){hubPaletteDialog.loadSerial=(hubPaletteDialog.loadSerial||0)+1;hubPaletteDialog.loadedRoute=null}
+ const host=document.getElementById('hp-candidates');if(host)host.innerHTML='<p class="sub">Chargez les colis après avoir confirmé le trajet.</p>';
+ const button=document.getElementById('hp-create');if(button)button.disabled=true;
 }
-function hubPaletteSelectionChanged(){const button=document.getElementById('hp-create');if(button)button.disabled=!document.querySelectorAll('#hp-candidates .hp-pick:checked').length}
+async function hubPaletteLoadCandidates(){
+ const d=hubPaletteDialog,host=document.getElementById('hp-candidates');if(!d||!host)return;
+ const source=Number(document.getElementById('hp-source')?.value||d.defaultSource),destination=Number(document.getElementById('hp-destination')?.value||d.fixedDestination);
+ hubPaletteResetCandidates();const serial=d.loadSerial,route=source+':'+destination;
+ if(!source||!destination){toast('Choisissez le Hub de départ et de destination.',true);return}
+ host.innerHTML='<p class="sub">Chargement des colis du trajet sélectionné…</p>';
+ try{
+  const qs=new URLSearchParams({mode:d.purpose,source_hub_id:String(source),destination_hub_id:String(destination)}),result=await api('/logistics/palette-candidates?'+qs.toString());
+  if(hubPaletteDialog!==d||serial!==d.loadSerial||!host.isConnected)return;
+  const available=result.rows||[],rows=available.slice(0,100);d.loadedRoute=route;
+  host.innerHTML=rows.length?`<div class="full form-hint">${rows.length} colis admissible(s) affiché(s) pour ce trajet.${available.length>100?' Une palette contient 100 colis maximum. Préparez ensuite une autre palette pour les colis restants.':''}</div><div class="hp-selection-tools"><button type="button" class="btn sm" id="hp-select-all" onclick="hubPaletteSelectAll(true)">Sélectionner tout</button><button type="button" class="btn sm" id="hp-clear-all" onclick="hubPaletteSelectAll(false)">Tout désélectionner</button><span class="sub" id="hp-selected-count">0 / ${rows.length} sélectionnés</span></div>${rows.map(p=>`<label class="check-label hub-palette-candidate"><input class="hp-pick" type="checkbox" value="${p.id}" onchange="hubPaletteSelectionChanged()"><span><b>${esc(p.tracking)}</b> · ${esc(p.recipient)}<small class="sub">${esc(p.city||'')} · ${esc(p.status)}${p.origin_hub?' · origine vérifiée : '+esc(p.origin_hub):''}</small></span></label>`).join('')}`:empty('Aucun colis admissible','Aucun colis physiquement présent et compatible avec les villes de ce Hub de destination.');
+  hubPaletteSelectionChanged();
+ }catch(e){if(hubPaletteDialog===d&&serial===d.loadSerial&&host.isConnected){host.textContent=e.message;toast(e.message,true)}}
+}
+function hubPaletteSelectAll(checked){document.querySelectorAll('#hp-candidates .hp-pick').forEach(x=>x.checked=checked);hubPaletteSelectionChanged()}
+function hubPaletteSelectionChanged(){
+ const all=document.querySelectorAll('#hp-candidates .hp-pick'),n=document.querySelectorAll('#hp-candidates .hp-pick:checked').length,button=document.getElementById('hp-create'),count=document.getElementById('hp-selected-count');
+ if(button)button.disabled=!n;if(count)count.textContent=n+' / '+all.length+' sélectionnés';
+}
 async function hubPaletteCreate(){
  const d=hubPaletteDialog;if(!d)return;
  const parcel_ids=[...document.querySelectorAll('#hp-candidates .hp-pick:checked')].map(x=>Number(x.value));
  if(!parcel_ids.length){toast('Sélectionnez au moins un colis.',true);return}
+ const selectedRoute=Number(document.getElementById('hp-source')?.value||d.defaultSource)+':'+Number(document.getElementById('hp-destination')?.value||d.fixedDestination);
+ if(d.loadedRoute!==selectedRoute){hubPaletteResetCandidates();toast('Le trajet a changé : rechargez les colis.',true);return}
  const body={kind:'transfer',palette_purpose:d.purpose,source_hub_id:Number(document.getElementById('hp-source')?.value||d.defaultSource),destination_hub_id:Number(document.getElementById('hp-destination')?.value||d.fixedDestination),parcel_ids,transport:document.getElementById('hp-transport')?.value||'',tracking_code:document.getElementById('hp-track')?.value||'',lots:Number(document.getElementById('hp-lots')?.value||0),note:document.getElementById('hp-note')?.value||''};
  try{const r=await api('/logistics/documents','POST',body);hubPaletteDialog=null;closeModal();hubPaletteTab=d.purpose==='return_to_origin'?'a-recevoir':d.purpose==='standard'?'default':'retours';toast('Palette préparée · '+r.reference);await renderView();await openOpsDocument(r.id)}catch(e){toast(e.message,true)}
 }
@@ -177,31 +190,19 @@ async function openOpsDocument(id,detailOnly=false){
   const canScanDeparture=admin||(hubManager&&d.kind==='transfer'&&Number(d.source_hub_id)===myHubId);
   const canScanArrival=admin||(hubManager&&d.kind==='transfer'&&Number(d.destination_hub_id)===myHubId);
   const departureProgress=d.departure_scan_required?`<div class="ops-receipt-count"><strong>${d.departure_scanned} / ${d.count}</strong><span>colis scannés pour le départ${d.departure_reconciled_count?` · ${d.departure_reconciled_count} retiré(s) du manifeste`:''}</span></div>`:'';
-  const departureForm=canScanDeparture&&d.kind==='transfer'&&d.departure_scan_required&&['Préparé','Départ partiel'].includes(d.status)?`<form id="ops-departure-scan-form" class="ops-scan-form"><div class="form-error"></div><label for="ops-departure-tracking">Scan de sortie · colis au Hub de départ</label><button type="button" class="btn sm" data-o24-snd onclick="window.o24Sound?.set?.(!window.o24Sound.on())">${window.o24Sound?.on?.()===false?'🔇 Son coupé':'🔊 Son activé'}</button><div class="flex"><input id="ops-departure-tracking" name="tracking" placeholder="O24-…" required autocomplete="off"><button type="submit" class="btn primary">${icon('scan')}Scanner le colis</button></div><small>${d.palette_purpose==='return_to_central'?'Chaque colis scanné passe à « Vers Hub Central ». « Retourné » sera confirmé seulement à la réception au Central.':'Le scan vérifie le colis au Hub source et le déclare en transit.'} Le dernier scan fait passer le manifeste en transit complet.</small></form>`:'';
+  const departureForm=canScanDeparture&&d.kind==='transfer'&&['Préparé','Départ partiel'].includes(d.status)?`<button class="btn primary" onclick="openDispatchCollection('transfer',${id})">Envoyer au scan · collecte</button>`:'';
   const canReceive=['En transit','Partiellement reçu','Départ partiel'].includes(d.status);
+  if(canScanDeparture&&d.kind==='transfer'&&['Préparé','Départ partiel'].includes(d.status)&&!detailOnly)return openDispatchCollection('transfer',id);
   if(canScanArrival&&canReceive&&!detailOnly)return openReceptionCollection('transfer',id);
   const receiveForm=canScanArrival&&canReceive?`<button class="btn primary" onclick="openReceptionCollection('transfer',${id})">Réception au scan · collecte</button>`:'';
   const lines=simpleTable(['Colis','Destinataire / Ville','Statut à la préparation','Situation actuelle','Scan de sortie','Réception'],d.lines.map(l=>[esc(l.tracking),`${esc(l.recipient)}<span class="sub">${esc(l.city)}</span>`,tag(l.initial_status),tag(l.current_status||l.initial_status),d.departure_scan_required?(l.departure_reconciled_at?`<span class="tag warn">Resté au Hub · ${opsDate(l.departure_reconciled_at)}</span>${admin&&l.departure_reconciliation_reason?`<span class="sub ops-wrap">Motif : ${esc(l.departure_reconciliation_reason)}</span>`:''}`:l.departure_scanned_at?`<span class="green">Scanné · ${opsDate(l.departure_scanned_at)}</span>`:'À scanner'):'—',l.departure_reconciled_at?'<span class="sub">Retiré du transfert</span>':l.received_at?`<span class="green">${opsDate(l.received_at)}</span>`:'En attente']));
   const actions=(admin&&d.status==='Préparé'?`<button class="btn danger" onclick="opsDocAction('cancel')">Annuler le bon</button>${d.departure_scan_required?'':`<button class="btn primary" onclick="opsDocAction('dispatch')">${icon('truck')}Confirmer le départ</button>`}`:'')+(admin&&d.kind==='transfer'&&d.departure_scan_required&&d.status==='Départ partiel'&&d.lines.some(l=>l.active&&!l.departure_scanned_at&&!l.departure_reconciled_at)?`<button class="btn danger" onclick="opsReconcileDeparture(${id})">${icon('alert')}Réconcilier les colis restés au Hub</button>`:'');
   modal(d.reference,`<div class="ops-document-head"><div><span class="eyebrow orange">${opsKinds[d.kind]}</span><h3>${esc(d.source_name)} → ${esc(d.destination_name)}</h3><p>${esc(d.client_name||'Plusieurs clients')} · ${esc(d.driver_name||'Transporteur non affecté')}</p><p>Préparé le ${opsDate(d.created_at)} · Version ${d.revision}</p></div><div>${opsTag(d.status)}${d.qr?`<img class="ops-doc-qr" src="${d.qr}" alt="QR du document ${esc(d.reference)}">`:''}</div></div><div class="ops-receipt-count${d.status!=='Annulé'&&d.received<d.count&&['En transit','Partiellement reçu'].includes(d.status)?' ops-receipt-ecart':''}"><strong>${d.received} / ${d.count}</strong><span>colis reçus${d.status==='Annulé'?' · bon annulé':` · écart théorique/physique : ${d.count-d.received} restant(s)`}</span>${d.status!=='Annulé'&&d.received<d.count&&['En transit','Partiellement reçu'].includes(d.status)?`<strong class="ops-ecart-badge">${icon('alert')}Écart −${d.count-d.received}</strong>`:''}</div>${departureProgress}${opsEtaAt(d)?`<p class="form-hint ops-eta-line">${icon('clock')}Arrivée estimée : <b>${opsDate(opsEtaAt(d).toISOString())}</b> — hypothèse navette quotidienne (départ + 24 h)${opsEtaAt(d).getTime()<Date.now()?' · <b style="color:#b46300">en retard</b>':''}</p>`:''}${d.note?`<p class="form-hint" data-no-translate>${esc(d.note)}</p>`:''}${d.cancel_reason?`<p class="form-hint orange">Annulation : <span data-no-translate>${esc(d.cancel_reason)}</span></p>`:''}${departureForm}${receiveForm}${lines}<details class="ops-history"><summary>Historique du document (${d.audit.length})</summary><div class="timeline">${d.audit.map(a=>`<div class="timeline-item"><b>${esc(a.action)}</b><p data-no-translate>${esc(a.details.tracking||a.details.reason||'')}</p><small data-no-translate>${esc(a.actor)} · ${opsDate(a.created_at)}</small></div>`).join('')}</div></details><div class="form-actions">${actions}<button class="btn" onclick="printOpsDocument(${id})">${icon('print')}Imprimer / PDF</button></div>`,true);
-  if($('#ops-departure-scan-form'))bindForm(async data=>{
-   const owner=S.user.id,node=$('#ops-departure-scan-form');
-   window.o24Sound?.unlock?.();
-   let r;
-   try{r=await api('/logistics/documents/'+id+'/departure-scan','POST',data)}
-   catch(e){if(S?.user?.id===owner&&node.isConnected){window.o24Sound?.signal?.('err');toast(e.message,true);node.querySelector('[name=tracking]')?.select()}throw e}
-   if(S?.user?.id!==owner)return;
-   // Only a new committed scan receives the success tone. Duplicates are refused
-   // audibly, but leave the server's idempotent result untouched.
-   window.o24Sound?.signal?.(r.already_scanned?'err':'ok');
-   const message=r.already_scanned?'Colis déjà scanné · aucun nouvel enregistrement.':r.parcel_status==='Vers Hub Central'?`Vers Hub Central · scan enregistré (${r.departure_scanned}/${r.count})`:`Colis scanné et accepté · ${r.departure_scanned}/${r.count}`;
-   toast(message,!!r.already_scanned);
-   try{await refresh();await renderView();await openOpsDocument(id,true);$('#ops-departure-tracking')?.focus()}catch(e){toast('Scan enregistré. Actualisez le transfert pour voir le résultat.',true)}
-  },'ops-departure-scan-form');
+
 
  }catch(e){toast(e.message,true)}
 }
-function opsDocAction(action){const d=opsDoc;modal(action==='dispatch'?'Confirmer la remise physique ?':'Annuler le document ?',form(`${action==='cancel'?textarea('reason','Motif obligatoire','',true):`<div class="full form-hint">${esc(d.reference)} · ${d.count} colis. Après départ, une annulation simple n’est plus possible : chaque colis doit être reçu et contrôlé.</div>`}`,action==='cancel'?'Annuler le document':'Confirmer le départ'));bindForm(async data=>{await api409(f=>api('/logistics/documents/'+d.id+'/'+action,'POST',{...data,revision:f?f.revision:d.revision}),async()=>({revision:(await api('/logistics/documents/'+d.id)).revision}));await refresh();await renderView();await openOpsDocument(d.id);toast('Document mis à jour')})}
+function opsDocAction(action){const d=opsDoc;if(action==='dispatch'&&d.kind==='transfer')return openDispatchCollection('transfer',d.id);modal(action==='dispatch'?'Confirmer la remise physique ?':'Annuler le document ?',form(`${action==='cancel'?textarea('reason','Motif obligatoire','',true):`<div class="full form-hint">${esc(d.reference)} · ${d.count} colis. Après départ, une annulation simple n’est plus possible : chaque colis doit être reçu et contrôlé.</div>`}`,action==='cancel'?'Annuler le document':'Confirmer le départ'));bindForm(async data=>{await api409(f=>api('/logistics/documents/'+d.id+'/'+action,'POST',{...data,revision:f?f.revision:d.revision}),async()=>({revision:(await api('/logistics/documents/'+d.id)).revision}));await refresh();await renderView();await openOpsDocument(d.id);toast('Document mis à jour')})}
 async function opsReconcileDeparture(id){
  const d=opsDoc,candidates=(d?.lines||[]).filter(l=>l.active&&!l.departure_scanned_at&&!l.departure_reconciled_at);
  if(!d||d.id!==id||!candidates.length){toast('Aucune ligne non partie à réconcilier.',true);return}

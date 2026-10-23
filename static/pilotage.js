@@ -256,7 +256,7 @@ function parcelPagination(page, pages) {
 drawParcelTable = function () {
   if (!$("#parcel-table")) return;
   const rows = filteredParcels(),
-    pages = Math.max(1, Math.ceil(rows.length / 10));
+    pages = Math.max(1, Math.ceil(rows.length / listPageSize()));
   listPage = Math.max(1, Math.min(listPage, pages));
   const badDates = filters.from && filters.to && filters.from > filters.to;
   const chips = [];
@@ -317,8 +317,8 @@ drawParcelTable = function () {
       button.setAttribute("aria-pressed", String(active));
     });
   $("#parcel-table").innerHTML =
-    parcelTable(rows.slice((listPage - 1) * 10, listPage * 10)) +
-    `<div class="table-footer"><span>${rows.length ? (listPage - 1) * 10 + 1 : 0}–${Math.min(rows.length, listPage * 10)} sur ${rows.length} colis</span><div class="pagination"><button onclick="listPage=Math.max(1,listPage-1);drawParcelTable()" ${listPage === 1 ? "disabled" : ""} aria-label="Page précédente">‹</button>${parcelPagination(listPage, pages)}<button onclick="listPage=Math.min(${pages},listPage+1);drawParcelTable()" ${listPage === pages ? "disabled" : ""} aria-label="Page suivante">›</button></div></div>`;
+    parcelTable(rows.slice((listPage - 1) * listPageSize(), listPage * listPageSize())) +
+    `<div class="table-footer">${listSizeControl(listPageSize(),"changeListPageSize(this.value,'parcels')")}<span>${rows.length ? (listPage - 1) * listPageSize() + 1 : 0}–${Math.min(rows.length, listPage * listPageSize())} sur ${rows.length} colis</span><div class="pagination"><button onclick="listPage=Math.max(1,listPage-1);drawParcelTable()" ${listPage === 1 ? "disabled" : ""} aria-label="Page précédente">‹</button>${parcelPagination(listPage, pages)}<button onclick="listPage=Math.min(${pages},listPage+1);drawParcelTable()" ${listPage === pages ? "disabled" : ""} aria-label="Page suivante">›</button></div></div>`;
 };
 function parcelCsvCell(v) {
   let s = String(v ?? "");

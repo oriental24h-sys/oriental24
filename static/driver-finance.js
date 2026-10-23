@@ -81,9 +81,9 @@ function financeStatementsTable() {
         ? `<button class="btn primary" onclick="newDriverStatement()">${icon("plus")}Créer un relevé</button>`
         : "",
     );
-  const pages = Math.max(1, Math.ceil(rows.length / 10));
+  const pages = Math.max(1, Math.ceil(rows.length / listPageSize()));
   financePage = Math.min(financePage, pages);
-  const current = rows.slice((financePage - 1) * 10, financePage * 10);
+  const current = rows.slice((financePage - 1) * listPageSize(), financePage * listPageSize());
   return `<div class="finance-desktop">${simpleTable(
     [
       "Relevé / Livreur",
@@ -103,7 +103,7 @@ function financeStatementsTable() {
       financeStatus(s.status),
       `<button class="icon-btn" onclick="openDriverStatement(${s.id})" aria-label="Ouvrir ${s.reference}">${icon("chevron")}</button>`,
     ]),
-  )}</div><div class="finance-mobile">${current.map((s) => `<article class="finance-mobile-statement"><div class="flex between"><button class="tracking" onclick="openDriverStatement(${s.id})">${esc(s.reference)}</button>${financeStatus(s.status)}</div><h3>${esc(s.driver_name)}</h3><p>${s.parcel_count} colis · ${date(s.created_at)}</p><div class="finance-mobile-balances"><div><span>COD à remettre</span><b>${centMoney(s.cash_remaining_cents)} <small>MAD</small></b></div><div><span>Commission à payer</span><b>${centMoney(s.commission_remaining_cents)} <small>MAD</small></b></div></div><button class="btn" onclick="openDriverStatement(${s.id})">Consulter le relevé ${icon("arrow")}</button></article>`).join("")}</div><div class="table-footer"><span>${rows.length} relevés · Soldes restants après écritures valides</span><div class="pagination"><button onclick="financePage=Math.max(1,financePage-1);drawFinanceStatements()" aria-label="Page précédente">‹</button><span>${financePage} / ${pages}</span><button onclick="financePage=Math.min(${pages},financePage+1);drawFinanceStatements()" aria-label="Page suivante">›</button></div></div>`;
+  )}</div><div class="finance-mobile">${current.map((s) => `<article class="finance-mobile-statement"><div class="flex between"><button class="tracking" onclick="openDriverStatement(${s.id})">${esc(s.reference)}</button>${financeStatus(s.status)}</div><h3>${esc(s.driver_name)}</h3><p>${s.parcel_count} colis · ${date(s.created_at)}</p><div class="finance-mobile-balances"><div><span>COD à remettre</span><b>${centMoney(s.cash_remaining_cents)} <small>MAD</small></b></div><div><span>Commission à payer</span><b>${centMoney(s.commission_remaining_cents)} <small>MAD</small></b></div></div><button class="btn" onclick="openDriverStatement(${s.id})">Consulter le relevé ${icon("arrow")}</button></article>`).join("")}</div><div class="table-footer">${listSizeControl(listPageSize(),"changeListPageSize(this.value,'finance')")}<span>${rows.length} relevés · Soldes restants après écritures valides</span><div class="pagination"><button onclick="financePage=Math.max(1,financePage-1);drawFinanceStatements()" aria-label="Page précédente">‹</button><span>${financePage} / ${pages}</span><button onclick="financePage=Math.min(${pages},financePage+1);drawFinanceStatements()" aria-label="Page suivante">›</button></div></div>`;
 }
 function drawFinanceStatements() {
   if ($("#finance-statements"))

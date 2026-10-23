@@ -2,11 +2,11 @@
    Reception Palette (scan par cases à cocher), Envoyer Retour (scan des colis Refusé/Retourné), actions par ligne
    (Receptionner · Print Sticker · Colis CSV · Close · Attachement · Bon de réception) et chronologie « Activités ». */
 const pcBin='<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1 11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 9zm3 2v8h1.5v-8H9zm3.25 0v8h1.5v-8h-1.5zM12 5.5A1.5 1.5 0 1 1 12 8.5 1.5 1.5 0 0 1 12 5.5z"/></svg>';
-let pcState={tab:'default',status:'',exc:'',hub_id:'',date_from:'',date_to:'',q:'',page:1,size:30},pcOwner=null,pcSel=new Set(),pcHubs=null,pcRelanceDays=7;
+let pcState={tab:'default',status:'',exc:'',hub_id:'',date_from:'',date_to:'',q:'',page:1,size:listPageSize()},pcOwner=null,pcSel=new Set(),pcHubs=null,pcRelanceDays=7;
 let pcRDoc=null,pcRChecked=new Set(),pcRetCtx=null,pcRetSel=[],pcRetCands=[],pcRetSerial=0;
 menu[1][1].splice(2,0,['palette-hub','layers','Palettes',['admin','agent']]);
 titles['palette-hub']='Palettes';
-function pcQuery(){const me=ppIdentity();if(pcOwner!==me){pcOwner=me;pcState={tab:'default',status:'',exc:'',hub_id:'',date_from:'',date_to:'',q:'',page:1,size:30};pcSel=new Set()}const p={};for(const k in pcState)if(pcState[k]!==''&&pcState[k]!==null&&pcState[k]!==undefined)p[k]=pcState[k];return new URLSearchParams(p).toString()}
+function pcQuery(){const me=ppIdentity();if(pcOwner!==me){pcOwner=me;pcState={tab:'default',status:'',exc:'',hub_id:'',date_from:'',date_to:'',q:'',page:1,size:listPageSize()};pcSel=new Set()}const p={};for(const k in pcState)if(pcState[k]!==''&&pcState[k]!==null&&pcState[k]!==undefined)p[k]=pcState[k];return new URLSearchParams(p).toString()}
 const pcLabel=s=>({'Préparé':'Brouillon','En transit':'En transit','Partiellement reçu':'Réception partielle','Partiellement remis':'Remise partielle','Reçu':'Reçu','Remis':'Remis','Clôturé (écarts)':'Clôturé (écarts)','Annulé':'Annulée'}[s]||s);
 const pcAttCache={};
 const pcAttSrc=a=>{if(a.preview)pcAttCache[a.id]=a.preview;return a.preview||('/api/palette-console/attach/'+a.id)};
@@ -58,7 +58,7 @@ function paletteConsoleView(d){
    <span class="pc-spacer"></span>
    <span class="pc-total">Total des colis : ${d.total_colis}</span>
    <button class="pc-iconbtn" type="button" title="Actualiser" onclick="renderView()">${icon('refresh')}</button>
-   ${select('size','Taille',[['30','1 - 30'],['50','1 - 50'],['100','1 - 100']],f.size,false)}
+   ${select('size','Taille',O24_PAGE_SIZES.map(n=>[String(n),String(n)+' par page']),f.size,false)}
    <input name="q" value="${esc(f.q)}" placeholder="Rechercher…" aria-label="Recherche">
    <button class="pc-iconbtn" type="submit" title="Filtrer">${icon('search')}</button>
   </form>
@@ -66,10 +66,10 @@ function paletteConsoleView(d){
   <div class="pc-actions-row">${f.tab==='default'?`<button type="button" class="btn teal solid" onclick="pcRecepBtn()">${icon('down')}Reception Palette</button>${S.user.role==='admin'?`<button type="button" class="btn green solid" onclick="ppCreate()">${icon('truck')}Envoyer Palette</button>`:''}`:''}${f.tab==='retours'?`<button type="button" class="btn red solid" onclick="pcSendReturn()">${icon('truck')}Envoyer Retour</button>`:''}${f.tab==='a-recevoir'?`<p class="sub">Chaque ligne en attente garde son bouton <b>Receptionner</b> ; la relance vendeur part automatiquement après ${pcRelanceDays} jours sans réponse.</p>`:''}</div>
   <div class="pc-tablewrap"><table class="pc-table"><thead><tr><th></th><th>SOURCE</th><th>DESTINATION</th><th>TRANSPORT</th><th>STATUS</th><th>TRACKING ID</th><th>NOMBRE DES COLIS</th><th>NOMBRE DE LOTS</th><th>Date</th><th></th><th></th></tr></thead><tbody>${rows}</tbody></table>
   ${!d.rows.length?empty(f.tab==='retours'?'Aucun retour dans cette sélection':'Aucune palette dans cette sélection',f.tab==='a-recevoir'?'Rien n’attend de réponse : tout est réceptionné ou remis.':'Les palettes envoyées par les sociétés apparaîtront ici.'):''}</div>
-  <div class="table-footer"><span>${d.total} palette(s)${d.total_restants?' · '+d.total_restants+' colis en attente':''}</span><div class="pagination"><span class="sub" style="margin-right:8px">${d.total?((d.page-1)*d.size+1):0} - ${Math.min(d.page*d.size,d.total)} of ${d.total}</span><button onclick="pcPage(-1)" ${d.page<=1?'disabled':''}>‹</button><span>${d.page} / ${Math.max(1,Math.ceil(d.total/d.size))}</span><button onclick="pcPage(1)" ${d.page*d.size>=d.total?'disabled':''}>›</button></div></div>
+  <div class="table-footer">${listSizeControl(d.size,"changeServerPageSize(this.value,'pc')")}<span>${d.total} palette(s)${d.total_restants?' · '+d.total_restants+' colis en attente':''}</span><div class="pagination"><span class="sub" style="margin-right:8px">${d.total?((d.page-1)*d.size+1):0} - ${Math.min(d.page*d.size,d.total)} of ${d.total}</span><button onclick="pcPage(-1)" ${d.page<=1?'disabled':''}>‹</button><span>${d.page} / ${Math.max(1,Math.ceil(d.total/d.size))}</span><button onclick="pcPage(1)" ${d.page*d.size>=d.total?'disabled':''}>›</button></div></div>
   ${d.reminded?`<p class="pc-reminded">⏰ ${d.reminded} relance(s) envoyée(s) aux vendeurs sans réponse depuis ${pcRelanceDays} jours.</p>`:''}</section>`;
 }
-async function pcGo(e){e.preventDefault();const g=e.target.elements;pcState.date_from=g.date_from.value;pcState.date_to=g.date_to.value;pcState.status=g.status.value;pcState.exc=g.exc.value;pcState.hub_id=g.hub_id.value;pcState.q=g.q.value.trim();pcState.size=Number(g.size.value);pcState.page=1;pcSel=new Set();await renderView()}
+async function pcGo(e){e.preventDefault();const g=e.target.elements;pcState.date_from=g.date_from.value;pcState.date_to=g.date_to.value;pcState.status=g.status.value;pcState.exc=g.exc.value;pcState.hub_id=g.hub_id.value;pcState.q=g.q.value.trim();pcState.size=Number(g.size.value);saveListPageSize(pcState.size);pcState.page=1;pcSel=new Set();await renderView()}
 async function pcTab(t){pcState.tab=t;pcState.page=1;pcSel=new Set();await renderView()}
 async function pcPage(delta){pcState.page+=delta;await renderView()}
 function pcCount(){pcSel=new Set([...document.querySelectorAll('.pc-fus:checked')].map(x=>Number(x.value)));const b=document.getElementById('pc-fusion-btn'),c=document.getElementById('pc-sel-count');if(b)b.textContent='Fusionner'+(pcSel.size?' ('+pcSel.size+')':'');if(c)c.textContent=pcSel.size?'Selected : '+pcSel.size:''}
@@ -180,7 +180,8 @@ async function pcMissOne(id,btn){const trk=btn.dataset.trk
   toast('Colis déclaré non réceptionné — la société sera notifiée à la clôture.');await renderView()}catch(e){toast(e.message,true)}
 }
 /* ---------------------------------------------------- Envoyer Retour (scan) */
-async function pcSendReturn(){
+async function pcSendReturn(){return rpCreate()}
+async function pcLegacySendReturn(){
  const ctx=ppContext('Colis à retourner');pcRetCtx=ctx;pcRetSel=[];pcRetCands=[];
  let cfg=null;try{cfg=await api('/return-palettes/config');if(!ctx.current())return;if(!cfg.hubs.length)throw Error('Aucun hub actif — créez-en un depuis Palettes partenaires.')}catch(e){return ppError(ctx,e)}
  pcRetCtx._cfg=cfg;

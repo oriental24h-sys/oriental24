@@ -1,11 +1,9 @@
 /* Actual server security, intentionally not simulated by the standalone HTML. */
 const RUNTIME=typeof ORIENTAL24_RUNTIME==='object'?ORIENTAL24_RUNTIME:{demo:true,registration:true,version:'1.4'};
 if(!opsOffline){
-  // Le titre et la vue restent accessibles à tous (y compris via « Gérer mes
-  // sessions » dans Mon profil), mais l'entrée de menu latérale est retirée
-  // aux clients (vendeurs comme sociétés de livraison).
+  // Les clients conservent leur accès depuis le profil, hors Admin / Hub.
   titles.security='Sécurité & sessions';
-  menu.push(['COMPTE & ACCÈS',[['security','shield','Sécurité & sessions',['admin','agent','livreur','support']]]]);
+  menu.push(['COMPTE & ACCÈS',[['security','shield','Sécurité & sessions',['livreur','support']]]]);
 }
 const securityDate=v=>v?new Date(v*1000).toLocaleString('fr-FR',{timeZone:'Africa/Casablanca',dateStyle:'medium',timeStyle:'short'}):'—';
 function securityExpired(){if(opsOffline)return;S=null;resetDriverFinance();closeModal();$('#print-root').innerHTML='';$('#root').innerHTML='<div class="boot">ORIENTAL<span>24</span><small>Session terminée. Reconnexion…</small></div>';location.replace('/login')}
@@ -13,5 +11,5 @@ function securityView(d,deployment){const active=d.sessions.filter(s=>s.active);
 function securityCloseOne(id,current){modal(current?'Fermer cette session ?':'Fermer cette autre session ?',form(`<div class="full form-hint">${current?'Vous devrez vous reconnecter.':'Cette connexion ne pourra plus utiliser l’API. Votre session actuelle reste ouverte.'}</div>`,'Confirmer la fermeture'));bindForm(async()=>{const r=await api('/security/sessions/'+id,'DELETE',{});if(r.current){securityExpired();return}closeModal();await renderView();toast('Session révoquée sur le serveur')})}
 function securityCloseOthers(){modal('Fermer toutes les autres sessions',form(`${input('current_password','Votre mot de passe actuel','','password',true,'autocomplete="current-password" maxlength="128"')}<div class="full form-hint">Votre connexion actuelle reste ouverte. Les autres sessions du compte seront révoquées. Aucun e-mail n’est envoyé.</div>`,'Confirmer'));bindForm(async d=>{await api('/security/sessions/revoke-others','POST',d);closeModal();await renderView();toast('Toutes les autres sessions ont été fermées')})}
 const securityBaseProfile=profileView;
-profileView=function(){return securityBaseProfile()+(!opsOffline?`<section class="card ops-margin"><div class="card-head"><div><h3>Connexions et sécurité</h3><p>Consultez vos sessions, leurs expirations et votre historique.</p></div><button class="btn" onclick="navigate('security')">${icon('shield')}Gérer mes sessions</button></div></section>`:'')};
+profileView=function(){return securityBaseProfile()+(!opsOffline&&!adminHubSectionRemoved('security')?`<section class="card ops-margin"><div class="card-head"><div><h3>Connexions et sécurité</h3><p>Consultez vos sessions, leurs expirations et votre historique.</p></div><button class="btn" onclick="navigate('security')">${icon('shield')}Gérer mes sessions</button></div></section>`:'')};
 boot();

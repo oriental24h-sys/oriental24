@@ -58,7 +58,7 @@
       if (state.status && p.status !== state.status) return false;
       if (state.treatment && (state.treatment === 'treated' ? !isParcelTreatedToday(p) : isParcelTreatedToday(p))) return false;
       return true;
-    }).sort((a, b) => (b.created_at > a.created_at ? 1 : -1));
+    }).sort(compareParcelStatusRecency);
   }
   const rangeLabel = () => (!state.from && !state.to) ? 'Toutes les dates' : `${frDay(state.from)} → ${frDay(state.to)}`;
 
