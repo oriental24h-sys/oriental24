@@ -18,12 +18,23 @@ function ppBeep(kind){
   const t=ppAc.currentTime+0.005;
   if(kind==='ok'){ppTone(880,t,0.12,'sine',0.22);ppTone(1320,t+0.09,0.15,'sine',0.22)}
   else if(kind==='done'){ppTone(660,t,0.11);ppTone(880,t+0.09,0.11);ppTone(1320,t+0.19,0.22)}
+  else if(kind==='rx-duplicate'){ppTone(180,t,0.18,'triangle',0.25);ppTone(130,t+0.20,0.25,'triangle',0.25)}
+  else if(kind==='rx-error'){ppTone(520,t,0.09,'square',0.16);ppTone(520,t+0.14,0.09,'square',0.16);ppTone(520,t+0.28,0.09,'square',0.16)}
   else if(kind==='dup'){ppTone(740,t,0.11,'triangle',0.2);ppTone(740,t+0.16,0.11,'triangle',0.2)}
   else{ppTone(200,t,0.15,'square',0.2);ppTone(150,t+0.14,0.26,'square',0.2)}
  }catch(e){}
 }
 function ppVib(kind){try{if(!navigator.vibrate)return;navigator.vibrate(kind==='ok'?70:kind==='done'?[60,50,130]:kind==='dup'?[50,60,50]:[95,60,95])}catch(e){}}
 function ppSignal(kind){ppBeep(kind);ppVib(kind)}
+// Reception-only feedback: no change to outbound transfers or return scans.
+function ppReceptionSignal(kind){ppBeep(kind==='dup'?'rx-duplicate':kind==='err'?'rx-error':kind);ppVib(kind)}
+function ppReceptionGuide(){return 'Présentez le premier colis. Son « validé » = ajouté ; son grave = DOUBLE — commande déjà scannée. Autre erreur : trois bips courts.'}
+function ppReceptionControls(){return `<p class="form-hint">${ppReceptionGuide()}</p><button type="button" class="btn sm" data-o24-snd onclick="window.o24Sound.set(!window.o24Sound.on())">${ppSound?'🔊 Son activé':'🔇 Son coupé'}</button>`}
+async function ppReceiveWithFeedback(send,isCurrent=()=>true){
+ ppUnlockSound();
+ try{const r=await send();if(isCurrent())ppReceptionSignal(r.already_received?'dup':'ok');return r}
+ catch(e){if(isCurrent())ppReceptionSignal('err');throw e}
+}
 function ppSoundToggle(){ppSound=!ppSound;try{localStorage.setItem('o24-pp-sound',ppSound?'1':'0')}catch(e){}const b=document.getElementById('pp-rx-snd');if(b)b.textContent=ppSound?'🔊 Son activé':'🔇 Son coupé';if(ppSound)ppBeep('ok')}
 function ppRxMsg(kind,html){const el=document.getElementById('pp-rx-msg');if(!el)return;el.className='pp-rx-msg'+(kind?' '+kind:'');el.innerHTML=html}
 function ppRxFlash(kind){const box=document.getElementById('pp-rx-box');if(!box)return;box.classList.remove('ok','err','dup');if(kind)box.classList.add(kind);setTimeout(()=>box.classList.remove('ok','err','dup'),1100)}
@@ -112,7 +123,8 @@ function ppReceiveStart(){
  inp.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();go()}});
 }
 /* --- étape 2 : collecte au scan, puis réception groupée --- */
-async function ppReceiveScan(id){
+async function ppReceiveScan(id){return openReceptionCollection('partner',id)}
+async function ppReceiveLegacyScan(id){
  const ctx=ppContext('Réception palette');
  const st={lines:[],byCode:new Map(),scanned:new Map(),cam:null,busy:false};
  modalCleanup=()=>{try{st.cam&&st.cam.stop()}catch(e){}};
@@ -133,7 +145,7 @@ async function ppReceiveScan(id){
    </div>
    <div class="pp-rx-cam" id="pp-rx-cam" hidden><video playsinline muted></video></div>
    <span class="sub pp-rx-camera-state" id="pp-rx-cam-state" aria-live="polite"></span>
-   <div class="pp-rx-msg" id="pp-rx-msg">Présentez le premier colis. Son « validé » = ajouté ; son grave = refusé ou à confirmer.</div></div>`;
+   <div class="pp-rx-msg" id="pp-rx-msg" role="status" aria-live="polite">${ppReceptionGuide()}</div></div>`;
  const validBox=()=>{const n=askList().length,left=remain();
   return `<div class="pp-validate" id="pp-rx-val"><b class="${left?'':'ready'}">${left?('Il reste '+left+' colis à scanner'):(n+' / '+n+' colis scannés ✓')}</b>
    <button class="btn primary" type="button" id="pp-rx-validate" ${left?'disabled':''}>Réceptionner les ${n} colis et valider</button>
@@ -151,16 +163,16 @@ async function ppReceiveScan(id){
  };
  const undo=t=>{const c=norm(t);if(st.scanned.delete(c)){ppBeep('dup');ppRxMsg('dup','Retiré du lot : <b>'+esc(t)+'</b>');paint()}};
  const add=async(code,fromCam)=>{
-  if(st.busy)return;st.busy=true;
+  if(st.busy)return;ppUnlockSound();st.busy=true;
   try{
    const c=norm(code);
    const l=st.byCode.get(c);
-   if(!l){ppSignal('err');if(!fromCam){ppRxFlash('err');ppRxMsg('err','✗ Hors palette : <b>'+esc(code)+'</b> — ce colis n’est pas dans cette palette.')}else{ppRxMsg('err','✗ Hors palette : <b>'+esc(code)+'</b>')}return}
-   if(l.missing_at){ppSignal('err');ppRxMsg('err','✗ <b>'+esc(l.tracking)+'</b> déclaré manquant : à traiter en incident.');return}
-   if(l.received_at){ppSignal('dup');ppRxMsg('dup','<b>'+esc(l.tracking)+'</b> déjà réceptionné.') ;return}
-   if(st.scanned.has(c)){if(!fromCam){ppSignal('dup');ppRxMsg('dup','Déjà scanné : <b>'+esc(l.tracking)+'</b>');}return}
+   if(!l){ppReceptionSignal('err');if(!fromCam){ppRxFlash('err');ppRxMsg('err','✗ Hors palette : <b>'+esc(code)+'</b> — ce colis n’est pas dans cette palette.')}else{ppRxMsg('err','✗ Hors palette : <b>'+esc(code)+'</b>')}return}
+   if(l.missing_at){ppReceptionSignal('err');ppRxMsg('err','✗ <b>'+esc(l.tracking)+'</b> déclaré manquant : à traiter en incident.');return}
+   if(l.received_at){ppReceptionSignal('dup');ppRxFlash('dup');ppRxMsg('dup','DOUBLE — commande déjà scannée / réceptionnée : <b>'+esc(l.tracking)+'</b>. Aucun ajout.') ;return}
+   if(st.scanned.has(c)){ppReceptionSignal('dup');ppRxFlash('dup');ppRxMsg('dup','DOUBLE — commande déjà scannée : <b>'+esc(l.tracking)+'</b>. Aucun ajout.');return}
    st.scanned.set(c,l);
-   ppSignal('ok');ppRxFlash('ok');
+   ppReceptionSignal('ok');ppRxFlash('ok');
    ppRxMsg('ok','✓ Ajouté : <b>'+esc(l.tracking)+'</b> ('+st.scanned.size+'/'+askList().length+')');
    paint();
    if(remain()===0){ppSignal('done');ppRxMsg('ok','Tous les colis sont scannés ✓ — cliquez <b>« Réceptionner les '+askList().length+' colis et valider »</b>.');}
@@ -176,12 +188,12 @@ async function ppReceiveScan(id){
    let r;try{r=await post(cur.revision)}catch(e){if(!CONFLICT_RX.test(String(e.message||'')))throw e;cur=await api('/partner-palettes/'+id);r=await post(cur.revision)}
    closeModal();await renderView();
    toast('Réception validée : '+n+' colis · palette '+((r&&r.status)||'Reçu')+' ✓');
-  }catch(e){if(btn)btn.disabled=false;ppSignal('err');toast(e.message,true)}
+  }catch(e){if(btn)btn.disabled=false;ppReceptionSignal('err');toast(e.message,true)}
  };
  const bind=()=>{
   const one=ctx.node.querySelector('#pp-rx-one'),inp=ctx.node.querySelector('#pp-rx-track');
-  if(inp){inp.focus();inp.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();const t=inp.value.trim();if(!t){ppSignal('err');ppRxMsg('err','Scannez ou saisissez un tracking.');return}inp.value='';add(t,false)}})}
-  if(one)one.onclick=()=>{const t=inp.value.trim();if(!t){ppSignal('err');ppRxMsg('err','Scannez ou saisissez un tracking.');return}inp.value='';add(t,false)};
+  if(inp){inp.focus();inp.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();const t=inp.value.trim();if(!t){ppReceptionSignal('err');ppRxMsg('err','Scannez ou saisissez un tracking.');return}inp.value='';add(t,false)}})}
+  if(one)one.onclick=()=>{const t=inp.value.trim();if(!t){ppReceptionSignal('err');ppRxMsg('err','Scannez ou saisissez un tracking.');return}inp.value='';add(t,false)};
   const rz=ctx.node.querySelector('#pp-rx-reset');if(rz)rz.onclick=()=>{if(!st.scanned.size)return;st.scanned.clear();ppBeep('dup');ppRxMsg('dup','Lot vidé — rescannez les colis.');paint()};
   const list=ctx.node.querySelector('#pp-rx-list');
   if(list)list.onclick=ev=>{const b=ev.target.closest('[data-und]');if(b)undo(b.getAttribute('data-und'))};
@@ -220,3 +232,59 @@ async function ppReceiveScan(id){
 window.o24Sound={unlock:ppUnlockSound,beep:ppBeep,signal:ppSignal,vibrate:ppVib,on:()=>ppSound,set:v=>{ppSound=!!v;try{localStorage.setItem('o24-pp-sound',ppSound?'1':'0')}catch(e){}document.querySelectorAll('[data-o24-snd]').forEach(b=>{b.textContent=ppSound?'🔊 Son activé':'🔇 Son coupé'});if(ppSound)ppBeep('ok')}};
 window.o24Cam=ppRxCam;window.o24CamFormats=ppRxCamFormats;window.o24CamSupported=ppRxCamSupported;
 /* === ORIENTAL24 · palette-scan (fin) === */
+
+/* Seller pickup receipt: collect individual scans, then commit one atomic batch. */
+async function rbCollectReceive(id){
+ if(!['admin','agent'].includes(S?.user?.role))return;
+ const ctx=ppContext('Réception du ramassage');ppUnlockSound();
+ let cam=null,busy=false,frozen=null,doc=null;const scanned=new Map(),norm=v=>String(v||'').trim().toUpperCase();
+ modalCleanup=()=>{try{cam?.stop()}catch(e){}};
+ const current=()=>ctx.current();
+ const message=(kind,text)=>{if(!current())return;const box=ctx.node.querySelector('#rb-collect-feedback');box.className='pp-rx-msg '+kind;box.textContent=text};
+ try{
+  doc=await api('/ramassage-bons/'+id);if(!current())return;
+  const lines=doc.lines.filter(l=>l.active||l.received_at),pending=lines.filter(l=>l.active&&!l.received_at);
+  const byCode=new Map(lines.map(l=>[norm(l.tracking),l]));
+  ctx.node.querySelector('h2').textContent='Réception '+doc.reference;
+  ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">RÉCEPTION AU SCAN · COLLECTE</span><h3>${esc(doc.reference)} · ${esc(doc.client_company||doc.client_name)}</h3><p>${esc(doc.hub_name||'')}</p></div><span>${rbStatusTag(doc.status)}</span></div><div class="pp-progress"><strong id="rb-collect-count">0<small> / ${pending.length} scannés</small></strong><div><b>colis scannés</b><span id="rb-collect-remaining"></span></div></div>
+  <div class="pp-rxbox"><label for="rb-collect-input">Scanner les colis (lecteur USB, clavier ou caméra)</label><form id="rb-collect-form" class="pp-rx-entry"><input id="rb-collect-input" autocomplete="off" maxlength="80" placeholder="Tracking ORIENTAL24 puis Entrée"><button type="submit" class="btn primary">Ajouter ce colis</button><span id="pp-rx-cam-slot"></span><button type="button" class="btn sm" data-o24-snd onclick="window.o24Sound.set(!window.o24Sound.on())">${ppSound?'🔊 Son activé':'🔇 Son coupé'}</button><button type="button" class="btn sm" id="rb-collect-reset">↺ Vider les scans</button></form><div class="pp-rx-cam" id="rb-collect-camera" hidden><video playsinline muted></video></div><span id="rb-collect-camera-state" class="sub" aria-live="polite"></span><div class="pp-rx-msg" id="rb-collect-feedback" role="status" aria-live="polite">${ppReceptionGuide()}</div></div>
+  <div class="pp-rx-list" id="rb-collect-list"></div><div class="pp-validate"><b id="rb-collect-ready"></b><button type="button" class="btn primary" id="rb-collect-confirm" disabled>Réceptionner les ${pending.length} colis et valider</button><p class="sub">Scannez tous les colis restants. Aucune réception n’est enregistrée avant la validation finale.</p></div><div class="pp-actions"><button type="button" class="btn" id="rb-collect-close">Fermer</button></div>`;
+  const input=ctx.node.querySelector('#rb-collect-input'),form=ctx.node.querySelector('#rb-collect-form'),confirm=ctx.node.querySelector('#rb-collect-confirm');
+  const paint=()=>{
+   ctx.node.querySelector('#rb-collect-count').innerHTML=`${scanned.size}<small> / ${pending.length} scannés</small>`;
+   const left=pending.length-scanned.size;
+   ctx.node.querySelector('#rb-collect-ready').className=left?'':'ready';
+   ctx.node.querySelector('#rb-collect-remaining').textContent=left?left+' restant(s) à scanner':'Tous les colis restants sont scannés';
+   ctx.node.querySelector('#rb-collect-ready').textContent=!pending.length?'Aucun colis restant à réceptionner':left?'Il reste '+left+' colis à scanner':scanned.size+' / '+pending.length+' colis scannés ✓';
+   confirm.disabled=busy||left>0||!pending.length||!['Confirmé','En cours'].includes(doc.status);
+   ctx.node.querySelector('#rb-collect-list').innerHTML=lines.map(l=>`<div class="pp-rx-line ${l.received_at?'ok':scanned.has(l.parcel_id)?'scanned':''}"><span class="mono">${esc(l.tracking)}</span><span class="sub">${esc(l.recipient||'')} · ${esc(l.city||'')}</span>${l.received_at?'<span class="tag good">Déjà réceptionné</span>':scanned.has(l.parcel_id)?`<span class="tag good">✓ Scanné</span><button type="button" class="btn sm pp-rx-x" data-rb-undo="${l.parcel_id}" ${busy||frozen?'disabled':''} title="Retirer du lot">✕</button>`:'<span class="tag blue">À scanner</span>'}</div>`).join('');
+  };
+  const add=code=>{
+   if(!current()||busy||frozen)return;ppUnlockSound();const key=norm(code),line=byCode.get(key);
+   if(!key)return;
+   if(!line){ppReceptionSignal('err');message('err','✗ Hors bon : '+code+' — cette commande ne figure pas dans ce ramassage.');return}
+   if(line.received_at||scanned.has(line.parcel_id)){ppReceptionSignal('dup');message('dup','DOUBLE — commande déjà scannée / réceptionnée : '+line.tracking+'. Aucun ajout.');return}
+   if(!line.active||!['Confirmé','En cours'].includes(doc.status)){ppReceptionSignal('err');message('err','Ce bon n’est pas disponible pour réception.');return}
+   scanned.set(line.parcel_id,line);ppReceptionSignal('ok');paint();
+   message('ok','✓ Ajouté : '+line.tracking+' ('+scanned.size+'/'+pending.length+')'+(scanned.size===pending.length?' — tous les colis sont scannés. Validez la réception.':''));
+  };
+  form.onsubmit=e=>{e.preventDefault();const value=input.value;input.value='';add(value);input.focus()};
+  ctx.node.querySelector('#rb-collect-reset').onclick=()=>{if(busy||frozen)return;scanned.clear();paint();message('','Lot vidé — scannez à nouveau les commandes.');input.focus()};
+  ctx.node.querySelector('#rb-collect-list').onclick=e=>{const btn=e.target.closest('[data-rb-undo]');if(!btn||busy||frozen)return;scanned.delete(Number(btn.dataset.rbUndo));paint();message('','Commande retirée de la liste des scans.');input.focus()};
+  ctx.node.querySelector('#rb-collect-close').onclick=()=>closeModal();
+  confirm.onclick=async()=>{
+   if(busy||!current()||scanned.size!==pending.length||!pending.length)return;
+   frozen=frozen||{parcel_ids:[...scanned.keys()],snapshot:doc.snapshot,confirmed:true,request_key:financeKey()};
+   busy=true;input.disabled=true;form.querySelector('button').disabled=true;ctx.node.querySelector('#rb-collect-reset').disabled=true;paint();
+   try{
+    await api('/ramassage-bons/'+id+'/receive-batch','POST',frozen);
+    if(!current())return;cam?.stop();ppReceptionSignal('done');closeModal();await refresh();await renderView();toast('Réception validée : '+pending.length+' colis · '+doc.reference);
+   }catch(e){if(current()){ppReceptionSignal('err');message('err',e.message+' Aucune nouvelle confirmation automatique. Réessayez la même validation, ou fermez et rouvrez le bon pour contrôler les scans.')}}
+   finally{busy=false;if(current())paint()}
+  };
+  paint();input.focus();
+  const slot=ctx.node.querySelector('#pp-rx-cam-slot');slot.innerHTML=await ppRxCamWidget();if(!current())return;
+  const cameraButton=slot.querySelector('#pp-rx-cam-btn');
+  if(cameraButton){cam=ppRxCam(ctx.node.querySelector('#rb-collect-camera'),cameraButton,ctx.node.querySelector('#rb-collect-camera-state'),add,null);cameraButton.onclick=()=>{ppUnlockSound();if(cam.active())cam.stop();else cam.start()}}
+ }catch(e){ppError(ctx,e)}
+}

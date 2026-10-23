@@ -11,6 +11,12 @@
 
   // French is the source language used by the existing screens. Keep API/status values untouched.
   const ENTRIES = [
+    ["Les CMD ramassées", "Collected orders", "الطلبات المستلمة من البائعين"],
+    ["En transit vers le Central", "In transit to Central Hub", "في الطريق إلى المركز الرئيسي"],
+    ["Transfert préparé", "Transfer prepared", "تحويل قيد التحضير"],
+    ["Transferts vers le Central", "Transfers to Central Hub", "التحويلات نحو المركز الرئيسي"],
+
+    ["Présentez le premier colis. Son « validé » = ajouté ; son grave = DOUBLE — commande déjà scannée. Autre erreur : trois bips courts.", "Scan the first parcel. Success sound = added; low sound = DUPLICATE — order already scanned. Other error: three short beeps.", "امسح الطرد الأول. صوت النجاح = تمت الإضافة؛ الصوت الغليظ = مكرر — سبق مسح الطلب. خطأ آخر: ثلاث صفارات قصيرة."],
     ["Paramètres de langue", "Language settings", "إعدادات اللغة"],
     ["Langue de l’interface", "Interface language", "لغة الواجهة"],
     ["Identification & adresse", "Identity & address", "الهوية والعنوان"],

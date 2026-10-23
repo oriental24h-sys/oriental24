@@ -236,7 +236,7 @@ async function printRamassageBon(id) {
 }
 
 /* ------------------------------------------------------------- Réception Hub (scan) */
-let rbScanId = null;
+
 
 async function ramassageReceptionView() {
   const bons = await api("/ramassage-bons/hub/queue");
@@ -251,7 +251,7 @@ async function ramassageReceptionView() {
   return (
     heading(
       "Réception des ramassages",
-      "Scannez chaque colis des bons confirmés destinés à votre Hub. Il passe alors « Ramassé ».",
+      "Scannez tous les colis du bon, puis validez la réception en une seule fois. Aucun colis ne passe « Ramassé » avant la validation finale.",
       `<button class="btn" onclick="renderView()">${icon("refresh")}Actualiser</button>`,
     ) +
     `<section class="card"><div class="card-head"><h3>Bons en attente de réception</h3><span class="tag">${bons.length}</span></div>
@@ -260,69 +260,36 @@ async function ramassageReceptionView() {
   );
 }
 
-function rbScanLinesHtml(b) {
-  return simpleTable(
-    ["Suivi", "Destinataire", "Ville", "Statut", "Réception"],
-    b.lines.map((l) => [
-      `<span class="tracking">${esc(l.tracking)}</span>`,
-      esc(l.recipient || "—"),
-      esc(l.city || "—"),
-      tag(l.parcel_status || ""),
-      l.received_at ? `<span class="tag good">${icon("check")} Reçu</span>` : '<span class="tag warn">En attente</span>',
-    ]),
-  );
-}
+async function openRamassageScan(id) { return rbCollectReceive(id); }
 
-async function openRamassageScan(id) {
-  rbScanId = id;
-  const b = await api("/ramassage-bons/" + id);
-  modal(
-    "Réception · " + b.reference,
-    `<div class="ops-document-head"><div><h3>${esc(b.reference)} ${rbStatusTag(b.status)}</h3>
-        <p>${esc(b.hub_name || "")} · ${esc(b.client_company || b.client_name || "")}<br>
-        Progression : <b id="rb-scan-progress">${b.received}/${b.count}</b></p></div></div>
-      <form id="rb-scan-form" class="field full" style="margin:12px 0">
-        <label for="rb-scan-input">Scanner ou saisir le code de suivi</label>
-        <input id="rb-scan-input" name="tracking" autocomplete="off" placeholder="Ex. O24-100004" required
-               style="text-transform:uppercase;letter-spacing:1px;font-weight:600">
-        <div class="form-actions"><button class="btn primary" type="submit">${icon("scan")}Valider la réception</button></div>
-      </form>
-      <div id="rb-scan-body">${rbScanLinesHtml(b)}</div>`,
-    true,
-  );
-  const input = document.getElementById("rb-scan-input");
-  input?.focus();
-  document.getElementById("rb-scan-form").onsubmit = async (e) => {
-    e.preventDefault();
-    const tracking = input.value.trim();
-    if (!tracking) return;
-    try {
-      const r = await api("/ramassage-bons/" + id + "/receive", "POST", { tracking });
-      toast(r.already_received ? "Colis déjà réceptionné" : "Colis réceptionné · état « Ramassé »");
-    } catch (err) {
-      toast(err.message, true);
-    }
-    input.value = "";
-    input.focus();
-    await refreshRamassageScan(id);
-  };
-}
-
-async function refreshRamassageScan(id) {
-  try {
-    const b = await api("/ramassage-bons/" + id);
-    const body = document.getElementById("rb-scan-body");
-    const prog = document.getElementById("rb-scan-progress");
-    if (body) body.innerHTML = rbScanLinesHtml(b);
-    if (prog) prog.textContent = `${b.received}/${b.count}`;
-    if (b.status === "Reçu") {
-      toast("Bon complet · tous les colis réceptionnés au Hub");
-      setTimeout(() => {
-        if (rbScanId === id) closeModal();
-      }, 900);
-      await renderView();
-    }
-  } catch (e) {
-    /* le bon a peut-être été fermé ; on ignore l'actualisation */
-  }
+/* Read-only custody list: pickup receipt -> confirmed Central receipt. */
+let rbCollectedFilters={q:'',state:'',hub_id:'',page:1},rbCollectedOwner=null;
+function rbCollectedFilter(name,value){rbCollectedFilters[name]=value;rbCollectedFilters.page=1;renderView()}
+function rbCollectedPage(page){rbCollectedFilters.page=page;renderView()}
+async function ramassageCollectedView(){
+ const owner=S.user.id+':'+S.user.role;
+ if(rbCollectedOwner!==owner){rbCollectedOwner=owner;rbCollectedFilters={q:'',state:'',hub_id:'',page:1}}
+ const f=rbCollectedFilters,d=await api('/ramassage-bons/hub/collected?'+new URLSearchParams(f));
+ const labels={at_hub:'Au Hub',prepared:'Transfert préparé',transit:'En transit vers le Central',review:'À vérifier'};
+ const colors={at_hub:'good',prepared:'blue',transit:'warn',review:'bad'};
+ const rows=d.rows.map(p=>[
+  `<span class="tracking">${esc(p.tracking)}</span><span class="sub">${esc(p.recipient||'')}</span>`,
+  `${esc(p.client_company||p.client_name)}<span class="sub">${esc(p.city||'')}</span>`,
+  `${esc(p.hub_name)}<span class="sub">${esc(p.bon_reference)}</span>`,
+  date(p.received_at),
+  `<span class="tag ${colors[p.state]}">${esc(labels[p.state])}</span><span class="sub">${esc(p.parcel_status)}</span>`,
+  p.transfer_id?`<button class="btn sm" onclick="openOpsDocument(${Number(p.transfer_id)})">${esc(p.transfer_reference)}</button>`:'—'
+ ]);
+ const n=Object.values(d.counts).reduce((a,b)=>a+b,0),pages=Math.max(1,Math.ceil(d.total/d.size));
+ return heading('Les CMD ramassées','Commandes Vendeur reçues par votre Hub. Elles restent dans cette liste, y compris en transit, jusqu’à leur réception physique confirmée au Hub Central.',`<button class="btn" onclick="renderView()">${icon('refresh')}Actualiser</button><button class="btn primary" onclick="navigate('palette-hub')">${icon('truck')}Transferts vers le Central</button>`)+
+ `<section class="stats">${stat('À suivre',n,'','box','blue','Jusqu’à réception au Central')}${stat('Au Hub',(d.counts.at_hub||0)+(d.counts.prepared||0),'','pin','green','Dont transferts préparés')}${stat('En transit',d.counts.transit||0,'','truck','purple','Réception Central attendue')}${stat('À vérifier',d.counts.review||0,'','alert','orange','Situation opérationnelle différente')}</section>
+ ${!d.central_hub_id?'<p class="form-hint orange">Aucun Hub Central configuré. Demandez à Admin de le désigner ; aucune commande n’est masquée pour ce motif.</p>':''}
+ <section class="card"><form class="pp-filters" onsubmit="event.preventDefault();rbCollectedFilter('q',this.elements.q.value)">
+ <label class="field"><span>Tracking / vendeur / bon</span><input name="q" value="${esc(f.q)}" maxlength="120" placeholder="Rechercher une commande"></label>
+ <label class="field"><span>Situation</span><select onchange="rbCollectedFilter('state',this.value)"><option value="">Toutes</option>${Object.entries(labels).map(([k,v])=>`<option value="${k}" ${f.state===k?'selected':''}>${esc(v)}</option>`).join('')}</select></label>
+ ${S.user.role==='admin'?`<label class="field"><span>Hub d’origine</span><select onchange="rbCollectedFilter('hub_id',this.value)"><option value="">Tous les Hubs</option>${d.hubs.map(h=>`<option value="${h.id}" ${String(f.hub_id)===String(h.id)?'selected':''}>${esc(h.name)}</option>`).join('')}</select></label>`:''}
+ <button class="btn" type="submit">Rechercher</button></form>
+ <div class="card-head"><h3>${d.total} commande(s) à suivre</h3></div>
+ ${simpleTable(['Commande','Vendeur / Ville','Hub / Bon','Réception au Hub','Situation','Transfert'],rows)}
+ <div class="pp-actions" style="padding:0 20px"><button class="btn sm" ${d.page<=1?'disabled':''} onclick="rbCollectedPage(${d.page-1})">Précédent</button><span class="sub">Page ${d.page} / ${pages}</span><button class="btn sm" ${d.page>=pages?'disabled':''} onclick="rbCollectedPage(${d.page+1})">Suivant</button></div></section>`;
 }

@@ -103,6 +103,10 @@ async function pcExceptions(kind,id){
  }catch(e){ppError(ctx,e)}
 }
 async function pcConfirmRecovered(id,tracking){
+ try{const d=await api('/palette-console/partner/'+id);const line=d.lines.find(l=>l.tracking===tracking);
+ if(!line)throw Error('Colis introuvable.');return openReceptionCollection('recovered',line.id)}catch(e){toast(e.message,true)}
+}
+async function pcLegacyConfirmRecovered(id,tracking){
  const ctx=ppContext('Confirmer la réception');
  try{
   const d=await api('/palette-console/partner/'+id);if(!ctx.current())return;
@@ -141,7 +145,8 @@ async function pcMore(kind,id,el){const row=document.getElementById('pc-more-'+k
   row.querySelector('.pc-morebox').innerHTML=`<h4>Activités</h4>${acts}${atts}`;
  }catch(e){if(!row.hidden)row.querySelector('.pc-morebox').textContent=e.message}}
 /* ---------------------------------------------------- Reception Palette (scan) */
- async function pcRecep(id){
+ async function pcRecep(id){return openReceptionCollection('partner',id)}
+async function pcLegacyRecep(id){
  const ctx=ppContext('Reception Palette');
  pcRChecked=new Set();
  const draw=()=>{if(!ctx.current()||!pcRDoc)return;const d=pcRDoc;window.__pcRDraw=draw;

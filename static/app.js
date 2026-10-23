@@ -444,6 +444,7 @@ const menu = [
 ["parcels", "box", "Colis"],
       ["pickups", "truck", "Ramassages", ["admin", "client"]],
       ["ramassage-reception", "scan", "Réception ramassage", ["admin", "agent"]],
+      ["ramassage-collected", "box", "Les CMD ramassées", ["admin", "agent"]],
       ["pallets", "layers", "Palettes", ["admin"]],
       ["stock", "layers", "Stock & produits", ["admin", "client"]],
       ["print", "print", "Impression"],
@@ -476,6 +477,7 @@ const titles = {
   parcels: "Gestion des colis",
   pickups: "Ramassages",
   "ramassage-reception": "Réception ramassage",
+  "ramassage-collected": "Les CMD ramassées",
   pallets: "Palettes",
   stock: "Stock & produits",
   print: "Centre d’impression",
@@ -557,7 +559,7 @@ function shell() {
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','ramassage-reception','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
           ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${workspacePageTitle(key,t)}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
@@ -570,7 +572,7 @@ async function navigate(v) {
   if (!S) return;
   if (clientSectionRemoved(v)) v = 'dashboard';
   // Responsable de hub : navigation limitée aux tâches et vues explicitement sûres.
-  if (S.user.role==='agent'&&!['parcels','documents','ramassage-reception','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
+  if (S.user.role==='agent'&&!['parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
   if (S.user.role==='support'&&!['support-orders','profile'].includes(v)) v='support-orders';
   if (S.user.role === "livreur" && ["parcels","dashboard","print"].includes(v)) { try { const owner=S.user.id,fresh=await api("/bootstrap"); if(S?.user?.id!==owner||fresh.user.id!==owner)return; S=fresh; } catch(e) {toast(e.message,true);return;} }
   view = v;
@@ -647,6 +649,9 @@ async function renderView(background = false) {
         break;
       case "pickups":
         html = await ramassageBonsView();
+        break;
+      case "ramassage-collected":
+        html = await ramassageCollectedView();
         break;
       case "ramassage-reception":
         html = await ramassageReceptionView();
