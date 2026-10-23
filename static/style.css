@@ -567,6 +567,82 @@ svg.ico {
   color: var(--muted);
   font-size: 9px;
 }
+/* Menu utilisateur (Profil / Déconnexion) — tous les tableaux de bord. */
+.top-profile-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.user-popover {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  min-width: 218px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 18px 44px rgba(7, 29, 60, 0.16);
+  padding: 8px;
+  z-index: 120;
+  text-align: left;
+}
+.user-popover[hidden] {
+  display: none;
+}
+.user-popover::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  right: 24px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-left: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+  transform: rotate(45deg);
+}
+.user-popover button {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+.user-popover button:hover {
+  background: #f4f6fa;
+}
+.user-popover button .user-pop-ico {
+  display: inline-flex;
+}
+.user-popover button .user-pop-ico .ico {
+  width: 17px;
+  height: 17px;
+  color: #5f6d84;
+}
+.user-popover button.danger {
+  color: #c0392b;
+}
+.user-popover button.danger .user-pop-ico .ico {
+  color: #c0392b;
+}
+/* Vue fusionnée « Demandes & réclamations » : onglets et espacement des panneaux. */
+.support-inbox-tabs {
+  margin-bottom: 16px;
+}
+#support-tab-requests .card {
+  margin-bottom: 16px;
+}
+#support-tab-requests .card:last-of-type {
+  margin-bottom: 0;
+}
 .content {
   max-width: 1630px;
   margin: auto;
@@ -2430,3 +2506,9 @@ td strong {
 .global-result-state{font-size:11px;flex-shrink:0;color:#526980}
 @media(max-width:1200px){.topbar-pro .global-search-form,.global-search-form{display:flex!important;width:170px!important;min-width:0!important;padding:9px!important}.global-search-form kbd{display:none}.global-parcel-results{position:fixed;top:76px;left:16px;right:16px;width:auto;max-height:60vh}}
 @media(max-width:1200px){.topbar.topbar-pro:has(.global-search-form){height:auto!important;min-height:100px;flex-wrap:wrap;padding-top:8px!important;padding-bottom:8px!important;gap:8px}.topbar-pro:has(.global-search-form) .top-actions{width:100%;min-width:0;flex-wrap:wrap}.topbar-pro .global-search-form{flex:1 1 120px;width:auto!important}.global-parcel-results{top:var(--search-results-top,115px)}}
+
+.client-profile-extras{display:grid;gap:18px;margin-top:18px}.client-profile-extras>form{display:grid;gap:18px}.profile-extra-body{padding:22px}.profile-extra-body>.sub{margin:0 0 16px}.profile-extra-body .form-grid{padding:0}.profile-notification-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 28px}.profile-notification-option{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:10px 0;border-bottom:1px solid #f0f3f7;font-size:12px}.profile-notification-option input{width:18px;height:18px;accent-color:#f58024;flex-shrink:0}.profile-extra-body .table-wrap{margin-bottom:16px}.profile-extra-body .form-hint{margin:12px 0}.profile-extra-body .field{min-width:0}.client-profile-extras .form-error:empty{display:none}@media(max-width:600px){.profile-notification-grid{grid-template-columns:1fr}.profile-extra-body{padding:16px}.profile-extra-body .btn{max-width:100%;white-space:normal}}
+#content:has(.client-profile-extras) .profile-card{max-width:none;width:100%}
+.profile-notification-option input{appearance:none;-webkit-appearance:none;width:36px;height:20px;background:#d9e0e9;border:0;border-radius:20px;position:relative;cursor:pointer;transition:background .15s}
+.profile-notification-option input:before{content:"";position:absolute;width:14px;height:14px;border-radius:50%;background:white;top:3px;left:3px;box-shadow:0 1px 3px #0002;transition:transform .15s}
+.profile-notification-option input:checked{background:#ed7b25}.profile-notification-option input:checked:before{transform:translateX(16px)}.profile-notification-option input:focus-visible{outline:2px solid #143b65;outline-offset:3px}

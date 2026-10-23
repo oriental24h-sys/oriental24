@@ -14,8 +14,7 @@ if(!opsOffline){
   ['stock-analytics','chart','Analyse produits',['admin','client']],
   ['ops-settings','settings','Hubs & motifs',['admin']],
   ['ops-analytics','chart','Activité enregistrée',['admin']],
-  ['account-dossiers','shield','Dossiers comptes'],
-  ['notifications','bell','Notifications']
+  ['account-dossiers','shield','Dossiers comptes']
  ]]);
  Object.assign(titles,{documents:'Documents & transferts','hub-dashboard':'Activité de mon Hub','hub-invoices':'Factures COD des Hubs','hub-driver-statements':'Relevés des livreurs','hub-cod':'Caisse COD des Hubs','ops-settings':'Hubs & motifs','ops-analytics':'Activité enregistrée',notifications:'Notifications internes',fulfillment:'Préparation des commandes','account-dossiers':'Dossiers administratifs','stock-analytics':'Analyse produits'});
 }

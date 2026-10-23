@@ -88,8 +88,6 @@
     col = side.parentElement.classList.contains('sidebar-col') ? side.parentElement : null;
     if (!col) { col = document.createElement('div'); col.className = 'sidebar-col'; side.parentNode.insertBefore(col, side); col.appendChild(side); }
     r.classList.add('sticky-nav');
-    const bottom = side.querySelector('.sidebar-bottom');
-    if (bottom && !bottom.querySelector('.sidebar-help-compact')) bottom.insertAdjacentHTML('afterbegin', `<button type="button" class="nav-item sidebar-help-compact" title="Besoin d’un coup de main ?" aria-label="Besoin d’un coup de main ? Ouvrir les réclamations" onclick="navigate('tickets')">${icon('help')}</button>`);
     lastY = window.scrollY; mode = 'top'; pinTop = 0; margin = 0; apply(0, 0);
     side.addEventListener('focusin', onFocus);
     observer = new ResizeObserver(() => update(true));

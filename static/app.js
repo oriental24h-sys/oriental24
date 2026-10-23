@@ -460,15 +460,13 @@ const menu = [
       ["supports", "headset", "Supports", ["admin"]],
       ["support-orders", "headset", "Suivre les commandes", ["support"]],
       ["audit-log", "shield", "Journal d’audit", ["admin"]],
-      ["requests", "return", "Demandes"],
-      ["tickets", "ticket", "Réclamations"],
+      ["tickets", "ticket", "Demandes & réclamations"],
     ],
   ],
   [
     "ESPACE PERSONNEL",
     [
       ["settings", "settings", "Paramètres", ["admin"]],
-      ["profile", "user", "Mon profil"],
     ],
   ],
 ];
@@ -488,8 +486,8 @@ const titles = {
   supports: "Comptes Support",
   "support-orders": "Suivi des commandes",
   "audit-log": "Journal d’audit",
-  requests: "Demandes de modification",
-  tickets: "Réclamations",
+  requests: "Demandes & réclamations",
+  tickets: "Demandes & réclamations",
   settings: "Paramètres",
   profile: "Mon profil",
   analytics: "Statistiques & performance",
@@ -566,7 +564,7 @@ function shell() {
       })
       .join(
         "",
-      )}</nav><div class="sidebar-bottom"><div class="sidebar-help"><div class="flex">${icon(u.role==='support'?'headset':'help')}<b>${u.role==='support'?'Suivi des commandes':'Besoin d’un coup de main ?'}</b></div>${u.role==='support'?'Vous voyez uniquement les commandes affectées à vos villes.':'Notre équipe vous accompagne.'}<button onclick="${u.role==='support'?'refreshSupportOrders()':"navigate('tickets')"}">${u.role==='support'?'Actualiser le suivi →':'Ouvrir les réclamations →'}</button></div><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${workspacePageTitle(view)}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':globalSearchMarkup()}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<button class="top-profile" onclick="navigate('profile')"><span class="avatar orange">${profileAvatarContent(u)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button></div></header><main class="content" id="content"></main></div>`;
+      )}</nav><div class="sidebar-bottom"><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${workspacePageTitle(view)}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':globalSearchMarkup()}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<div class="top-profile-wrap"><button type="button" class="top-profile" id="user-menu-btn" aria-haspopup="true" aria-expanded="false" onclick="toggleUserMenu(event)"><span class="avatar orange">${profileAvatarContent(u)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button><div class="user-popover" id="user-popover" role="menu" hidden><button type="button" role="menuitem" onclick="userMenuGo('profile')"><span class="user-pop-ico" aria-hidden="true">${icon("user")}</span><span>Profil</span></button><button type="button" role="menuitem" class="danger" onclick="userMenuGo('logout')"><span class="user-pop-ico" aria-hidden="true">${icon("logout")}</span><span>Déconnexion</span></button></div></div></div></header><main class="content" id="content"></main></div>`;
 }
 async function navigate(v) {
   if (!S) return;
@@ -645,7 +643,7 @@ async function renderView(background = false) {
         html = printView();
         break;
       case "tickets":
-        html = ticketsView(await api("/tickets"));
+        html = await loadSupportInbox("tickets");
         break;
       case "pickups":
         html = await ramassageBonsView();
@@ -736,11 +734,8 @@ async function renderView(background = false) {
         );
         break;
       case "requests": {
-        const [priceRequests, recipientRequests] = await Promise.all([
-          api("/requests"),
-          api("/recipient-change-requests"),
-        ]);
-        html = requestsView(priceRequests, recipientRequests);
+        /* Ancien chemin conservé : ouvre directement l'onglet « Demandes » de la vue fusionnée. */
+        html = await loadSupportInbox("requests");
         break;
       }
     }
@@ -1390,6 +1385,37 @@ function bindProfile() {
   }, "profile-form");
   loadPortalLink();
 }
+/* Menu utilisateur de la barre supérieure : Profil / Déconnexion, tous rôles. */
+function toggleUserMenu(event) {
+  if (event) event.stopPropagation();
+  const pop = document.getElementById("user-popover"),
+    btn = document.getElementById("user-menu-btn");
+  if (!pop || !btn) return;
+  if (pop.hasAttribute("hidden")) {
+    pop.removeAttribute("hidden");
+    btn.setAttribute("aria-expanded", "true");
+  } else closeUserMenu();
+}
+function closeUserMenu() {
+  const pop = document.getElementById("user-popover"),
+    btn = document.getElementById("user-menu-btn");
+  if (pop) pop.setAttribute("hidden", "");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+function userMenuGo(action) {
+  closeUserMenu();
+  if (action === "logout") return logout();
+  return navigate("profile");
+}
+if (!window.__o24UserMenuEvents) {
+  window.__o24UserMenuEvents = true;
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest || !e.target.closest(".top-profile-wrap")) closeUserMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeUserMenu();
+  });
+}
 async function logout() {
   try {
     await api("/logout", "POST");
@@ -1551,26 +1577,92 @@ function simpleTable(headers, rows) {
     ? `<div class="table-wrap"><table><thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((v) => `<td>${v}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
     : empty();
 }
-function ticketsView(rows) {
+/* Vues fusionnées « Demandes & réclamations » : un seul point de menu, deux onglets. */
+let supportInboxTab = "tickets";
+function supportInboxCanRequest() {
+  return ["admin", "client", "livreur"].includes(S.user.role);
+}
+function ticketsPane(rows) {
+  return `<div class="card"><div class="card-head"><h3>Mes échanges</h3><span class="tag">${rows.length} ticket${rows.length > 1 ? "s" : ""}</span></div>${simpleTable(
+    ["Ticket", "Sujet", "Auteur", "Catégorie", "Statut", "Créé le", ""],
+    rows.map((t) => [
+      `<span class="tracking">TKT-${String(t.id).padStart(4, "0")}</span>`,
+      `<strong>${esc(t.subject)}</strong>${t.tracking?`<span class="sub">${esc(t.tracking)} · ${esc(t.priority)}</span>`:""}`,
+      esc(t.author),
+      esc(t.category),
+      tag(t.status),
+      date(t.created_at),
+      `<button class="btn sm" onclick="ticketDetail(${t.id})">Ouvrir ${icon("chevron")}</button>`,
+    ]),
+  )}</div>`;
+}
+function requestsPane(rows, recipientRows = []) {
+  recipientRequestRows=recipientRows;
+  const isAdmin = S.user.role === "admin";
+  const priceTable = `<section class="card"><div class="card-head"><h3>Demandes de changement de prix</h3><span class="tag">${rows.length} demandes</span></div>${simpleTable(
+    ["Demande", "Colis", "Demandeur", "Montant demandé", "Motif", "Statut", ""],
+    rows.map((r) => [
+      `<span class="tracking">DEM-${String(r.id).padStart(4, "0")}</span>`,
+      esc(r.tracking), esc(r.author), `<strong>${money(r.amount)} MAD</strong>`, `<span data-no-translate>${esc(r.reason)}</span>`, tag(r.status),
+      isAdmin && r.status === "En attente"
+        ? `<div class="flex"><button class="btn sm" onclick="decideRequest(${r.id},true)">${icon("check")}Accepter</button><button class="btn sm danger" onclick="decideRequest(${r.id},false)">Refuser</button></div>`
+        : "—",
+    ]),
+  )}</section>`;
+  const recipientTable = !isAdmin ? "" : `<section class="card recipient-requests-card"><div class="card-head"><div><h3>Demandes de changement de destinataire</h3><p>Les coordonnées avant et après restent consultables dans la demande et la Chronologie.</p></div><span class="tag">${recipientRows.filter(r => r.status === "En attente").length} en attente</span></div>${recipientRows.length ? simpleTable(
+    ["Demande", "Colis", "Client", "Coordonnées avant", "Nouvelles coordonnées", "Motif", "Date", "Statut", ""],
+    recipientRows.map((r) => [
+      `<span class="tracking">DEST-${String(r.id).padStart(4, "0")}</span>`,
+      `<button class="tracking" onclick="parcelDetail(${Number(r.parcel_id)})">${esc(r.tracking)}</button><span class="sub">Statut colis : ${esc(r.parcel_status||"—")}</span>`,
+      `${esc(r.company || r.author)}<span class="sub">${esc(r.author)}</span>`,
+      recipientRequestSnapshot(r,false),recipientRequestSnapshot(r,true),
+      `<span data-no-translate>${esc(r.reason || "—")}</span>`, `<span>${date(r.created_at)}</span>`, tag(r.status),
+      isAdmin && r.status === "En attente"
+        ? `<div class="flex">${['Livré','Retourné'].includes(r.parcel_status)?`<span class="sub recipient-change-accept-locked">Acceptation impossible · ${esc(r.parcel_status)}</span>`:`<button class="btn sm" onclick="decideRecipientChange(${r.id},true)">${icon("check")}Accepter</button>`}<button class="btn sm danger" onclick="decideRecipientChange(${r.id},false)">Refuser</button></div>`
+        : (r.admin_note ? `<span data-no-translate>${esc(r.admin_note)}</span>` : "—"),
+    ]),
+  ) : empty("Aucune demande de changement", "Les prochaines demandes des clients apparaîtront ici.")}</section>`;
+  return priceTable + recipientTable + `<p class="sub" style="margin-top:18px">Pour créer une demande de prix, ouvrez un colis non clôturé. Le changement de destinataire se demande depuis la ligne du colis client, uniquement avant les statuts Livré ou Retourné.</p>`;
+}
+function supportInboxTabButton(key, label, count) {
+  const active = supportInboxTab === key;
+  return `<button type="button" class="${active ? "active" : ""}" aria-pressed="${active}" onclick="switchSupportInbox('${key}')">${label}<span class="pilotage-tab-count">${count}</span></button>`;
+}
+function supportInboxView(data) {
+  const withRequests = supportInboxCanRequest();
+  if (!withRequests) supportInboxTab = "tickets";
+  const requestCount = (data.priceRequests?.length || 0) + (data.recipientRequests?.length || 0);
+  const tabs = withRequests
+    ? `<div class="tabs support-inbox-tabs" role="group" aria-label="Demandes et réclamations">${supportInboxTabButton("tickets", "Réclamations", data.tickets.length)}${supportInboxTabButton("requests", "Demandes", requestCount)}</div>`
+    : "";
   return (
     heading(
-      "Réclamations",
-      "Un échange, une solution. Suivez toutes vos demandes.",
+      "Demandes & réclamations",
+      "Vos réclamations et vos demandes de modification réunies au même endroit.",
       `<button class="btn primary" onclick="newTicket()">${icon("plus")}Nouvelle réclamation</button>`,
     ) +
-    `<div class="card"><div class="card-head"><h3>Mes échanges</h3><span class="tag">${rows.length} tickets</span></div>${simpleTable(
-      ["Ticket", "Sujet", "Auteur", "Catégorie", "Statut", "Créé le", ""],
-      rows.map((t) => [
-        `<span class="tracking">TKT-${String(t.id).padStart(4, "0")}</span>`,
-        `<strong>${esc(t.subject)}</strong>${t.tracking?`<span class="sub">${esc(t.tracking)} · ${esc(t.priority)}</span>`:""}`,
-        esc(t.author),
-        esc(t.category),
-        tag(t.status),
-        date(t.created_at),
-        `<button class="btn sm" onclick="ticketDetail(${t.id})">Ouvrir ${icon("chevron")}</button>`,
-      ]),
-    )}</div>`
+    `${tabs}<div id="support-tab-tickets" ${supportInboxTab !== "tickets" ? "hidden" : ""}>${ticketsPane(data.tickets)}</div>${withRequests ? `<div id="support-tab-requests" ${supportInboxTab !== "requests" ? "hidden" : ""}>${requestsPane(data.priceRequests, data.recipientRequests)}</div>` : ""}`
   );
+}
+function switchSupportInbox(tab) {
+  supportInboxTab = tab;
+  const ticketsPaneEl = document.getElementById("support-tab-tickets"),
+    requestsPaneEl = document.getElementById("support-tab-requests");
+  if (ticketsPaneEl) ticketsPaneEl.toggleAttribute("hidden", tab !== "tickets");
+  if (requestsPaneEl) requestsPaneEl.toggleAttribute("hidden", tab !== "requests");
+  document.querySelectorAll(".support-inbox-tabs button").forEach((b, i) => {
+    const active = (tab === "tickets" && i === 0) || (tab === "requests" && i === 1);
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-pressed", String(active));
+  });
+}
+async function loadSupportInbox(initialTab = "tickets") {
+  supportInboxTab = supportInboxCanRequest() ? initialTab : "tickets";
+  const tickets = await api("/tickets");
+  if (!supportInboxCanRequest()) return supportInboxView({ tickets, priceRequests: [], recipientRequests: [] });
+  const priceRequests = await api("/requests");
+  const recipientRequests = S.user.role === "admin" ? await api("/recipient-change-requests") : [];
+  return supportInboxView({ tickets, priceRequests, recipientRequests });
 }
 function newTicket() {
   modal(
@@ -1874,36 +1966,9 @@ function recipientRequestSnapshot(r,after=false){
   const address=after?(r.requested_address_display||r.requested_address||r.current_address):(r.old_address_display||r.old_address||r.current_address);
   return `<div class="recipient-request-contact" data-no-translate><strong>${esc(name||'—')}</strong><span class="sub">☎ ${esc(phone||'—')} · ${esc(city||'—')}</span><span class="sub">${esc(address||'Adresse non renseignée')}</span></div>`;
 }
+/* Conservée comme enveloppe de compatibilité (ancien appelant éventuel). */
 function requestsView(rows, recipientRows = []) {
-  recipientRequestRows=recipientRows;
-  const priceTable = `<section class="card"><div class="card-head"><h3>Demandes de changement de prix</h3><span class="tag">${rows.length} demandes</span></div>${simpleTable(
-    ["Demande", "Colis", "Demandeur", "Montant demandé", "Motif", "Statut", ""],
-    rows.map((r) => [
-      `<span class="tracking">DEM-${String(r.id).padStart(4, "0")}</span>`,
-      esc(r.tracking), esc(r.author), `<strong>${money(r.amount)} MAD</strong>`, `<span data-no-translate>${esc(r.reason)}</span>`, tag(r.status),
-      S.user.role === "admin" && r.status === "En attente"
-        ? `<div class="flex"><button class="btn sm" onclick="decideRequest(${r.id},true)">${icon("check")}Accepter</button><button class="btn sm danger" onclick="decideRequest(${r.id},false)">Refuser</button></div>`
-        : "—",
-    ]),
-  )}</section>`;
-  const recipientTable = `<section class="card recipient-requests-card"><div class="card-head"><div><h3>Demandes de changement de destinataire</h3><p>Les coordonnées avant et après restent consultables dans la demande et la Chronologie.</p></div><span class="tag">${recipientRows.filter(r => r.status === "En attente").length} en attente</span></div>${recipientRows.length ? simpleTable(
-    ["Demande", "Colis", "Client", "Coordonnées avant", "Nouvelles coordonnées", "Motif", "Date", "Statut", ""],
-    recipientRows.map((r) => [
-      `<span class="tracking">DEST-${String(r.id).padStart(4, "0")}</span>`,
-      `<button class="tracking" onclick="parcelDetail(${Number(r.parcel_id)})">${esc(r.tracking)}</button><span class="sub">Statut colis : ${esc(r.parcel_status||'—')}</span>`,
-      `${esc(r.company || r.author)}<span class="sub">${esc(r.author)}</span>`,
-      recipientRequestSnapshot(r,false),recipientRequestSnapshot(r,true),
-      `<span data-no-translate>${esc(r.reason || "—")}</span>`, `<span>${date(r.created_at)}</span>`, tag(r.status),
-      S.user.role === "admin" && r.status === "En attente"
-        ? `<div class="flex">${['Livré','Retourné'].includes(r.parcel_status)?`<span class="sub recipient-change-accept-locked">Acceptation impossible · ${esc(r.parcel_status)}</span>`:`<button class="btn sm" onclick="decideRecipientChange(${r.id},true)">${icon("check")}Accepter</button>`}<button class="btn sm danger" onclick="decideRecipientChange(${r.id},false)">Refuser</button></div>`
-        : (r.admin_note ? `<span data-no-translate>${esc(r.admin_note)}</span>` : "—"),
-    ]),
-  ) : empty("Aucune demande de changement", "Les prochaines demandes des clients apparaîtront ici.")}</section>`;
-  return heading(
-    "Demandes de modification",
-    "Demandes de prix et changements de destinataire, traités par l’administration.",
-    `<button class="btn" onclick="navigate('parcels')">${icon("box")}Ouvrir un colis</button>`,
-  ) + priceTable + recipientTable + `<p class="sub" style="margin-top:18px">Pour créer une demande de prix, ouvrez un colis non clôturé. Le changement de destinataire se demande depuis la ligne du colis client, uniquement avant les statuts Livré ou Retourné.</p>`;
+  return requestsPane(rows, recipientRows);
 }
 function decideRecipientChange(id, accept) {
   const r=recipientRequestRows.find(x=>Number(x.id)===Number(id));
