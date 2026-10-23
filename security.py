@@ -139,7 +139,7 @@ def register_security(app,services):
             response.headers['X-Frame-Options']='DENY'
             # Inline handlers in the current SPA prevent a strict script-src policy yet.
             response.headers['Content-Security-Policy']="frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
-        response.headers['Permissions-Policy']='geolocation=(), microphone=(), camera=(self)'
+        response.headers['Permissions-Policy']='geolocation=(self), microphone=(), camera=(self)'
         return response
     @app.get('/api/security/sessions')
     @auth()
