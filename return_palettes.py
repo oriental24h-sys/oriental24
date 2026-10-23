@@ -166,7 +166,7 @@ def register_return_palettes(app,s):
                     where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(COALESCE(m.tracking_code,'')),lower(?))>0 OR EXISTS(SELECT 1 FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=d.id AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0 OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0)))");args.extend([q]*5)
                 try:
                     page=int(request.args.get('page',1));size=int(request.args.get('size',20))
-                    if page<1 or size not in [20,50,100]:raise ValueError()
+                    if page<1 or size not in [10,20,30,50,80,100,200,500]:raise ValueError()
                 except (ValueError,TypeError):raise Error('Pagination invalide.')
                 sql=' FROM ops_documents d JOIN return_palette_meta m ON m.document_id=d.id WHERE '+' AND '.join(where)
                 total=c.execute('SELECT count(*)'+sql,args).fetchone()[0];page=min(page,max(1,(total+size-1)//size))
@@ -290,3 +290,21 @@ def register_return_palettes(app,s):
         return doc,lines(c,did)
 
     s.setdefault('reception_adapters',{})['return']={'load':collection_load,'apply':collection_apply}
+
+    def dispatch_collection_load(c,did,u):
+        creator(u);doc=get(c,did,u)
+        doc['hub_snapshot']=hub(c,doc['destination_hub_id'],u)
+        return doc,lines(c,did)
+
+    def dispatch_collection_check(c,doc,line,u):
+        p=c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
+        lockcheck(c,p,doc['client_id'],doc['destination_hub_id'],doc['id'])
+        if not line['active'] or line['tracking']!=p['tracking']:raise Error('Contenu du manifeste modifié.',409)
+
+    def dispatch_collection_apply(c,doc,ls,u):
+        at=now();did=doc['id']
+        c.execute("UPDATE ops_documents SET status='En transit',dispatched_at=?,revision=revision+1 WHERE id=?",(at,did))
+        audit(c,did,u,'Retour expédié après collecte des scans',{'count':len(ls),'trackings':[l['tracking'] for l in ls],'transport':doc['transport'],'tracking_code':doc['tracking_code'],'lots':doc['lots']})
+        for l in ls:event(c,l['parcel_id'],l['initial_status'],doc['reference']+' · retour expédié au vendeur, remise encore attendue',u)
+
+    s.setdefault('dispatch_adapters',{})['return']={'load':dispatch_collection_load,'check':dispatch_collection_check,'apply':dispatch_collection_apply}

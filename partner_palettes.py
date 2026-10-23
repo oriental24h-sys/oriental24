@@ -173,7 +173,7 @@ def register_partner_palettes(app,s):
                     where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(m.partner_reference),lower(?))>0 OR EXISTS(SELECT 1 FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=d.id AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0 OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0)))");args.extend([q]*5)
                 try:
                     page=int(request.args.get('page',1));size=int(request.args.get('size',20))
-                    if page<1 or size not in [20,50,100]:raise ValueError()
+                    if page<1 or size not in [10,20,30,50,80,100,200,500]:raise ValueError()
                 except (ValueError,TypeError):raise Error('Pagination invalide.')
                 sql=' FROM ops_documents d JOIN partner_palette_meta m ON m.document_id=d.id WHERE '+' AND '.join(where)
                 total=c.execute('SELECT count(*)'+sql,args).fetchone()[0];page=min(page,max(1,(total+size-1)//size))
@@ -351,12 +351,7 @@ def register_partner_palettes(app,s):
                 if action=='cancel':
                     reason=text(d,'reason',600,True);c.execute("UPDATE ops_documents SET status='Annulé',cancel_reason=?,revision=revision+1 WHERE id=?",(reason,did));c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,));audit(c,did,u,'Palette annulée avant envoi',{'reason':reason})
                 else:
-                    company(c,doc['client_id'],any_client=u['role']=='admin');hub(c,doc['destination_hub_id'])
-                    for l in ls:
-                        p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone();lockcheck(c,p,doc['client_id'],did)
-                        if not l['active'] or p['tracking']!=l['tracking']:raise Error('Contenu du manifeste modifié.',409)
-                    c.execute("UPDATE ops_documents SET status='En transit',dispatched_at=?,revision=revision+1 WHERE id=?",(now(),did));audit(c,did,u,'Envoi palette déclaré',{'count':len(ls)})
-                    for l in ls:event(c,l['parcel_id'],l['initial_status'],doc['reference']+' · envoi société déclaré, réception ORIENTAL24 encore attendue',u)
+                    dispatch_collection_apply(c,doc,ls,u)
                 return result(c,u,d,fp,get(c,did,u))
             if doc['status'] not in ['En transit','Partiellement reçu']:raise Error('La société doit confirmer l’envoi avant réception.',409)
             hub(c,doc['destination_hub_id'])
@@ -387,3 +382,25 @@ def register_partner_palettes(app,s):
         return doc,lines(c,did)
 
     s.setdefault('reception_adapters',{})['partner']={'load':collection_load,'apply':collection_apply}
+
+    def dispatch_collection_apply(c,doc,ls,u):
+        did=doc['id']
+        company(c,doc['client_id'],any_client=u['role']=='admin');hub(c,doc['destination_hub_id'])
+        for l in ls:
+            p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone();lockcheck(c,p,doc['client_id'],did)
+            if not l['active'] or p['tracking']!=l['tracking']:raise Error('Contenu du manifeste modifié.',409)
+        c.execute("UPDATE ops_documents SET status='En transit',dispatched_at=?,revision=revision+1 WHERE id=?",(now(),did));audit(c,did,u,'Envoi palette déclaré',{'count':len(ls)})
+        for l in ls:event(c,l['parcel_id'],l['initial_status'],doc['reference']+' · envoi société déclaré, réception ORIENTAL24 encore attendue',u)
+
+    def dispatch_collection_load(c,did,u):
+        if u['role'] not in ('admin','client'):raise Error('Envoi réservé à la société propriétaire ou Admin.',403)
+        doc=get(c,did,u);h=hub(c,doc['destination_hub_id']);company(c,doc['client_id'],any_client=u['role']=='admin')
+        doc['hub_snapshot']=h
+        return doc,lines(c,did)
+
+    def dispatch_collection_check(c,doc,line,u):
+        p=c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
+        lockcheck(c,p,doc['client_id'],doc['id'])
+        if not line['active'] or p['tracking']!=line['tracking']:raise Error('Contenu du manifeste modifié.',409)
+
+    s.setdefault('dispatch_adapters',{})['partner']={'load':dispatch_collection_load,'check':dispatch_collection_check,'apply':dispatch_collection_apply}

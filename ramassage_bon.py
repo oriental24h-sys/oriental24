@@ -494,11 +494,14 @@ def register_ramassage_bon(app, services):
                       AND x.departure_reconciled_at IS NULL ORDER BY x.id DESC LIMIT 1)
                     LEFT JOIN ops_documents td ON td.id=tl.document_id'''
                 transfer = 'td.id transfer_id,td.reference transfer_reference,td.destination_hub_id,tl.departure_scanned_at,td.status transfer_status,td.departure_scan_required'
+            parcel_columns = {r[1] for r in c.execute('PRAGMA table_info(parcels)')}
+            recent_fields = [f'julianday(p.{name})' for name in ('status_updated_at','created_at') if name in parcel_columns]
+            recent_sql = 'COALESCE('+','.join(recent_fields+['0'])+')' if recent_fields else '0'
             sql = '''WITH candidates AS (
                 SELECT rl.id receipt_line_id,rl.received_at,b.id bon_id,b.reference bon_reference,
                     b.hub_id,h.name hub_name,p.id parcel_id,p.tracking,p.recipient,p.status parcel_status,
                     p.current_hub_id,u.name client_name,u.company client_company,ci.name city,
-                    '''+transfer+'''
+                    '''+recent_sql+''' status_recency, '''+transfer+'''
                 FROM ramassage_bon_lines rl JOIN ramassage_bons b ON b.id=rl.bon_id
                 JOIN parcels p ON p.id=rl.parcel_id JOIN users u ON u.id=b.client_id
                 LEFT JOIN cities ci ON ci.id=p.city_id LEFT JOIN ops_hubs h ON h.id=b.hub_id
@@ -517,6 +520,6 @@ def register_ramassage_bon(app, services):
             clause = ' WHERE state=?' if state else ''
             selected_args = args+([state] if state else [])
             total = counts.get(state,0) if state else sum(counts.values())
-            rows = [dict(r) for r in c.execute(sql+'SELECT * FROM classified'+clause+' ORDER BY received_at DESC,receipt_line_id DESC LIMIT ? OFFSET ?',selected_args+[size,(page-1)*size])]
+            rows = [dict(r) for r in c.execute(sql+'SELECT * FROM classified'+clause+' ORDER BY status_recency DESC,parcel_id DESC,receipt_line_id DESC LIMIT ? OFFSET ?',selected_args+[size,(page-1)*size])]
             hubs = [dict(r) for r in c.execute('SELECT id,name FROM ops_hubs WHERE active=1'+(' AND id=?' if u['role']=='agent' else '')+' ORDER BY name', [hub_id] if u['role']=='agent' else [])]
             return jsonify(rows=rows,total=total,counts=counts,page=page,size=size,hubs=hubs,central_hub_id=cid)

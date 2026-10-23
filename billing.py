@@ -101,7 +101,7 @@ def register_billing(app,s):
             c.execute('BEGIN');result=listing(c,user())
             try:page=int(request.args.get('page','1'));size=int(request.args.get('size','20'))
             except ValueError:raise Error('Pagination invalide.')
-            if page<1 or size not in (10,20,50,100):raise Error('Pagination invalide.')
+            if page<1 or size not in (10,20,30,50,80,100,200,500):raise Error('Pagination invalide.')
             page=min(page,max(1,(result['count']+size-1)//size));result.update(page=page,size=size,rows=result['rows'][(page-1)*size:page*size]);return jsonify(result)
     @app.get('/api/billing/<kind>/<int:iid>')
     @auth('admin','client','livreur')

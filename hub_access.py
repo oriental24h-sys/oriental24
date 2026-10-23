@@ -70,6 +70,9 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('POST', r'/api/return-palettes/\d+/receive'),
     ('GET', r'/api/return-palettes/scan-lookup'), ('POST', r'/api/return-palettes/scan-send'),
     ('POST', r'/api/return-palettes/\d+/refuse'),
+    ('GET', r'/api/dispatch-collection/(transfer|return)/\d+'),
+    ('GET', r'/api/dispatch-collection/(transfer|return)/\d+/check'),
+    ('POST', r'/api/dispatch-collection/(transfer|return)/\d+'),
     ('GET', r'/api/reception-collection/(transfer|partner|return|fusion|recovered)/\d+'),
     ('POST', r'/api/reception-collection/(transfer|partner|return|fusion|recovered)/\d+'),
     ('GET', r'/api/ramassage-bons'),
@@ -85,7 +88,7 @@ HUB_OPERATIONAL_PREFIXES = (
     '/api/parcels/', '/api/logistics/parcels/', '/api/logistics/config', '/api/logistics/documents', '/api/logistics/hub-dashboard', '/api/logistics/hub/', '/api/logistics/hub/drivers', '/api/logistics/cod/', '/api/logistics/notifications', '/api/partner-palettes',
     '/api/partner-palette-incidents', '/api/return-palettes', '/api/alerts',
     '/api/control-tower', '/api/logistics/palettes', '/api/logistics/palette-candidates',
-    '/api/ramassage-bons', '/api/reception-collection',
+    '/api/ramassage-bons', '/api/reception-collection', '/api/dispatch-collection',
 )
 
 

@@ -123,9 +123,10 @@ def register_security(app,services):
             response=limits([(f'login-ip:{ip}',60,900),(pair,5,900),(account,20,900)])
             if response is not None:return response
             g.auth_refund=[pair,account]
-        if (request.method=='PATCH' and request.path=='/api/profile') or (request.method=='POST' and request.path=='/api/google/link'):
+        is_admin_reset=request.method=='POST' and re.fullmatch(r'/api/users/[1-9][0-9]*/reset-password',request.path)
+        if (request.method=='PATCH' and request.path=='/api/profile') or (request.method=='POST' and request.path=='/api/google/link') or is_admin_reset:
             d=request.get_json(silent=True)
-            if isinstance(d,dict) and (d.get('password') or request.path=='/api/google/link'):
+            if isinstance(d,dict) and (d.get('password') or request.path=='/api/google/link' or is_admin_reset):
                 u=user();name=('google-link:' if request.path=='/api/google/link' else 'password:')+str(u['id'])
                 response=limits([(name,5,900)])
                 if response is not None:return response

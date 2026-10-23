@@ -87,7 +87,7 @@ def register_palette_console(app,s):
         dfrom=d10(request.args.get('date_from'),'Date de début');dto=d10(request.args.get('date_to'),'Date de fin')
         try:
             page=int(request.args.get('page',1));size=int(request.args.get('size',30))
-            if page<1 or size not in (30,50,100):raise ValueError()
+            if page<1 or size not in (10,20,30,50,80,100,200,500):raise ValueError()
         except (ValueError,TypeError):raise Error('Pagination invalide.')
         today=datetime.date.fromisoformat(now()[:10])
         rel=[]

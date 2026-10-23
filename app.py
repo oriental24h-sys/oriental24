@@ -15,6 +15,8 @@ from billing import driver_paid_sql
 import client_types
 from company_order_edit import company_order_flags, register_company_order_edit
 from hub_access import hub_manager_route_allowed, hub_manager_requires_active_hub, hub_parcel_scope, driver_dispatch_allowed, driver_team_member_ids
+from temporary_passwords import generate_temporary_password, credential_response, register_temporary_passwords
+from parcel_transit import annotate_parcel_transit
 from hub_schema import ensure_hub_manager_can_leave
 from audit_guard import install_audit_log_guards
 from audit_log import append_audit_log
@@ -95,10 +97,11 @@ def init_db():
           UPDATE parcels SET support_id=(SELECT sc.support_id FROM support_cities sc JOIN users su ON su.id=sc.support_id
             WHERE sc.city_id=NEW.city_id AND su.role='support' AND su.active=1) WHERE id=NEW.id;
         END;
-        CREATE TRIGGER IF NOT EXISTS parcels_status_updated_at AFTER UPDATE OF status ON parcels
+        DROP TRIGGER IF EXISTS parcels_status_updated_at;
+        CREATE TRIGGER parcels_status_updated_at AFTER UPDATE OF status ON parcels
         WHEN NEW.status IS NOT OLD.status
         BEGIN
-          UPDATE parcels SET status_updated_at=COALESCE(NULLIF(NEW.updated_at,''),strftime('%Y-%m-%dT%H:%M:%S','now')) WHERE id=NEW.id;
+          UPDATE parcels SET status_updated_at=CASE WHEN NEW.updated_at IS NOT OLD.updated_at AND NULLIF(NEW.updated_at,'') IS NOT NULL THEN NEW.updated_at ELSE strftime('%Y-%m-%dT%H:%M:%f','now','localtime') END WHERE id=NEW.id;
         END;
         ''')
         c.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',('dataset_kind','demo' if app.config['DEMO_MODE'] else 'production'))
@@ -259,7 +262,7 @@ def parcel(c,pid,u):
         FROM parcels p LEFT JOIN users su ON su.id=p.support_id LEFT JOIN invoices i ON i.id=p.invoice_id
         WHERE p.id=? AND {cond}''',[pid]+args).fetchone()
     if not p: raise APIError('Colis introuvable.',404)
-    return company_order_flags(c,[dict(p)],u)[0]
+    return company_order_flags(c,annotate_parcel_transit(c,[dict(p)]),u)[0]
 def event(c,pid,status,note,u):
     c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(pid,u['id'],status,note,now()))
     if 'ops_notify_event' in globals(): ops_notify_event(c,pid,status,u)
@@ -289,8 +292,8 @@ def list_parcels(c,u):
     LEFT JOIN users dr ON dr.id=p.driver_id LEFT JOIN users su ON su.id=p.support_id
     LEFT JOIN parcel_support ps ON ps.parcel_id=p.id LEFT JOIN support_contacts sc ON sc.id=ps.contact_id
     LEFT JOIN invoices i ON i.id=p.invoice_id
-    WHERE {cond} ORDER BY p.created_at DESC,p.id DESC''',args)]
-    return company_order_flags(c,rows,u)
+    WHERE {cond} ORDER BY COALESCE(julianday(p.status_updated_at),julianday(p.created_at),0) DESC,p.id DESC''',args)]
+    return company_order_flags(c,annotate_parcel_transit(c,rows),u)
 
 @app.route('/')
 @app.route('/login')
@@ -735,7 +738,8 @@ def add_user():
     d=request.get_json() or {}; role=d.get('role');actor=user()
     if role=='agent':role='hub_manager'  # compatibility for an old admin screen during rollout
     if role not in ['client','livreur','hub_manager','support']:raise APIError('Rôle invalide.')
-    pw=text(d,'password',maxlen=128)
+    generated=d.get('generate_password') is True
+    pw=generate_temporary_password() if generated else text(d,'password',maxlen=128)
     if len(pw)<10:raise APIError('10 caractères minimum pour le mot de passe.')
     email=text(d,'email').lower()
     if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):raise APIError('Adresse e-mail invalide.')
@@ -763,6 +767,7 @@ def add_user():
                 entity_type='driver_hub_assignment',entity_id=uid,old_value=None,
                 new_value={'driver_hub_id':driver_hub_id,'source':'admin_account_creation'},
                 metadata={'driver_hub_id':driver_hub_id},created_at=now())
+    if generated:return credential_response(uid,email,pw)
     return jsonify(ok=True,id=uid)
 @app.patch('/api/users/<int:uid>')
 @auth('admin')
@@ -1094,6 +1099,9 @@ register_contact_log(app, globals())
 
 from reception_collection import register_reception_collection
 register_reception_collection(app, globals())
+from dispatch_collection import register_dispatch_collection
+register_dispatch_collection(app, globals())
+register_temporary_passwords(app, globals())
 
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.

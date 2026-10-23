@@ -85,7 +85,7 @@ def register_driver_workspace(app,s):
                 record(c,uid,u,'informations modifiées',dict(name=name,phone=phone,city_id=cid,address=address,driver_hub_id=new_driver_hub,password_reset=bool(pw)))
                 return jsonify(ok=True,changed=True)
             if u['role']=='agent':
-                ids=c.execute(f'SELECT p.id FROM parcels p WHERE p.driver_id=? AND {local_driver_parcel_scope()} AND NOT EXISTS(SELECT 1 FROM driver_receipts r WHERE r.parcel_id=p.id AND r.driver_id=p.driver_id)',(uid,u['agent_hub_id'],u['agent_hub_id'])).fetchall()
+                ids=c.execute(f'SELECT p.id FROM parcels p WHERE p.driver_id=? AND {local_driver_parcel_scope()} AND NOT EXISTS(SELECT 1 FROM driver_receipts r WHERE r.parcel_id=p.id AND r.driver_id=p.driver_id) ORDER BY COALESCE(julianday(p.status_updated_at),julianday(p.created_at),0) DESC,p.id DESC',(uid,u['agent_hub_id'],u['agent_hub_id'])).fetchall()
                 ps=[custody_parcel(c,r['id'],u) for r in ids]
             else:ps=[p for p in s['list_parcels'](c,u) if p['driver_id']==uid and not p.get('driver_returned')]
             audit=[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM driver_workspace_audit a JOIN users u ON u.id=a.actor_id WHERE driver_id=? ORDER BY a.id DESC LIMIT 200',(uid,))]

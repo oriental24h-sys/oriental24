@@ -704,12 +704,19 @@ def register_logistics(app, services):
                 dest_id=central_id
                 sql="p.current_hub_id=? AND p.status IN ('Retourné','Refusé')"
             else:
-                dest_id=None
+                dest_id=integer(request.args.get('destination_hub_id'),'Hub de destination')
+                dest=hub(c,dest_id)
+                if not central_hub_transfer_allowed(source_id,dest_id,central_id,True):
+                    raise Error('Le trajet doit relier le Hub Central à un Hub secondaire actif.',409)
                 sql="p.current_hub_id=? AND p.status IN ('Ramassé','Au hub','Réceptionné') AND p.invoice_id IS NULL AND NOT EXISTS(SELECT 1 FROM driver_statement_lines s WHERE s.parcel_id=p.id AND s.active=1)"
+            candidate_args=[source_id]
+            if mode=='standard' and source_id==central_id:
+                sql+=' AND ci.hub_id=?'
+                candidate_args.append(dest_id)
             rows=c.execute('''SELECT p.id,p.tracking,p.recipient,p.status,p.origin_hub_id,ci.name city,oh.name origin_hub
                 FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id
                 WHERE '''+sql+''' AND NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)
-                ORDER BY p.id DESC LIMIT 500''',(source_id,)).fetchall()
+                ORDER BY p.id DESC LIMIT 500''',candidate_args).fetchall()
             return jsonify(mode=mode,source_hub_id=source_id,destination_hub_id=dest_id,rows=[dict(r) for r in rows])
 
     @app.post(P+'/parcels/<int:pid>/origin-review')
@@ -828,6 +835,7 @@ def register_logistics(app, services):
                         guard(c,p)
                         if p['status'] not in ['Ramassé','Au hub','Réceptionné']:
                             raise Error('Palette standard : sélectionnez uniquement des colis reçus physiquement au Hub.')
+                        check_transfer_city(c,{'kind':'transfer','palette_purpose':'standard','destination_hub_id':dest['id']},p)
                     elif purpose=='return_to_central':
                         if p['status'] not in ('Retourné','Refusé'):
                             raise Error('Un retour au Hub Central ne contient que des colis non livrés (Retourné/Refusé).')
@@ -940,52 +948,55 @@ def register_logistics(app, services):
         d=body();u=user();tracking=text(d,'tracking',maxlen=80).upper()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
-            doc=document_data(c,allowed_doc(c,did,u))
-            if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):
-                raise Error('Document introuvable.',404)
-            if doc['kind']!='transfer' or not doc['departure_scan_required']:
-                raise Error('Ce document ne requiert pas les scans de sortie.',409)
-            line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking and l['active']),None)
-            if not line:
-                # Give a routing explanation only for a code physically at the
-                # source; never disclose a foreign Hub's parcel or city.
-                candidates=c.execute('SELECT * FROM parcels WHERE upper(tracking)=? AND current_hub_id=?',(tracking,doc['source_hub_id'])).fetchall()
-                if len(candidates)==1:check_transfer_city(c,doc,candidates[0])
-                raise Error('Colis non scanné : cette référence ne figure pas dans ce transfert actif.',404)
-            if line['departure_scanned_at']:
-                return jsonify(ok=True,already_scanned=True,departure_scanned=doc['departure_scanned'],count=doc['count'],dispatched=bool(doc['dispatched_at']))
-            if doc['status'] not in ['Préparé','Départ partiel']:
-                raise Error('Le scan de sortie exige un transfert encore en préparation.',409)
-            p=parcel(c,line['parcel_id'],u)
-            special_return=doc.get('palette_purpose') in ('return_to_central','return_to_origin')
-            if special_return:
-                if line.get('return_status') not in ('Retourné','Refusé') or p['status']!=line['return_status']:
-                    raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
-            else:guard(c,p,False)
-            if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
-                raise Error('Le colis n’est plus enregistré physiquement au Hub de départ.',409)
-            check_transfer_city(c,doc,p)
-            scanned_at=now()
-            cur=c.execute('UPDATE ops_document_lines SET departure_scanned_at=?,departure_scanned_by=? WHERE id=? AND departure_scanned_at IS NULL',(scanned_at,u['id'],line['id']))
-            if cur.rowcount!=1:raise Error('Le scan vient d’être enregistré. Rechargez le manifeste.',409)
-            if doc.get('palette_purpose')=='return_to_central':
-                c.execute("UPDATE ops_document_lines SET return_transit_status='Vers Hub Central' WHERE id=?",(line['id'],))
-                c.execute("UPDATE parcels SET status='Vers Hub Central',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
-                event(c,p['id'],'Vers Hub Central',doc['reference']+' · retour scanné au départ vers le Hub Central; réception attendue',u)
-            elif special_return:
-                # Onward sorting from Central preserves the received return state.
-                c.execute('UPDATE parcels SET current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?',(scanned_at,p['id']))
-                event(c,p['id'],p['status'],doc['reference']+' · scan de sortie Hub; statut financier inchangé',u)
-            else:
-                c.execute("UPDATE parcels SET status='Transit',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
-                event(c,p['id'],'Transit',doc['reference']+' · scan de sortie du Hub',u)
-            departure_scanned=doc['departure_scanned']+1;complete=departure_scanned==doc['count']
-            next_status=('Reçu' if doc['received']==doc['count'] else 'Partiellement reçu' if doc['received'] else 'En transit') if complete else 'Départ partiel'
-            completed_at=scanned_at if next_status=='Reçu' else None
-            c.execute('UPDATE ops_documents SET status=?,dispatched_at=?,completed_at=?,revision=revision+1 WHERE id=?',(next_status,scanned_at if complete else None,completed_at,did))
-            audit(c,did,u,'Scan de sortie enregistré',{'tracking':tracking,'parcel_id':p['id'],'source_hub_id':doc['source_hub_id']})
-            if complete:audit(c,did,u,'Départ physique confirmé',{'count':doc['count'],'source_hub_id':doc['source_hub_id'],'destination_hub_id':doc['destination_hub_id']})
-            return jsonify(ok=True,already_scanned=False,departure_scanned=departure_scanned,count=doc['count'],dispatched=complete,parcel_status='Vers Hub Central' if doc.get('palette_purpose')=='return_to_central' else p['status'] if special_return else 'Transit')
+            return dispatch_collection_line(c,did,tracking,u)
+
+    def dispatch_collection_line(c,did,tracking,u):
+        doc=document_data(c,allowed_doc(c,did,u))
+        if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):
+            raise Error('Document introuvable.',404)
+        if doc['kind']!='transfer' or not doc['departure_scan_required']:
+            raise Error('Ce document ne requiert pas les scans de sortie.',409)
+        line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking and l['active']),None)
+        if not line:
+            # Give a routing explanation only for a code physically at the
+            # source; never disclose a foreign Hub's parcel or city.
+            candidates=c.execute('SELECT * FROM parcels WHERE upper(tracking)=? AND current_hub_id=?',(tracking,doc['source_hub_id'])).fetchall()
+            if len(candidates)==1:check_transfer_city(c,doc,candidates[0])
+            raise Error('Colis non scanné : cette référence ne figure pas dans ce transfert actif.',404)
+        if line['departure_scanned_at']:
+            return jsonify(ok=True,already_scanned=True,departure_scanned=doc['departure_scanned'],count=doc['count'],dispatched=bool(doc['dispatched_at']))
+        if doc['status'] not in ['Préparé','Départ partiel']:
+            raise Error('Le scan de sortie exige un transfert encore en préparation.',409)
+        p=parcel(c,line['parcel_id'],u)
+        special_return=doc.get('palette_purpose') in ('return_to_central','return_to_origin')
+        if special_return:
+            if line.get('return_status') not in ('Retourné','Refusé') or p['status']!=line['return_status']:
+                raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
+        else:guard(c,p,False)
+        if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
+            raise Error('Le colis n’est plus enregistré physiquement au Hub de départ.',409)
+        check_transfer_city(c,doc,p)
+        scanned_at=now()
+        cur=c.execute('UPDATE ops_document_lines SET departure_scanned_at=?,departure_scanned_by=? WHERE id=? AND departure_scanned_at IS NULL',(scanned_at,u['id'],line['id']))
+        if cur.rowcount!=1:raise Error('Le scan vient d’être enregistré. Rechargez le manifeste.',409)
+        if doc.get('palette_purpose')=='return_to_central':
+            c.execute("UPDATE ops_document_lines SET return_transit_status='Vers Hub Central' WHERE id=?",(line['id'],))
+            c.execute("UPDATE parcels SET status='Vers Hub Central',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
+            event(c,p['id'],'Vers Hub Central',doc['reference']+' · retour scanné au départ vers le Hub Central; réception attendue',u)
+        elif special_return:
+            # Onward sorting from Central preserves the received return state.
+            c.execute('UPDATE parcels SET current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?',(scanned_at,p['id']))
+            event(c,p['id'],p['status'],doc['reference']+' · scan de sortie Hub; statut financier inchangé',u)
+        else:
+            c.execute("UPDATE parcels SET status='Transit',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
+            event(c,p['id'],'Transit',doc['reference']+' · scan de sortie du Hub',u)
+        departure_scanned=doc['departure_scanned']+1;complete=departure_scanned==doc['count']
+        next_status=('Reçu' if doc['received']==doc['count'] else 'Partiellement reçu' if doc['received'] else 'En transit') if complete else 'Départ partiel'
+        completed_at=scanned_at if next_status=='Reçu' else None
+        c.execute('UPDATE ops_documents SET status=?,dispatched_at=?,completed_at=?,revision=revision+1 WHERE id=?',(next_status,scanned_at if complete else None,completed_at,did))
+        audit(c,did,u,'Scan de sortie enregistré',{'tracking':tracking,'parcel_id':p['id'],'source_hub_id':doc['source_hub_id']})
+        if complete:audit(c,did,u,'Départ physique confirmé',{'count':doc['count'],'source_hub_id':doc['source_hub_id'],'destination_hub_id':doc['destination_hub_id']})
+        return jsonify(ok=True,already_scanned=False,departure_scanned=departure_scanned,count=doc['count'],dispatched=complete,parcel_status='Vers Hub Central' if doc.get('palette_purpose')=='return_to_central' else p['status'] if special_return else 'Transit')
 
     @app.post(P+'/documents/<int:did>/reconcile-departure')
     @auth('admin')
@@ -1549,3 +1560,33 @@ def register_logistics(app, services):
             collection_receive_line(c,fresh,line['tracking'],u)
 
     services.setdefault('reception_adapters',{})['transfer']={'load':collection_load,'apply':collection_apply}
+
+    def dispatch_collection_load(c,did,u):
+        if u['role'] not in ('admin','agent'):raise Error('Accès réservé.',403)
+        doc=document_data(c,allowed_doc(c,did,u))
+        if doc['kind']!='transfer':raise Error('Transfert introuvable.',404)
+        if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):raise Error('Document introuvable.',404)
+        src=hub(c,doc['source_hub_id']);dest=hub(c,doc['destination_hub_id'])
+        central_id,central=current_central_hub(c)
+        if not central_hub_transfer_allowed(doc['source_hub_id'],doc['destination_hub_id'],central_id,bool(central and central['active'])):
+            raise Error('Le trajet doit relier un Hub actif au Hub Central actif.',409)
+        doc['routing_snapshot']={'source':dict(src),'destination':dict(dest),'central_id':central_id,
+            'cities':[dict(r) for r in c.execute('SELECT id,hub_id FROM cities WHERE id IN (SELECT city_id FROM parcels WHERE id IN (SELECT parcel_id FROM ops_document_lines WHERE document_id=?)) ORDER BY id',(did,))]}
+        return doc,doc['lines']
+
+    def dispatch_collection_check(c,doc,line,u):
+        p=parcel(c,line['parcel_id'],u)
+        if p['tracking']!=line['tracking'] or not line['active']:raise Error('Contenu du manifeste modifié.',409)
+        if doc.get('palette_purpose') in ('return_to_central','return_to_origin'):
+            if line.get('return_status') not in ('Retourné','Refusé') or p['status']!=line['return_status']:raise Error('Statut de retour modifié.',409)
+        else:guard(c,p,False)
+        if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):raise Error('Colis physiquement hors du Hub de départ.',409)
+        check_transfer_city(c,doc,p)
+
+    def dispatch_collection_apply(c,doc,ls,u):
+        if not doc['departure_scan_required']:
+            # Legacy manifests gain per-parcel departure evidence at the atomic confirmation.
+            c.execute('UPDATE ops_documents SET departure_scan_required=1 WHERE id=?',(doc['id'],))
+        for line in ls:dispatch_collection_line(c,doc['id'],line['tracking'].upper(),u)
+
+    services.setdefault('dispatch_adapters',{})['transfer']={'load':dispatch_collection_load,'check':dispatch_collection_check,'apply':dispatch_collection_apply}
