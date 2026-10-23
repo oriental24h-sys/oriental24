@@ -1,0 +1,10 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const src=fs.readFileSync('static/app.js','utf8');
+const code=src.slice(src.indexOf('function parcelStatusRecency('),src.indexOf('async function saved('));
+const rows=[{id:1,status:'A',created_at:'2020-01-01T10:00:00',status_updated_at:'2026-10-23T10:00:00'},{id:2,status:'B',created_at:'2026-10-22T10:00:00',status_updated_at:'2026-10-22T11:00:00',updated_at:'2099-01-01T00:00:00'},{id:3,status:'C',created_at:'2026-10-21T10:00:00'}];
+const ctx=vm.createContext({S:{user:{id:1},parcels:rows.map(r=>({...r}))},listPage:2,supportOrderPage:2,fresh:{user:{id:1},parcels:rows.map(r=>({...r,status:r.id===1?'Changed':r.status}))}});
+vm.runInContext('async function api(){return fresh}\n'+code,ctx);
+(async()=>{await vm.runInContext('refresh()',ctx);assert.equal(ctx.S.parcels[0].id,1);assert.equal(ctx.listPage,1);assert.equal(ctx.supportOrderPage,1);
+ assert.equal(vm.runInContext("compareParcelStatusRecency({id:4,created_at:'2026-01-01'},{id:3,created_at:'2026-01-01'})<0",ctx),true);
+ assert(fs.readFileSync('static/driver-app.js','utf8').includes('.sort(compareParcelStatusRecency)'));
+ console.log('PASS: status recency beats creation/general edit, stable tie, first-page reset and driver override');})().catch(e=>{console.error(e);process.exit(1)});
