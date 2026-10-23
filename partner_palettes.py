@@ -363,16 +363,27 @@ def register_partner_palettes(app,s):
             pending=[l for l in ls if not l['received_at'] and not l['missing_at']]
             if action=='receive-all' and (type(d.get('expected_remaining')) is not int or d['expected_remaining']!=len(pending)):raise Error('Le nombre de colis restants a changé. Actualisez.',409)
             received=[line] if action=='receive' else pending
-            for l in received:
-                c.execute('UPDATE ops_document_lines SET active=1 WHERE id=?',(l['id'],))  # réactivation : lockcheck exige une ligne active
-                p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
-                lockcheck(c,p,doc['client_id'],did)
-            at=now()
-            for l in received:
-                c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
-                c.execute("UPDATE parcels SET status='Réceptionné',current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(doc['destination_hub_id'],at,l['parcel_id']))
-                event(c,l['parcel_id'],'Réceptionné',doc['reference']+' · réception physique ORIENTAL24 à '+doc['destination_name'],u)
-            complete=len(received)==len(pending)
-            c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Reçu' if complete else 'Partiellement reçu',at if complete else None,did))
-            audit(c,did,u,'Réception complète confirmée' if action=='receive-all' else 'Colis scanné reçu',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'hub_id':doc['destination_hub_id']})
+            collection_apply(c,doc,received,u,action)
             return result(c,u,d,fp,get(c,did,u),received=len(received),already_received=False)
+
+    def collection_apply(c,doc,received,u,action='receive-all'):
+        did=doc['id'];pending=[l for l in lines(c,did) if not l['received_at'] and not l['missing_at']];at=now()
+        for l in received:
+            c.execute('UPDATE ops_document_lines SET active=1 WHERE id=?',(l['id'],))  # réactivation : lockcheck exige une ligne active
+            p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
+            lockcheck(c,p,doc['client_id'],did)
+        at=now()
+        for l in received:
+            c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
+            c.execute("UPDATE parcels SET status='Réceptionné',current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(doc['destination_hub_id'],at,l['parcel_id']))
+            event(c,l['parcel_id'],'Réceptionné',doc['reference']+' · réception physique ORIENTAL24 à '+doc['destination_name'],u)
+        complete=len(received)==len(pending)
+        c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Reçu' if complete else 'Partiellement reçu',at if complete else None,did))
+        audit(c,did,u,'Réception complète confirmée' if action=='receive-all' else 'Colis scanné reçu',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'hub_id':doc['destination_hub_id']})
+
+    def collection_load(c,did,u):
+        if u['role'] not in ('admin','agent'):raise Error('Accès réservé.',403)
+        doc=get(c,did,u);hub(c,doc['destination_hub_id'])
+        return doc,lines(c,did)
+
+    s.setdefault('reception_adapters',{})['partner']={'load':collection_load,'apply':collection_apply}

@@ -264,19 +264,29 @@ def register_return_palettes(app,s):
             pending=[l for l in ls if not l['received_at']]
             if action=='receive-all' and (type(d.get('expected_remaining')) is not int or d['expected_remaining']!=len(pending)):raise Error('Le nombre de colis restants a changé. Actualisez.',409)
             received=[line(d.get('tracking'))] if action=='receive' else pending
-            for l in received:
-                p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
-                if not p or p['status']=='Livré':raise Error('Colis '+l['tracking']+' : un colis « Livré » ne peut pas être confirmé comme retour.',409)
-            status_changes=[]
-            for l in received:
-                p=c.execute('SELECT status FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
-                old_status=p['status']
-                c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
-                c.execute("UPDATE parcels SET status='Retourné',current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(at,l['parcel_id']))
-                note=doc['reference']+' · retour physiquement remis au vendeur · statut '+old_status+' → Retourné'
-                event(c,l['parcel_id'],'Retourné',note,u)
-                status_changes.append({'parcel_id':l['parcel_id'],'tracking':l['tracking'],'from':old_status,'to':'Retourné'})
-            complete=len(received)==len(pending)
-            c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Remis' if complete else 'Partiellement remis',at if complete else None,did))
-            audit(c,did,u,'Retour remis au vendeur (complet)' if action=='receive-all' else 'Colis retour remis au vendeur',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'status':'Retourné','status_changes':status_changes})
+            collection_apply(c,doc,received,u,action)
             return result(c,u,d,fp,get(c,did,u),received=len(received),already_received=False)
+
+    def collection_apply(c,doc,received,u,action='receive-all'):
+        did=doc['id'];pending=[l for l in lines(c,did) if not l['received_at']];at=now()
+        for l in received:
+            p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
+            if not p or p['status']=='Livré':raise Error('Colis '+l['tracking']+' : un colis « Livré » ne peut pas être confirmé comme retour.',409)
+        status_changes=[]
+        for l in received:
+            p=c.execute('SELECT status FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
+            old_status=p['status']
+            c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
+            c.execute("UPDATE parcels SET status='Retourné',current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(at,l['parcel_id']))
+            note=doc['reference']+' · retour physiquement remis au vendeur · statut '+old_status+' → Retourné'
+            event(c,l['parcel_id'],'Retourné',note,u)
+            status_changes.append({'parcel_id':l['parcel_id'],'tracking':l['tracking'],'from':old_status,'to':'Retourné'})
+        complete=len(received)==len(pending)
+        c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Remis' if complete else 'Partiellement remis',at if complete else None,did))
+        audit(c,did,u,'Retour remis au vendeur (complet)' if action=='receive-all' else 'Colis retour remis au vendeur',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'status':'Retourné','status_changes':status_changes})
+
+    def collection_load(c,did,u):
+        access(u);doc=get(c,did,u)
+        return doc,lines(c,did)
+
+    s.setdefault('reception_adapters',{})['return']={'load':collection_load,'apply':collection_apply}

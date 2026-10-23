@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from flask import request, jsonify
 
+from ramassage_tracking import sync_central_receipts
 from notification_retention import purge_read_notifications
 from client_profile_extras import notification_enabled
 from claims import prepare_claim
@@ -345,6 +346,7 @@ def register_logistics(app, services):
             selected=hub(c,hid,True)
             previous_id,previous_hub=current_central_hub(c)
             if previous_id==hid:return jsonify(ok=True,changed=False,central_hub_id=hid)
+            if previous_id:sync_central_receipts(c,previous_id)
             c.execute("INSERT INTO settings(key,value) VALUES('central_hub_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(hid),))
             city=c.execute('SELECT name FROM cities WHERE id=?',(selected['city_id'],)).fetchone()
             new_hub={'id':hid,'name':selected['name'],'city':city['name'] if city else None,'active':bool(selected['active'])}
@@ -1047,6 +1049,72 @@ def register_logistics(app, services):
             return jsonify(ok=True,reconciled=len(selected),count=after['count'],
                 departure_scanned=after['departure_scanned'],status=next_status,revision=doc['revision']+1)
 
+    def collection_receive_line(c,doc,tracking,u):
+        did=doc['id']
+        tracking=text({'tracking':tracking},'tracking',maxlen=80).upper()
+        line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking),None)
+        special_return=doc.get('palette_purpose') in ('return_to_central','return_to_origin')
+        if line and line['departure_reconciled_at']:
+            if u['role']=='agent':raise Error('Colis non disponible pour réception à ce Hub.',404)
+            raise Error('Cette ligne a été retirée du manifeste de départ.',409)
+        if u['role']=='agent':
+            unavailable='Colis non disponible pour réception à ce Hub.'
+            if not line:raise Error(unavailable,404)
+            p=c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
+            if not p:raise Error(unavailable,404)
+            if line['received_at']:
+                if p['current_hub_id']==u.get('agent_hub_id'):return jsonify(ok=True,already_received=True)
+                raise Error(unavailable,404)
+            if doc['status'] not in ['En transit','Partiellement reçu','Départ partiel']:
+                raise Error(unavailable,404)
+            expected_status=(line.get('return_transit_status') or line.get('return_status')) if special_return else 'Transit'
+            if p['current_hub_id'] is not None or (special_return and line.get('return_status') not in ('Retourné','Refusé')) or p['status']!=expected_status:
+                raise Error(unavailable,404)
+            if doc['departure_scan_required'] and not line['departure_scanned_at']:
+                raise Error(unavailable,404)
+        else:
+            if not line:raise Error('Ce colis ne figure pas dans ce document.',404)
+            if doc['kind']=='transfer' and doc['departure_scan_required'] and not line['departure_scanned_at']:
+                raise Error('Le scan de sortie de ce colis est requis avant sa réception.',409)
+            if line['received_at']:return jsonify(ok=True,already_received=True)
+            if doc['status'] not in ['En transit','Partiellement reçu','Départ partiel']:
+                raise Error('Confirmez le départ du document avant réception.',409)
+            p=parcel(c,line['parcel_id'],u)
+        if not p:raise Error('Document introuvable.',404)
+        if doc['kind']=='transfer' and doc['departure_scan_required']:
+            expected_status=(line.get('return_transit_status') or line.get('return_status')) if special_return else 'Transit'
+            if p['current_hub_id'] is not None or p['status']!=expected_status:
+                raise Error('Le colis n’est pas en transit vers ce Hub ou a déjà été localisé ailleurs.',409)
+        if doc['kind']!='return' and not special_return:
+            if u['role']=='agent':
+                try:guard(c,p,False)
+                except Error:raise Error('Colis non disponible pour réception à ce Hub.',404)
+            else:guard(c,p,False)
+        if special_return and (line.get('return_status') not in ('Retourné','Refusé') or p['status']!=(line.get('return_transit_status') or line.get('return_status'))):
+            raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
+        received_at=now()
+        c.execute('UPDATE ops_document_lines SET received_at=?,received_by=? WHERE id=?',(received_at,u['id'],line['id']))
+        received_count=doc['received']+1
+        departures_complete=(not doc['departure_scan_required'] or doc['departure_scanned']==doc['count'])
+        complete=departures_complete and received_count==doc['count']
+        next_status='Reçu' if complete else 'Partiellement reçu' if departures_complete else 'Départ partiel'
+        c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',(next_status,received_at if complete else None,did))
+        c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1,updated_at=? WHERE id=?',(doc['destination_hub_id'],received_at,p['id']))
+        received_status='Réceptionné' if doc['kind']=='transfer' else 'Au hub'
+        if doc['kind']!='return' and not special_return:
+            c.execute("UPDATE parcels SET status=?,next_attempt_at=NULL,reason_code=NULL,updated_at=? WHERE id=?",(received_status,received_at,p['id']))
+        if complete:c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,))
+        central_return=doc.get('palette_purpose')=='return_to_central'
+        if central_return:
+            c.execute("UPDATE parcels SET status='Retourné',next_attempt_at=NULL,reason_code=NULL WHERE id=?",(p['id'],))
+        sync_central_receipts(c,parcel_id=p['id'])
+        event_status='Retourné' if central_return else p['status'] if doc['kind']=='return' or special_return else received_status
+        event_note=doc['reference']+(' · retour réceptionné physiquement au Hub Central · statut Retourné confirmé' if central_return else ' · réception physique déclarée'+(' · état de retour conservé' if special_return else ''))
+        event(c,p['id'],event_status,event_note,u)
+        audit(c,did,u,'Colis reçu',{'tracking':tracking,'parcel_id':p['id'],'palette_purpose':doc.get('palette_purpose','standard'),'financial_status_preserved':bool(special_return and not central_return),'previous_status':p['status'],'new_status':event_status})
+
+        return jsonify(ok=True,already_received=False,parcel_status=event_status)
+
     @app.post(P+'/documents/<int:did>/<action>')
     @auth('admin','agent')
     def ops_document_action(did,action):
@@ -1077,68 +1145,10 @@ def register_logistics(app, services):
                             c.execute("UPDATE parcels SET status='Transit',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(now(),line['parcel_id']))
                         event(c,line['parcel_id'],'Transit' if doc['kind']=='transfer' else line['initial_status'],doc['reference']+' · départ physique déclaré',u)
             elif action=='receive':
-                tracking=text(d,'tracking',maxlen=80).upper()
-                line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking),None)
-                special_return=doc.get('palette_purpose') in ('return_to_central','return_to_origin')
-                if line and line['departure_reconciled_at']:
-                    if u['role']=='agent':raise Error('Colis non disponible pour réception à ce Hub.',404)
-                    raise Error('Cette ligne a été retirée du manifeste de départ.',409)
-                if u['role']=='agent':
-                    unavailable='Colis non disponible pour réception à ce Hub.'
-                    if not line:raise Error(unavailable,404)
-                    p=c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
-                    if not p:raise Error(unavailable,404)
-                    if line['received_at']:
-                        if p['current_hub_id']==u.get('agent_hub_id'):return jsonify(ok=True,already_received=True)
-                        raise Error(unavailable,404)
-                    if doc['status'] not in ['En transit','Partiellement reçu','Départ partiel']:
-                        raise Error(unavailable,404)
-                    expected_status=(line.get('return_transit_status') or line.get('return_status')) if special_return else 'Transit'
-                    if p['current_hub_id'] is not None or (special_return and line.get('return_status') not in ('Retourné','Refusé')) or p['status']!=expected_status:
-                        raise Error(unavailable,404)
-                    if doc['departure_scan_required'] and not line['departure_scanned_at']:
-                        raise Error(unavailable,404)
-                else:
-                    if not line:raise Error('Ce colis ne figure pas dans ce document.',404)
-                    if doc['kind']=='transfer' and doc['departure_scan_required'] and not line['departure_scanned_at']:
-                        raise Error('Le scan de sortie de ce colis est requis avant sa réception.',409)
-                    if line['received_at']:return jsonify(ok=True,already_received=True)
-                    if doc['status'] not in ['En transit','Partiellement reçu','Départ partiel']:
-                        raise Error('Confirmez le départ du document avant réception.',409)
-                    p=parcel(c,line['parcel_id'],u)
-                if not p:raise Error('Document introuvable.',404)
-                if doc['kind']=='transfer' and doc['departure_scan_required']:
-                    expected_status=(line.get('return_transit_status') or line.get('return_status')) if special_return else 'Transit'
-                    if p['current_hub_id'] is not None or p['status']!=expected_status:
-                        raise Error('Le colis n’est pas en transit vers ce Hub ou a déjà été localisé ailleurs.',409)
-                if doc['kind']!='return' and not special_return:
-                    if u['role']=='agent':
-                        try:guard(c,p,False)
-                        except Error:raise Error('Colis non disponible pour réception à ce Hub.',404)
-                    else:guard(c,p,False)
-                if special_return and (line.get('return_status') not in ('Retourné','Refusé') or p['status']!=(line.get('return_transit_status') or line.get('return_status'))):
-                    raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
-                received_at=now()
-                c.execute('UPDATE ops_document_lines SET received_at=?,received_by=? WHERE id=?',(received_at,u['id'],line['id']))
-                received_count=doc['received']+1
-                departures_complete=(not doc['departure_scan_required'] or doc['departure_scanned']==doc['count'])
-                complete=departures_complete and received_count==doc['count']
-                next_status='Reçu' if complete else 'Partiellement reçu' if departures_complete else 'Départ partiel'
-                c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',(next_status,received_at if complete else None,did))
-                c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1,updated_at=? WHERE id=?',(doc['destination_hub_id'],received_at,p['id']))
-                received_status='Réceptionné' if doc['kind']=='transfer' else 'Au hub'
-                if doc['kind']!='return' and not special_return:
-                    c.execute("UPDATE parcels SET status=?,next_attempt_at=NULL,reason_code=NULL,updated_at=? WHERE id=?",(received_status,received_at,p['id']))
-                if complete:c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,))
-                central_return=doc.get('palette_purpose')=='return_to_central'
-                if central_return:
-                    c.execute("UPDATE parcels SET status='Retourné',next_attempt_at=NULL,reason_code=NULL WHERE id=?",(p['id'],))
-                event_status='Retourné' if central_return else p['status'] if doc['kind']=='return' or special_return else received_status
-                event_note=doc['reference']+(' · retour réceptionné physiquement au Hub Central · statut Retourné confirmé' if central_return else ' · réception physique déclarée'+(' · état de retour conservé' if special_return else ''))
-                event(c,p['id'],event_status,event_note,u)
-                audit(c,did,u,'Colis reçu',{'tracking':tracking,'parcel_id':p['id'],'palette_purpose':doc.get('palette_purpose','standard'),'financial_status_preserved':bool(special_return and not central_return),'previous_status':p['status'],'new_status':event_status})
+                duplicate=collection_receive_line(c,doc,d.get('tracking'),u)
+                if duplicate is not None:return duplicate
             else:raise Error('Action inconnue.',404)
-            return jsonify(ok=True,already_received=False,parcel_status=event_status if action=='receive' else None)
+            return jsonify(ok=True,already_received=False,parcel_status=None)
 
     @app.post(P+'/assignments/preview')
     @auth('admin')
@@ -1525,3 +1535,17 @@ def register_logistics(app, services):
                 hub_activity.append(dict(id=h['id'],name=h['name'],departed=departed,received=received))
             daily_assignments=[dict(r) for r in c.execute("SELECT substr(a.created_at,1,10) day,a.new_driver_id driver_id,u.name driver,count(*) assignment_events FROM ops_assignments a JOIN users u ON u.id=a.new_driver_id WHERE substr(a.created_at,1,10) BETWEEN ? AND ? GROUP BY day,a.new_driver_id ORDER BY day DESC,driver",(start,end))]
             return jsonify(drivers=drivers,daily=daily,hubs=hubs,hub_activity=hub_activity,daily_assignments=daily_assignments,period_from=start,period_to=end,started_at=c.execute("SELECT value FROM settings WHERE key='ops_started_at'").fetchone()[0])
+
+    def collection_load(c,did,u):
+        if u['role'] not in ('admin','agent'):raise Error('Accès réservé.',403)
+        doc=document_data(c,allowed_doc(c,did,u))
+        if doc['kind'] not in ('transfer','pickup','return'):raise Error('Document introuvable.',404)
+        if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'arrival'):raise Error('Document introuvable.',404)
+        return doc,doc['lines']
+
+    def collection_apply(c,doc,ls,u):
+        for line in ls:
+            fresh=document_data(c,allowed_doc(c,doc['id'],u))
+            collection_receive_line(c,fresh,line['tracking'],u)
+
+    services.setdefault('reception_adapters',{})['transfer']={'load':collection_load,'apply':collection_apply}

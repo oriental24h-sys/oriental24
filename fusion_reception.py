@@ -143,3 +143,21 @@ def register_fusion_reception(app,s):
             c.execute('UPDATE fusion_batches SET closed_at=? WHERE id=?',(at,bid))
             out=view_payload(c,bid,u);out['notified']=len(per)
             return jsonify(out)
+
+    def collection_load(c,bid,u):
+        access(u);d=payload(c,bid,u)
+        adapter=s['reception_adapters']['partner'];docs=[];ls=[]
+        for palette in d['palettes']:
+            doc,rows=adapter['load'](c,palette['id'],u);docs.append(doc);ls.extend(rows)
+        d['documents']=docs;d['status']='Reçu' if d['closed'] else 'En transit'
+        if any(x['status'] not in ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)') for x in docs):d['status']='Indisponible'
+        return d,ls
+
+    def collection_apply(c,doc,ls,u):
+        adapter=s['reception_adapters']['partner']
+        for item in doc['documents']:
+            subset=[l for l in ls if l['document_id']==item['id']]
+            if subset:adapter['apply'](c,item,subset,u)
+        c.execute('UPDATE fusion_batches SET closed_at=? WHERE id=?',(now(),doc['id']))
+
+    s.setdefault('reception_adapters',{})['fusion']={'load':collection_load,'apply':collection_apply}

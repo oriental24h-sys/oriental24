@@ -1092,6 +1092,9 @@ register_mobile_app(app, globals())
 from contact_log import register_contact_log
 register_contact_log(app, globals())
 
+from reception_collection import register_reception_collection
+register_reception_collection(app, globals())
+
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.
 if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':

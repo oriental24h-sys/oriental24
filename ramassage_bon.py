@@ -5,12 +5,13 @@ Flux :
   1. Le client crée un brouillon de bon en choisissant ses colis « Créé » et le Hub de destination.
   2. Il valide le bon  -> chaque colis passe « Créé » -> « Confirmé ».
   3. Le livreur achemine les colis ; le responsable du Hub destinataire scanne chaque colis
-     à la réception -> le colis passe « Confirmé » -> « Ramassé » et est localisé à ce Hub.
+     dans une liste locale. La validation finale reçoit le lot atomiquement au Hub.
 
 Module autonome : il ne touche pas au moteur de documents inter-Hubs (logistics.py).
 """
-import re
+import re,json,hashlib
 from flask import jsonify, request
+from ramassage_tracking import central_id, sync_central_receipts
 
 PHONE_RE = re.compile(r'^\+?[\d\s\-]{9,18}$')
 DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
@@ -55,7 +56,15 @@ def register_ramassage_bon(app, services):
         CREATE UNIQUE INDEX IF NOT EXISTS ramassage_bon_one_active
             ON ramassage_bon_lines(parcel_id) WHERE active=1;
         CREATE INDEX IF NOT EXISTS ramassage_bon_lines_bon ON ramassage_bon_lines(bon_id);
+        CREATE TABLE IF NOT EXISTS ramassage_central_receipts(
+            ramassage_line_id INTEGER PRIMARY KEY REFERENCES ramassage_bon_lines(id),
+            document_line_id INTEGER NOT NULL,
+            central_hub_id INTEGER NOT NULL,
+            received_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ramassage_receive_keys(actor_id INTEGER NOT NULL,request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(actor_id,request_key));
         ''')
+        sync_central_receipts(c)
 
     def body():
         d = request.get_json()
@@ -101,6 +110,13 @@ def register_ramassage_bon(app, services):
             raise Error('Le colis %s figure déjà dans un bon de ramassage actif.' % p['tracking'], 409)
         return p
 
+    def reception_snapshot(c, bon):
+        rows=[]
+        for line in c.execute('SELECT * FROM ramassage_bon_lines WHERE bon_id=? ORDER BY id',(bon['id'],)).fetchall():
+            p=dict(c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone())
+            rows.append([dict(line),{k:p.get(k) for k in ('tracking','client_id','status','current_hub_id','driver_id','invoice_id','ops_revision','amount','fee','return_fee','recipient','city_id')}])
+        return hashlib.sha256(json.dumps([dict(bon),rows],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+
     def serialize(c, bon):
         b = dict(bon)
         lines = [dict(r) for r in c.execute(
@@ -109,6 +125,9 @@ def register_ramassage_bon(app, services):
                FROM ramassage_bon_lines l JOIN parcels p ON p.id=l.parcel_id
                JOIN cities ci ON ci.id=p.city_id
                WHERE l.bon_id=? ORDER BY l.id''', (b['id'],))]
+        b['snapshot'] = reception_snapshot(c,bon)
+        if b['status']!='Annulé':
+            lines=[l for l in lines if l['active'] or l['received_at']]
         b['lines'] = lines
         b['count'] = len(lines)
         b['received'] = sum(1 for l in lines if l['received_at'])
@@ -385,3 +404,119 @@ def register_ramassage_bon(app, services):
                 c.execute("UPDATE ramassage_bons SET status='En cours' WHERE id=?", (bon_id,))
                 next_status = 'En cours'
             return jsonify(ok=True, status=next_status, remaining=remaining)
+
+    @app.post('/api/ramassage-bons/<int:bon_id>/receive-batch')
+    @auth('admin','agent')
+    def ramassage_receive_batch(bon_id):
+        u=user();d=body()
+        if d.get('confirmed') is not True:raise Error('Confirmez la réception physique de tous les colis scannés.')
+        key=d.get('request_key');ids=d.get('parcel_ids');snapshot=d.get('snapshot')
+        if not isinstance(key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{20,80}',key):raise Error('Clé de confirmation invalide.')
+        if not isinstance(ids,list) or not 1<=len(ids)<=100 or any(type(i) is not int or i<=0 for i in ids) or len(set(ids))!=len(ids):raise Error('Liste de scans invalide ou répétée.')
+        if not isinstance(snapshot,str) or not re.fullmatch(r'[a-f0-9]{64}',snapshot):raise Error('Version du bon requise.')
+        fp=hashlib.sha256(json.dumps([bon_id,d],sort_keys=True).encode()).hexdigest()
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE');bon=load_bon(c,bon_id,u);active_hub(c,bon['hub_id'])
+            prior=c.execute('SELECT * FROM ramassage_receive_keys WHERE actor_id=? AND request_key=?',(u['id'],key)).fetchone()
+            if prior:
+                if prior['fingerprint']!=fp:raise Error('Clé déjà utilisée pour une autre réception.',409)
+                return jsonify(**json.loads(prior['result']),replayed=True)
+            if bon['status'] not in ('Confirmé','En cours'):raise Error('Bon non disponible pour réception.',409)
+            if snapshot!=reception_snapshot(c,bon):raise Error('Le bon ou ses commandes ont changé. Actualisez et contrôlez les scans avant de confirmer.',409)
+            lines=c.execute('SELECT * FROM ramassage_bon_lines WHERE bon_id=? AND active=1 AND received_at IS NULL ORDER BY id',(bon_id,)).fetchall()
+            if set(ids)!={l['parcel_id'] for l in lines}:raise Error('Scannez tous les colis restants, sans ajout extérieur au bon.',409)
+            tables={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for line in lines:
+                p=dict(c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone())
+                if p['client_id']!=bon['client_id'] or p['status']!='Confirmé' or p['tracking']!=line['tracking'] or p['invoice_id'] is not None or p['current_hub_id'] is not None or p.get('driver_id') is not None:
+                    raise Error('Commande modifiée, affectée ou verrouillée : réception annulée.',409)
+                for table in ('driver_statement_lines','ops_document_lines'):
+                    if table in tables and c.execute('SELECT 1 FROM '+table+' WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():raise Error('Commande liée à un autre document actif.',409)
+            t=now();has_revision='ops_revision' in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
+            for line in lines:
+                revision=',ops_revision=ops_revision+1' if has_revision else ''
+                c.execute("UPDATE parcels SET status='Ramassé',current_hub_id=?,updated_at=?"+revision+' WHERE id=?',(bon['hub_id'],t,line['parcel_id']))
+                c.execute('UPDATE ramassage_bon_lines SET received_at=?,received_by=? WHERE id=?',(t,u['id'],line['id']))
+                event(c,line['parcel_id'],'Ramassé',bon['reference']+' · réception confirmée après scan individuel : '+line['tracking'],u)
+            c.execute("UPDATE ramassage_bons SET status='Reçu',completed_at=? WHERE id=?",(t,bon_id))
+            c.execute('UPDATE ramassage_bon_lines SET active=0 WHERE bon_id=?',(bon_id,))
+            result=dict(ok=True,id=bon_id,status='Reçu',received=len(lines),remaining=0)
+            c.execute('INSERT INTO ramassage_receive_keys VALUES(?,?,?,?)',(u['id'],key,fp,json.dumps(result)))
+            return jsonify(result)
+
+    @app.get('/api/ramassage-bons/hub/collected')
+    @auth('admin', 'agent')
+    def ramassage_collected():
+        u = user()
+        page = integer(request.args.get('page', 1), 'Page')
+        size = min(integer(request.args.get('size', 30), 'Taille'), 100)
+        q = request.args.get('q', '').strip()[:120]
+        state = request.args.get('state', '')
+        if state not in ('', 'at_hub', 'prepared', 'transit', 'review'):
+            raise Error('Filtre invalide.')
+        with conn() as c:
+            cid = central_id(c)
+            hub_id = u.get('agent_hub_id') if u['role']=='agent' else request.args.get('hub_id')
+            if u['role']=='agent':
+                active_hub(c, hub_id)
+                if request.args.get('hub_id') and integer(request.args['hub_id'], 'Hub')!=hub_id:
+                    raise Error('Hub introuvable.', 404)
+            elif hub_id:
+                hub_id = integer(hub_id, 'Hub')
+                active_hub(c, hub_id)
+            where = ["rl.received_at IS NOT NULL", "COALESCE(u.client_type,'vendeur')='vendeur'",
+                     'done.ramassage_line_id IS NULL',
+                     '''NOT EXISTS(SELECT 1 FROM ramassage_bon_lines newer
+                        JOIN ramassage_bons nb ON nb.id=newer.bon_id
+                        WHERE newer.parcel_id=rl.parcel_id AND nb.hub_id=b.hub_id
+                          AND newer.received_at IS NOT NULL
+                          AND (newer.received_at>rl.received_at OR
+                            (newer.received_at=rl.received_at AND newer.id>rl.id)))''']
+            args = []
+            if hub_id:
+                where.append('b.hub_id=?'); args.append(hub_id)
+            if cid:
+                # A pickup directly received at Central already reached its destination.
+                where.append('b.hub_id!=?'); args.append(cid)
+            if q:
+                where.append("(p.tracking LIKE ? ESCAPE '\\' OR p.recipient LIKE ? ESCAPE '\\' OR u.name LIKE ? ESCAPE '\\' OR u.company LIKE ? ESCAPE '\\' OR b.reference LIKE ? ESCAPE '\\')")
+                pattern = '%'+q.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
+                args.extend([pattern]*5)
+            tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            joins = ''
+            transfer = 'NULL transfer_id,NULL transfer_reference,NULL destination_hub_id,NULL departure_scanned_at,NULL transfer_status,0 departure_scan_required'
+            if {'ops_documents','ops_document_lines'} <= tables:
+                joins = '''LEFT JOIN ops_document_lines tl ON tl.id=(
+                    SELECT x.id FROM ops_document_lines x JOIN ops_documents d ON d.id=x.document_id
+                    WHERE x.parcel_id=rl.parcel_id AND d.kind='transfer'
+                      AND d.source_hub_id=b.hub_id AND d.created_at>=rl.received_at
+                      AND d.status!='Annulé' AND x.active=1 AND x.received_at IS NULL
+                      AND x.departure_reconciled_at IS NULL ORDER BY x.id DESC LIMIT 1)
+                    LEFT JOIN ops_documents td ON td.id=tl.document_id'''
+                transfer = 'td.id transfer_id,td.reference transfer_reference,td.destination_hub_id,tl.departure_scanned_at,td.status transfer_status,td.departure_scan_required'
+            sql = '''WITH candidates AS (
+                SELECT rl.id receipt_line_id,rl.received_at,b.id bon_id,b.reference bon_reference,
+                    b.hub_id,h.name hub_name,p.id parcel_id,p.tracking,p.recipient,p.status parcel_status,
+                    p.current_hub_id,u.name client_name,u.company client_company,ci.name city,
+                    '''+transfer+'''
+                FROM ramassage_bon_lines rl JOIN ramassage_bons b ON b.id=rl.bon_id
+                JOIN parcels p ON p.id=rl.parcel_id JOIN users u ON u.id=b.client_id
+                LEFT JOIN cities ci ON ci.id=p.city_id LEFT JOIN ops_hubs h ON h.id=b.hub_id
+                LEFT JOIN ramassage_central_receipts done ON done.ramassage_line_id=rl.id
+                '''+joins+' WHERE '+' AND '.join(where)+'''), classified AS (
+                SELECT *,CASE
+                    WHEN destination_hub_id=? AND current_hub_id IS NULL AND
+                        (departure_scanned_at IS NOT NULL OR (departure_scan_required=0 AND transfer_status IN ('En transit','Partiellement reçu')))
+                        THEN 'transit'
+                    WHEN current_hub_id=hub_id AND parcel_status IN ('Ramassé','Au hub','Réceptionné') AND transfer_id IS NOT NULL THEN 'prepared'
+                    WHEN current_hub_id=hub_id AND parcel_status IN ('Ramassé','Au hub','Réceptionné') THEN 'at_hub'
+                    ELSE 'review' END state FROM candidates)
+            '''
+            args.append(cid)
+            counts = {r['state']:r['n'] for r in c.execute(sql+'SELECT state,count(*) n FROM classified GROUP BY state',args)}
+            clause = ' WHERE state=?' if state else ''
+            selected_args = args+([state] if state else [])
+            total = counts.get(state,0) if state else sum(counts.values())
+            rows = [dict(r) for r in c.execute(sql+'SELECT * FROM classified'+clause+' ORDER BY received_at DESC,receipt_line_id DESC LIMIT ? OFFSET ?',selected_args+[size,(page-1)*size])]
+            hubs = [dict(r) for r in c.execute('SELECT id,name FROM ops_hubs WHERE active=1'+(' AND id=?' if u['role']=='agent' else '')+' ORDER BY name', [hub_id] if u['role']=='agent' else [])]
+            return jsonify(rows=rows,total=total,counts=counts,page=page,size=size,hubs=hubs,central_hub_id=cid)
