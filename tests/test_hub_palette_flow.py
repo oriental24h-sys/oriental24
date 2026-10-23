@@ -151,6 +151,7 @@ class HubPaletteFlowTests(unittest.TestCase):
                 INSERT INTO driver_statement_lines(id,parcel_id,active) VALUES(1,5,1);
             ''')
 
+        self.services = services
         register_logistics(self.app, services)
         # register_security runs later in app.py; its service is added to this same dict.
         services['security_revoke_user']=security_revoke_user
@@ -358,6 +359,40 @@ class HubPaletteFlowTests(unittest.TestCase):
             c.execute('UPDATE parcels SET current_hub_id=NULL WHERE id=1')
         self.assertEqual(self.receive(did,'TRK-RETURN-1',90,990).status_code,200)
         self.assertEqual(self.parcel_state(1)['status'],'Retourné')
+
+    def test_seller_collected_list_tracks_real_transfer_until_each_central_receipt(self):
+        from ramassage_bon import register_ramassage_bon
+        register_ramassage_bon(self.app,self.services)
+        with self.conn() as c:
+            c.execute("INSERT INTO users(id,name,email,role) VALUES(2,'Seller','seller@test','client')")
+            c.execute("UPDATE parcels SET client_id=2,status='Créé',current_hub_id=NULL,invoice_id=NULL WHERE id IN (3,4)")
+        admin=self.headers('admin');agent=self.headers('agent',10,910)
+        r=self.client.post('/api/ramassage-bons',headers=admin,json=dict(client_id=2,hub_id=10,city_id=2,address='Address',phone='0600000000',pickup_date='2026-11-01',parcel_ids=[3,4]))
+        self.assertEqual(r.status_code,200,r.json);bid=r.json['id']
+        self.client.post(f'/api/ramassage-bons/{bid}/validate',headers=admin)
+        url='/api/ramassage-bons/hub/collected'
+        self.assertEqual(self.client.get(url,headers=agent).json['total'],0)
+        detail=self.client.get(f'/api/ramassage-bons/{bid}',headers=agent).json
+        r=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=agent,json=dict(parcel_ids=[3,4],snapshot=detail['snapshot'],confirmed=True,request_key='test-collected-central-001'))
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.client.get(url,headers=agent).json['counts'],{'at_hub':2})
+        self.assertEqual(self.client.get(url,headers=self.headers('agent',20,920)).json['total'],0)
+        r=self.create_palette('agent',10,'standard',10,90,[3,4],910)
+        self.assertEqual(r.status_code,200,r.json);did=r.json['id']
+        self.assertEqual(self.client.get(url,headers=agent).json['counts'],{'prepared':2})
+        self.assertEqual(self.scan_departure(did,'TRK-STANDARD',10,910).status_code,200)
+        self.assertEqual(self.client.get(url,headers=agent).json['counts'],{'transit':1,'prepared':1})
+        self.assertEqual(self.receive(did,'TRK-STANDARD',90,990).status_code,200)
+        self.assertEqual(self.client.get(url,headers=agent).json['total'],1)
+        self.assertEqual(self.client.get(url,headers=agent).json['rows'][0]['parcel_id'],4)
+        self.assertEqual(self.scan_departure(did,'TRK-INVOICED',10,910).status_code,200)
+        self.assertEqual(self.client.get(url,headers=agent).json['counts'],{'transit':1})
+        self.assertEqual(self.receive(did,'TRK-INVOICED',90,990).status_code,200)
+        self.assertEqual(self.client.get(url,headers=agent).json['total'],0)
+        with self.conn() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM ramassage_central_receipts').fetchone()[0],2)
+            c.execute("UPDATE settings SET value='20' WHERE key='central_hub_id'")
+        self.assertEqual(self.client.get(url,headers=agent).json['total'],0)
 
     def test_standard_transfers_still_use_transit_then_receptionne(self):
         r=self.create_palette('agent',10,'standard',10,90,[3],910)
