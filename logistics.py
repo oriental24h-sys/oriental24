@@ -516,6 +516,14 @@ def register_logistics(app, services):
             audit(c,None,u,'Motif de suivi modifié',dict(parcel_id=pid,old_code=p['reason_code'],code=code,label=label))
             return jsonify(ok=True,changed=True)
 
+    @app.get(P+'/followup-reasons')
+    @auth('livreur')
+    def driver_followup_reasons():
+        # Minimal read-only vocabulary, not the restricted Hub configuration.
+        with conn() as c:
+            return jsonify(reasons=[dict(r) for r in c.execute(
+                'SELECT code,label,active FROM ops_reasons WHERE active=1 ORDER BY label')])
+
     @app.patch('/api/parcels/<int:pid>/followup')
     @auth('livreur')
     def driver_parcel_followup(pid):
