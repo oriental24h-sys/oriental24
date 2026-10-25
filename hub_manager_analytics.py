@@ -4,6 +4,9 @@ import io
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 from flask import request, jsonify, Response
+from parcel_statuses import STATUSES, ATTEMPT_OUTCOMES
+
+PROCESSING_STATUSES=tuple(dict.fromkeys([*ATTEMPT_OUTCOMES,'Intéressé','Annulé','Injoignable']))
 
 TZ=ZoneInfo('Africa/Casablanca')
 
@@ -29,6 +32,47 @@ def period(args):
     end=read('to',today.isoformat(),True)
     if start>end or (end.date()-start.date()).days>30:raise ValueError('Choisissez une période de 31 jours maximum, dans le bon ordre.')
     return start,end
+
+
+def last_processing_evidence(c,pid,did,hid,assigned,cutoff,next_assignment):
+    """Read structured attempts AND genuine courier status changes in the same cycle.
+
+    A custody receipt, financial note, current status alone, or different driver's action
+    is not proof. NULL legacy attempt Hub is attributable only through this explicit
+    Hub assignment interval. A conflicting non-NULL attempt Hub always stays excluded.
+    """
+    until=next_assignment if next_assignment is not None else cutoff+1
+    row=c.execute('''SELECT outcome,created_at,id FROM ops_attempts WHERE parcel_id=? AND driver_id=?
+        AND (operational_hub_id=? OR operational_hub_id IS NULL)
+        AND hma_stamp(created_at)>=? AND hma_stamp(created_at)<=? AND hma_stamp(created_at)<?
+        ORDER BY hma_stamp(created_at) DESC,id DESC LIMIT 1''',
+        (pid,did,hid,assigned,cutoff,until)).fetchone()
+    found=dict(outcome=row['outcome'],created_at=row['created_at'],source='attempt') if row else None
+    # Some valid status paths (Annulé, Intéressé, Programmé from Reçu par le livreur)
+    # historically write events rather than ops_attempts. Never fabricate attempts.
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+        marks=','.join('?' for _ in PROCESSING_STATUSES)
+        states=','.join('?' for _ in STATUSES)
+        events=c.execute(f'''SELECT e.*,(SELECT p.status FROM events p WHERE p.parcel_id=e.parcel_id
+            AND p.id<e.id AND p.status IN ({states}) ORDER BY p.id DESC LIMIT 1) previous_status
+            FROM events e WHERE e.parcel_id=? AND e.actor_id=? AND e.status IN ({marks})
+            AND hma_stamp(e.created_at)>=? AND hma_stamp(e.created_at)<=? AND hma_stamp(e.created_at)<?
+            ORDER BY hma_stamp(e.created_at) DESC,e.id DESC''',
+            [*STATUSES,pid,did,*PROCESSING_STATUSES,assigned,cutoff,until]).fetchall()
+        for e in events:
+            # A repeated same-state event can be a note / scan, not a new treatment.
+            changed=e['previous_status'] is not None and e['previous_status']!=e['status']
+            explicit=e['previous_status'] is None and (e['note']=='Statut mis à jour' or (e['note'] or '').startswith('Tentative : '))
+            if not (changed or explicit):continue
+            # Do not bypass an explicit conflicting Hub snapshot by reading its mirror event.
+            conflict=c.execute('''SELECT 1 FROM ops_attempts WHERE parcel_id=? AND driver_id=? AND outcome=?
+                AND operational_hub_id IS NOT NULL AND operational_hub_id!=?
+                AND hma_stamp(created_at)=hma_stamp(?) LIMIT 1''',(pid,did,e['status'],hid,e['created_at'])).fetchone()
+            if conflict:continue
+            if found is None or stamp(e['created_at'])>stamp(found['created_at']):
+                found=dict(outcome=e['status'],created_at=e['created_at'],source='status_history')
+            break
+    return found
 
 
 def analytics(c,hid,start,end,driver_id=None):
@@ -58,15 +102,11 @@ def analytics(c,hid,start,end,driver_id=None):
         nxt=c.execute('''SELECT hma_stamp(created_at) ts FROM ops_assignments WHERE parcel_id=?
             AND (hma_stamp(created_at)>? OR (hma_stamp(created_at)=? AND id>?))
             ORDER BY hma_stamp(created_at),id LIMIT 1''',(pid,assigned,assigned,a['id'])).fetchone()
-        until=nxt['ts'] if nxt else end.timestamp()+1
-        attempts=c.execute('''SELECT outcome,created_at,id FROM ops_attempts WHERE parcel_id=? AND driver_id=?
-            AND operational_hub_id=? AND hma_stamp(created_at)>=? AND hma_stamp(created_at)<=?
-            AND (?=0 OR hma_stamp(created_at)<?)
-            ORDER BY hma_stamp(created_at) DESC,id DESC LIMIT 1''',
-            (pid,did,hid,assigned,end.timestamp(),int(bool(nxt)),until)).fetchone()
+        attempts=last_processing_evidence(c,pid,did,hid,assigned,end.timestamp(),nxt['ts'] if nxt else None)
         detail.append(dict(parcel_id=pid,tracking=a['tracking'],driver_id=did,assigned_at=a['created_at'],
             processed=bool(attempts),outcome=attempts['outcome'] if attempts else 'Sans tentative',
-            attempted_at=attempts['created_at'] if attempts else None))
+            attempted_at=attempts['created_at'] if attempts else None,
+            evidence_source=attempts['source'] if attempts else None))
     rows=[]
     for dr in drivers:
         parcels=[p for p in detail if p['driver_id']==dr['id']]
