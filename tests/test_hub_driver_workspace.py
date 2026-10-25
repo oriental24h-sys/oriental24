@@ -528,6 +528,38 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         pid,_=self.parcel(None,'En livraison',self.other_driver,self.foreign)
         self.assertEqual(self.status_patch(pid,'Reporté').status_code,404)
 
+    def test_driver_can_add_motif_and_note_without_status_change(self):
+        from werkzeug.security import generate_password_hash
+        pid,_=self.parcel(self.hub)
+        self.assertEqual(self.scan('assign',[(pid,0)]).status_code,200)
+        with self.m.conn() as c:
+            c.execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash('TestPassword!123'),self.driver))
+            email=c.execute('SELECT email FROM users WHERE id=?',(self.driver,)).fetchone()[0]
+            reason=c.execute('SELECT code FROM ops_reasons WHERE active=1 LIMIT 1').fetchone()[0]
+            before=dict(c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone())
+        browser=self.m.app.test_client()
+        self.assertEqual(browser.post('/api/login',json={'email':email,'password':'TestPassword!123'}).status_code,200)
+        headers={'X-CSRF-Token':browser.get('/api/bootstrap').json['csrf']}
+        payload=dict(reason_code=reason,note='Client joignable après 18h',revision=before['ops_revision'])
+        endpoint=f'/api/parcels/{pid}/followup'
+        self.assertEqual(browser.patch(endpoint,json=payload).status_code,403)
+        r=browser.patch(endpoint,json=payload,headers=headers);self.assertEqual(r.status_code,200,r.json)
+        with self.m.conn() as c:
+            after=dict(c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone())
+            for key in ('status','amount','fee','driver_id','note','current_hub_id','next_attempt_at','status_updated_at'):
+                self.assertEqual(after[key],before[key])
+            self.assertEqual(after['reason_code'],reason)
+            ev=c.execute('SELECT * FROM events WHERE parcel_id=? ORDER BY id DESC LIMIT 1',(pid,)).fetchone()
+            self.assertEqual(ev['actor_id'],self.driver);self.assertIn(payload['note'],ev['note'])
+        # Visible to the Hub in the existing chronology.
+        self.assertTrue(any(payload['note'] in e['note'] for e in self.client.get(f'/api/parcels/{pid}').json['events']))
+        self.assertEqual(browser.patch(endpoint,json=payload,headers=headers).status_code,409)
+        self.assertEqual(browser.patch(endpoint,json={**payload,'revision':after['ops_revision'],'status':'Livré'},headers=headers).status_code,400)
+        other,_=self.parcel(None,'En livraison',self.other_driver,self.foreign)
+        self.assertEqual(browser.patch(f'/api/parcels/{other}/followup',json=payload,headers=headers).status_code,404)
+        with self.m.conn() as c:c.execute("UPDATE parcels SET status='Livré' WHERE id=?",(pid,))
+        self.assertEqual(browser.patch(endpoint,json={**payload,'revision':after['ops_revision']},headers=headers).status_code,409)
+
     def test_status_scope_fields_revision_csrf_and_inactive_hub(self):
         pid,_=self.parcel(self.hub)
         foreign,_=self.parcel(self.foreign)
