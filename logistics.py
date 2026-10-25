@@ -30,6 +30,13 @@ REASONS += [('no_answer','Pas de réponse'),('postponed','Reporté'),
  ('wrong_number','Numéro incorrect'),('travelling','Le client est en voyage'),
  ('not_interested','Client(e) pas intéressé'),('return_agency','Retour envoyé vers agence')]
 
+def release_received_transfer_lines(c):
+    """Repair legacy locks without deleting manifest/history or unlocking pending lines."""
+    return c.execute("""UPDATE ops_document_lines SET active=0
+        WHERE active=1 AND received_at IS NOT NULL
+          AND document_id IN (SELECT id FROM ops_documents WHERE kind='transfer')""").rowcount
+
+
 def register_logistics(app, services):
     conn,auth,user,now,text,Error,event,parcel = (services[k] for k in ['conn','auth','user','now','text','APIError','event','parcel'])
     generate_password_hash=services['generate_password_hash']
@@ -90,6 +97,7 @@ def register_logistics(app, services):
         if 'departure_reconciled_by' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_reconciled_by INTEGER')
         if 'departure_reconciliation_reason' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_reconciliation_reason TEXT')
         install_departure_reconciliation_guard(c)
+        release_received_transfer_lines(c)
         columns={r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
         for key,definition in [('reason_code','TEXT'),('next_attempt_at','TEXT'),('ops_revision','INTEGER NOT NULL DEFAULT 0'),('current_hub_id','INTEGER REFERENCES ops_hubs(id)'),('origin_hub_id','INTEGER REFERENCES ops_hubs(id)')]:
             if key not in columns:c.execute(f'ALTER TABLE parcels ADD COLUMN {key} {definition}')
@@ -1104,7 +1112,7 @@ def register_logistics(app, services):
         if special_return and (line.get('return_status') not in ('Retourné','Refusé') or p['status']!=(line.get('return_transit_status') or line.get('return_status'))):
             raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
         received_at=now()
-        c.execute('UPDATE ops_document_lines SET received_at=?,received_by=? WHERE id=?',(received_at,u['id'],line['id']))
+        c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(received_at,u['id'],line['id']))
         received_count=doc['received']+1
         departures_complete=(not doc['departure_scan_required'] or doc['departure_scanned']==doc['count'])
         complete=departures_complete and received_count==doc['count']
@@ -1589,4 +1597,22 @@ def register_logistics(app, services):
             c.execute('UPDATE ops_documents SET departure_scan_required=1 WHERE id=?',(doc['id'],))
         for line in ls:dispatch_collection_line(c,doc['id'],line['tracking'].upper(),u)
 
-    services.setdefault('dispatch_adapters',{})['transfer']={'load':dispatch_collection_load,'check':dispatch_collection_check,'apply':dispatch_collection_apply}
+    def dispatch_collection_release(c,doc,ls,u):
+        # Unscanned lines stay at source; retain their history but exclude them from
+        # the live manifest, reception, quantities and printed departure document.
+        at=now();reason='Non scanné à la validation : resté au Hub, disponible pour une autre palette.'
+        for line in ls:
+            p=c.execute('SELECT current_hub_id FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
+            if not p or not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
+                raise Error('Un colis non scanné n’est plus au Hub source. Contrôlez le manifeste.',409)
+            cur=c.execute('''UPDATE ops_document_lines SET active=0,departure_reconciled_at=?,
+                departure_reconciled_by=?,departure_reconciliation_reason=?
+                WHERE id=? AND active=1 AND received_at IS NULL AND departure_scanned_at IS NULL
+                  AND departure_reconciled_at IS NULL''',(at,u['id'],reason,line['id']))
+            if cur.rowcount!=1:raise Error('Une ligne non scannée a changé. Rouvrez le manifeste.',409)
+            c.execute('UPDATE parcels SET ops_revision=ops_revision+1 WHERE id=?',(line['parcel_id'],))
+        audit(c,doc['id'],u,'Colis non scannés libérés au Hub source',
+              {'count':len(ls),'parcel_ids':[l['parcel_id'] for l in ls],
+               'trackings':[l['tracking'] for l in ls],'reason':reason})
+
+    services.setdefault('dispatch_adapters',{})['transfer']={'load':dispatch_collection_load,'check':dispatch_collection_check,'apply':dispatch_collection_apply,'release':dispatch_collection_release}

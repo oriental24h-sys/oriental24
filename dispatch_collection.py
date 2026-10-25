@@ -41,7 +41,7 @@ def register_dispatch_collection(app,s):
                 private=u['role']=='agent' and l.get('current_hub_id')!=u.get('agent_hub_id')
                 rows.append(dict(id=l['id'],tracking=l['tracking'],received_at=sent(kind,doc,l),excluded=excluded(l),blocked=bool(reason),blocked_reason=reason,
                     recipient='' if private else l.get('recipient',''),city='' if private else l.get('city','')))
-            return jsonify(id=did,reference=doc['reference'],status=doc['status'],snapshot=snapshot,lines=rows,available=available(doc),
+            return jsonify(id=did,reference=doc['reference'],status=doc['status'],snapshot=snapshot,lines=rows,available=available(doc),allow_partial_dispatch=bool(a.get('release')),
                 route=' → '.join(filter(None,[doc.get('source_name') or doc.get('client_name'),doc.get('destination_name')])),
                 confirmation='Je confirme le départ physique de tous les colis scannés. Aucun envoi avant cette validation.')
 
@@ -77,9 +77,13 @@ def register_dispatch_collection(app,s):
             if d.get('snapshot')!=snapshot:raise Error('Le manifeste, les commandes ou le trajet ont changé. Rouvrez et contrôlez les scans.',409)
             if not available(doc):raise Error('Palette indisponible pour envoi.',409)
             pending=[l for l in ls if not sent(kind,doc,l) and not excluded(l)]
-            if set(ids)!={l['id'] for l in pending}:raise Error('Scannez tous les colis restant à envoyer, sans ajout extérieur.',409)
-            for l in pending:a['check'](c,doc,l,u)
-            a['apply'](c,doc,pending,u)
-            result=dict(ok=True,id=did,dispatched=len(pending),reference=doc['reference'])
+            if not set(ids).issubset({l['id'] for l in pending}):raise Error('Commande extérieure, exclue ou déjà envoyée.',409)
+            selected=[l for l in pending if l['id'] in set(ids)]
+            omitted=[l for l in pending if l['id'] not in set(ids)]
+            if omitted and not a.get('release'):raise Error('Ce type de document exige encore tous les scans.',409)
+            for l in selected:a['check'](c,doc,l,u)
+            if omitted:a['release'](c,doc,omitted,u)
+            a['apply'](c,doc,selected,u)
+            result=dict(ok=True,id=did,dispatched=len(selected),released=len(omitted),reference=doc['reference'])
             c.execute('INSERT INTO dispatch_collection_keys VALUES(?,?,?,?)',(u['id'],key,fp,json.dumps(result)))
             return jsonify(result)
