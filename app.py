@@ -1109,6 +1109,8 @@ register_dispatch_collection(app, globals())
 register_temporary_passwords(app, globals())
 from sidebar_counts import register_sidebar_counts
 register_sidebar_counts(app, globals())
+from hub_billing import register_hub_billing
+register_hub_billing(app, globals())
 
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.

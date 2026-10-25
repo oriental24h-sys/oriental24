@@ -7,6 +7,9 @@ import re
 import sqlite3
 
 HUB_MANAGER_SCOPED_ROUTES = (
+    ('GET', r'/api/hub-billing'),
+    ('GET', r'/api/hub-billing/\d+'),
+    ('GET', r'/api/hub-billing/\d+/csv'),
     ('GET', r'/api/drivers-workspace/\d+'),
     ('POST', r'/api/drivers-workspace/\d+/scan-preview'),
     ('POST', r'/api/drivers-workspace/\d+/scan-batch'),
@@ -87,6 +90,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
 )
 
 HUB_OPERATIONAL_PREFIXES = (
+    '/api/hub-billing',
     '/api/drivers-workspace', '/api/driver-finance',
     '/api/parcels/', '/api/logistics/parcels/', '/api/logistics/config', '/api/logistics/documents', '/api/logistics/hub-dashboard', '/api/logistics/hub/', '/api/logistics/hub/drivers', '/api/logistics/cod/', '/api/logistics/notifications', '/api/partner-palettes',
     '/api/partner-palette-incidents', '/api/return-palettes', '/api/alerts',
