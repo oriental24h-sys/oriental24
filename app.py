@@ -1113,6 +1113,8 @@ from hub_billing import register_hub_billing
 register_hub_billing(app, globals())
 from hub_manager_analytics import register_hub_manager_analytics
 register_hub_manager_analytics(app, globals())
+from admin_hub_analytics import register_admin_hub_analytics
+register_admin_hub_analytics(app, globals())
 
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.
