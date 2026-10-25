@@ -8,7 +8,7 @@ import json
 import os
 import re
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from flask import jsonify, request, Response
@@ -73,9 +73,17 @@ def ensure_schema(c):
         commission_cents INTEGER NOT NULL,closed_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS hub_billing_print_snapshots(
         statement_id INTEGER PRIMARY KEY REFERENCES hub_billing_statements(id),payload TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS hub_billing_receipts(
+        id INTEGER PRIMARY KEY,statement_id INTEGER NOT NULL UNIQUE REFERENCES hub_billing_statements(id),
+        amount_cents INTEGER NOT NULL CHECK(amount_cents>0),method TEXT NOT NULL,
+        reference TEXT NOT NULL,paid_on TEXT NOT NULL,created_by INTEGER NOT NULL REFERENCES users(id),
+        actor_name TEXT NOT NULL,created_at TEXT NOT NULL,request_key TEXT NOT NULL UNIQUE,payload_hash TEXT NOT NULL);
+    CREATE TRIGGER IF NOT EXISTS hub_billing_receipts_full_amount BEFORE INSERT ON hub_billing_receipts
+    WHEN NEW.amount_cents IS NOT (SELECT cash_due_cents FROM hub_billing_statements WHERE id=NEW.statement_id)
+    BEGIN SELECT RAISE(ABORT,'Full invoice amount required'); END;
     CREATE INDEX IF NOT EXISTS hub_billing_statements_hub ON hub_billing_statements(hub_id,id);
     ''')
-    for table in ('hub_billing_statements', 'hub_billing_lines', 'hub_billing_runs', 'hub_billing_print_snapshots'):
+    for table in ('hub_billing_statements', 'hub_billing_lines', 'hub_billing_runs', 'hub_billing_print_snapshots', 'hub_billing_receipts'):
         c.executescript(f'''
         CREATE TRIGGER IF NOT EXISTS {table}_no_update BEFORE UPDATE ON {table}
         BEGIN SELECT RAISE(ABORT,'{table} is immutable'); END;
@@ -100,10 +108,14 @@ def candidates(c, cutoff):
         ORDER BY p.id''', (cutoff,))]
 
 
-def statement_summary(row):
+def statement_summary(row, receipt=None):
     d = dict(row)
     d['reference'] = 'HUB-%06d' % d['id']
-    d['state'] = 'Not Paid' if d['cash_due_cents'] or d['commission_due_cents'] else 'Solde nul'
+    d['state'] = 'Paid' if receipt else 'Not Paid' if d['cash_due_cents'] else 'Solde nul'
+    d['paid_cents'] = receipt['amount_cents'] if receipt else 0
+    d['cash_remaining_cents'] = d['cash_due_cents']-d['paid_cents']
+    d['paid_on'] = receipt['paid_on'] if receipt else None
+    d['updated_at'] = receipt['created_at'] if receipt else d['created_at']
     return d
 
 
@@ -213,7 +225,8 @@ def register_hub_billing(app, s):
                         [sid]+([h['id']] if h else [])).fetchone()
         if not row:
             raise Error('Facture introuvable.',404)
-        return dict(invoice=statement_summary(row), lines=[dict(r) for r in c.execute('SELECT * FROM hub_billing_lines WHERE statement_id=? ORDER BY id',(sid,))])
+        receipt=c.execute('SELECT * FROM hub_billing_receipts WHERE statement_id=?',(sid,)).fetchone()
+        return dict(invoice=statement_summary(row,receipt),receipt={k:receipt[k] for k in ('id','statement_id','amount_cents','method','reference','paid_on','created_by','actor_name','created_at')} if receipt else None, lines=[dict(r) for r in c.execute('SELECT * FROM hub_billing_lines WHERE statement_id=? ORDER BY id',(sid,))])
 
     @app.get('/api/hub-billing')
     @auth('admin','agent')
@@ -222,7 +235,7 @@ def register_hub_billing(app, s):
         with conn() as c:
             h = manager(c,u)
             rows = c.execute('SELECT * FROM hub_billing_statements'+(' WHERE hub_id=?' if h else '')+' ORDER BY id DESC LIMIT 500', [h['id']] if h else []).fetchall()
-            result = dict(hub=h, rows=[statement_summary(r) for r in rows], read_only=True)
+            result = dict(hub=h, rows=[statement_summary(r,c.execute('SELECT * FROM hub_billing_receipts WHERE statement_id=?',(r['id'],)).fetchone()) for r in rows], read_only=True)
             if u['role']=='admin':
                 result['hubs'] = [dict(r) for r in c.execute('SELECT h.id,h.name,h.active,t.mode,t.delivered_cents,t.returned_cents,t.refused_cents,t.revision FROM ops_hubs h LEFT JOIN hub_billing_terms t ON t.hub_id=h.id ORDER BY h.name')]
                 result['schedule'] = dict(c.execute('SELECT * FROM hub_billing_schedule WHERE id=1').fetchone())
@@ -237,18 +250,56 @@ def register_hub_billing(app, s):
         with conn() as c:
             return jsonify(detail(c,sid,user()))
 
+    @app.post('/api/hub-billing/<int:sid>/paid')
+    @auth('admin')
+    def hub_billing_paid(sid):
+        d=request.get_json(silent=True);u=user()
+        required={'amount_cents','method','reference','paid_on','request_key','confirmed'}
+        if not isinstance(d,dict) or set(d)!=required or d.get('confirmed') is not True:
+            raise Error('Confirmez la réception réelle du montant intégral de la facture.')
+        if type(d['amount_cents']) is not int or d['amount_cents']<=0:
+            raise Error('Montant intégral obligatoire ; aucun paiement partiel.')
+        if d['method'] not in ('Espèces','Virement','Chèque'):
+            raise Error('Mode de règlement invalide.')
+        if not isinstance(d['reference'],str) or not 1<=len(d['reference'].strip())<=100 or any(ord(ch)<32 for ch in d['reference']):
+            raise Error('Référence du règlement obligatoire (100 caractères maximum).')
+        if not isinstance(d['request_key'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{20,80}',d['request_key']):
+            raise Error('Identifiant de confirmation invalide.')
+        try:
+            if not isinstance(d['paid_on'],str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',d['paid_on']) or date.fromisoformat(d['paid_on'])>local_now().date():raise ValueError()
+        except ValueError:raise Error('Date du règlement invalide ou future.')
+        d={**d,'reference':d['reference'].strip()}
+        hashed=hashlib.sha256(json.dumps([sid,u['id'],d],sort_keys=True).encode()).hexdigest()
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            invoice=detail(c,sid,u)['invoice']
+            prior=c.execute('SELECT * FROM hub_billing_receipts WHERE request_key=?',(d['request_key'],)).fetchone()
+            if prior:
+                if prior['payload_hash']!=hashed:raise Error('Clé déjà utilisée pour un autre règlement.',409)
+                return jsonify(ok=True,already_recorded=True,invoice=invoice)
+            if invoice['state']=='Paid':raise Error('Cette facture est déjà Paid. Aucun double règlement.',409)
+            if d['amount_cents']!=invoice['cash_due_cents']:
+                raise Error('Le montant doit correspondre exactement au montant à remettre. Aucun paiement partiel.',409)
+            c.execute('''INSERT INTO hub_billing_receipts(statement_id,amount_cents,method,reference,paid_on,
+                created_by,actor_name,created_at,request_key,payload_hash) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                (sid,d['amount_cents'],d['method'],d['reference'],d['paid_on'],u['id'],u['name'],s['now'](),d['request_key'],hashed))
+            s['append_audit_log'](c,actor_id=u['id'],actor_name=u['name'],action='hub_invoice_paid',entity_type='hub_invoice',entity_id=sid,
+                old_value=dict(state=invoice['state'],cash_remaining_cents=invoice['cash_remaining_cents']),
+                new_value=dict(state='Paid',amount_cents=d['amount_cents'],reference=d['reference'],paid_on=d['paid_on'],method=d['method']),created_at=s['now']())
+            return jsonify(ok=True,already_recorded=False,invoice=detail(c,sid,u)['invoice'])
+
     @app.get('/api/hub-billing/<int:sid>/csv')
     @auth('admin','agent')
     def hub_billing_csv(sid):
         with conn() as c:
             d = detail(c,sid,user())
         buf = io.StringIO(); w = csv.writer(buf)
-        w.writerow(['Facture','Hub','Tracking','Ville','État','COD MAD','Commission MAD'])
+        w.writerow(['Facture','Hub','Tracking','Ville','État colis','COD MAD','Commission MAD','État facture','Reçu MAD','Reste à remettre MAD','Date règlement'])
         def safe(v):
             v = str(v)
             return "'"+v if v.lstrip().startswith(('=','+','-','@')) else v
         for l in d['lines']:
-            w.writerow([d['invoice']['reference'],safe(d['invoice']['hub_name']),safe(l['tracking']),safe(l['city']),l['status'],f"{l['cod_cents']/100:.2f}",f"{l['commission_cents']/100:.2f}"])
+            w.writerow([d['invoice']['reference'],safe(d['invoice']['hub_name']),safe(l['tracking']),safe(l['city']),l['status'],f"{l['cod_cents']/100:.2f}",f"{l['commission_cents']/100:.2f}",d['invoice']['state'],f"{d['invoice']['paid_cents']/100:.2f}",f"{d['invoice']['cash_remaining_cents']/100:.2f}",d['invoice']['paid_on'] or ''])
         return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename="{d["invoice"]["reference"]}.csv"'})
 
     @app.get('/api/hub-billing/<int:sid>/pdf')
@@ -262,10 +313,12 @@ def register_hub_billing(app, s):
             snap=json.loads(row['payload']) if row else {}
         recipient=snap.get('recipient',{})
         r=dict(id=i['id'],kind='hub',reference=i['reference'],name=i['hub_name'],email=recipient.get('email',''),
-               state='Non suivi',parcel_count=i['parcel_count'],created_at=i['created_at'],cod_cents=i['cod_cents'],
+               state=i['state'],parcel_count=i['parcel_count'],created_at=i['created_at'],cod_cents=i['cod_cents'],
                fees_cents=i['commission_cents'],net_cents=i['cod_cents']-i['commission_cents'],
-               incoming_cents=i['cash_due_cents'],outgoing_cents=i['commission_due_cents'])
-        data=dict(invoice=r,record=i,issuer=snap.get('issuer',{}),recipient=recipient,transactions=[],
+               incoming_cents=i['cash_remaining_cents'],outgoing_cents=i['commission_due_cents'])
+        receipt=d['receipt']
+        transactions=[dict(receipt,kind='cash',voided_at=None,void_reason=None)] if receipt else []
+        data=dict(invoice=r,record=i,issuer=snap.get('issuer',{}),recipient=recipient,transactions=transactions,
                   established_by=snap.get('established_by',''),lines=[dict(tracking=l['tracking'],city=l['city'],phone='',
                   status=l['status'],cod_cents=l['cod_cents'],amount_cents=l['cod_cents'] if l['status']=='Livré' else None,
                   fees_cents=l['commission_cents']) for l in d['lines']])

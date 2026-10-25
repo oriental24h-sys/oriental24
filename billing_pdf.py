@@ -70,7 +70,7 @@ def invoice_pdf(d):
     totals=Table([[p(label),p(money(r[k]),right)] for label,k in [('Total COD livré','cod_cents'),('Frais / commissions' if r['kind'] in ('livreur','hub') else 'Frais de service','fees_cents'),('Total Net','net_cents')]],colWidths=[width*.65,width*.35]);totals.setStyle(TableStyle([('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LINEABOVE',(0,2),(-1,2),.5,LINE)]));story.extend([totals,Spacer(1,4*mm)])
     if r['kind'] in ('livreur','hub'):
         settlement=f"{'Remise nette' if record['mode']=='net' else 'Remise intégrale'} · Retenue autorisée : {money(record['retained_cents'])}\nCOD restant à remettre par le livreur : {money(r['incoming_cents'])}\nCommission restant à payer au livreur : {money(r['outgoing_cents'])}\nLe Total Net = COD livré − commissions ; il ne remplace pas ces deux soldes."
-        if r['kind']=='hub':settlement=settlement.replace('livreur','Hub')+'\nAucun règlement suivi dans ce registre ; les montants sont des positions à l’émission.'
+        if r['kind']=='hub':settlement=settlement.replace('livreur','Hub')+'\nPaid confirme uniquement la remise intégrale du montant à recevoir du Hub. Aucune commission sortante n’est attestée.'
     else:settlement=f"Solde restant à verser au client : {money(r['outgoing_cents'])}\nSolde restant à recevoir du client : {money(r['incoming_cents'])}\n{'Sans flux : net nul.' if not r['net_cents'] else 'Règlements réellement déclarés, distincts du montant net initial.'}"
     if issuer.get('payment_terms') and r['kind']=='livreur':settlement+='\n'+issuer['payment_terms']
     if r['kind']=='client':settlement+='\nCoordonnées entreprise actuelles ; aucun délai de paiement présumé.'
@@ -81,7 +81,7 @@ def invoice_pdf(d):
     if d['transactions']:
         rows=[]
         for t in d['transactions']:
-            flow=('Remise COD' if t.get('kind')=='cash' else 'Commission') if r['kind']=='livreur' else ('Vers le client' if r['net_cents']>0 else 'Reçu du client')
+            flow=('Remise COD' if t.get('kind')=='cash' else 'Commission') if r['kind'] in ('livreur','hub') else ('Vers le client' if r['net_cents']>0 else 'Reçu du client')
             rows.append([t.get('paid_on') or t.get('payment_date') or 'Date inconnue',flow,money(t['amount_cents']),t['method']+'\n'+t['reference'],'Annulé : '+(t.get('void_reason') or '') if t['voided_at'] else 'Enregistré'])
         tab(['Date','Flux','Montant','Mode / Référence','État'],rows,[15,17,20,28,20],'Journal des règlements')
     else:story.extend([Spacer(1,4*mm),p('Aucun règlement enregistré.',small)])
