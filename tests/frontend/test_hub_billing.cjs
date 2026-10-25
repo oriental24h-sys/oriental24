@@ -1,8 +1,8 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const data={rows:[],hubs:[{id:10,name:'Hub A',active:1,revision:1,mode:'gross',delivered_cents:1000,returned_cents:400,refused_cents:300}],schedule:{enabled:0,time:'23:59',revision:0},scheduler_running:false,last_automatic_result:{count:1,missing_terms:[{name:'Hub B'}],unassigned_count:2}};
 let lastModal='';
-const ctx=vm.createContext({setInterval:()=>{},document:{addEventListener:()=>{}},listPageSize:()=>10,O24_PAGE_SIZES:[10,25],navigate:async()=>{},S:{user:{id:2,role:'agent'}},
- api:async path=>path==='/hub-billing'?data:path==='/logistics/hub/driver-statements'?{rows:[{id:1,reference:'DRV-1',driver_name:'Driver',parcel_count:1,cod_cents:10000,commission_cents:1000,status:'À régler'}]}:{rows:[]},
+const ctx=vm.createContext({URLSearchParams,setInterval:()=>{},document:{addEventListener:()=>{}},listPageSize:()=>10,O24_PAGE_SIZES:[10,25],navigate:async()=>{},S:{user:{id:2,role:'agent'}},
+ api:async path=>path.startsWith('/billing?')?{kind:'livreur',page:1,size:10,count:1,parties:[],totals:{cod_cents:10000,fees_cents:1000,incoming_cents:10000,outgoing_cents:1000},rows:[{id:1,reference:'DRV-1',kind:'livreur',name:'Driver',state:'Not Paid',cod_cents:10000,fees_cents:1000,net_cents:9000,incoming_cents:10000,outgoing_cents:1000,created_at:'2026-01-01',updated_at:'2026-01-01',parcel_count:1}]}:path==='/hub-billing'?data:path==='/logistics/hub/driver-statements'?{rows:[{id:1,reference:'DRV-1',driver_name:'Driver',parcel_count:1,cod_cents:10000,commission_cents:1000,status:'À régler'}]}:{rows:[]},
  heading:(a,b)=>a+b,icon:()=>'',esc:String,centMoney:v=>String(v/100),centInput:v=>String(v/100),date:String,opsTag:String,
  stat:(...args)=>args.join(' '),simpleTable:(heads,rows)=>heads.join(' ')+rows.flat().join(' '),empty:(...a)=>a.join(' '),
  select:()=>'<select name="mode"></select>',input:(name,title,value)=>`<input name="${name}" value="${value}">${title}`,form:s=>s,
@@ -14,7 +14,7 @@ const run=code=>vm.runInContext(code,ctx);
  let html=await run('hubBillingWorkspace()');
  assert(html.includes('Mes factures'));assert(html.includes('Factures livreurs'));
  for(const forbidden of ['Factures clients','Paiements vendeurs','Configurer le barème','Enregistrer le planning','générer maintenant'])assert(!html.includes(forbidden));
- run("hubBillTab='drivers'");html=await run('hubBillingWorkspace()');assert(html.includes('DRV-1'));assert(html.includes('openDriverStatement(1)'));
+ run("hubBillTab='drivers'");html=await run('hubBillingWorkspace()');assert(html.includes('DRV-1'));assert(html.includes("billingOpen('livreur',1)"));assert(html.includes('billing-state-select'));assert(html.includes("billingDownload('livreur',1,'pdf')"));assert(html.includes("billingDownload('livreur',1,'csv')"));assert(!html.includes('Paiements vendeurs'));assert(!html.includes('Factures clients'));
  run("S.user={id:1,role:'admin'}");html=await run('hubBillingWorkspace()');assert(html.includes('Barèmes des Hubs'));assert(html.includes('Génération automatique'));
  run("hubBillTab='terms'");html=await run('hubBillingWorkspace()');assert(html.includes('Hub A'));assert(html.includes('Configurer le barème'));
  await run('hubBillEditTerms(10)');assert(lastModal.includes('name="delivered" value="10"'));assert(lastModal.includes('name="returned"'));assert(lastModal.includes('name="refused"'));
