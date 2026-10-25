@@ -394,6 +394,35 @@ class HubDriverWorkspaceTests(unittest.TestCase):
             p=c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone()
             self.assertEqual((p['current_hub_id'],p['driver_id'],p['status']),(self.hub,None,'Réceptionné'))
 
+    def test_hub_keeps_read_only_tracking_after_driver_handoff(self):
+        pid,_=self.parcel(self.hub)
+        self.assertEqual(self.scan('assign',[(pid,0)]).status_code,200)
+        data=self.client.get('/api/bootstrap').json
+        row=next(p for p in data['parcels'] if p['id']==pid)
+        self.assertEqual(row['status'],'Reçu par le livreur')
+        self.assertIsNone(row['current_hub_id'])
+        detail=self.client.get(f'/api/parcels/{pid}')
+        self.assertEqual(detail.status_code,200,detail.json)
+        self.assertTrue(any(e['status']=='Reçu par le livreur' for e in detail.json['events']))
+        # Existing physical mutation scope stays closed, even though tracking can read it.
+        from hub_access import hub_parcel_scope
+        with self.m.conn() as c:
+            clause,args=hub_parcel_scope(c,'p',self.hub)
+            self.assertIsNone(c.execute(f'SELECT p.id FROM parcels p WHERE p.id=? AND {clause}',[pid]+args).fetchone())
+            c.execute("UPDATE parcels SET status='Livré' WHERE id=?",(pid,))
+        row=next(p for p in self.client.get('/api/bootstrap').json['parcels'] if p['id']==pid)
+        self.assertEqual(row['status'],'Livré')
+
+    def test_tracking_does_not_leak_foreign_or_unproven_driver_orders(self):
+        remote,_=self.parcel(None,status='En livraison',driver=self.other_driver,assignment=self.foreign)
+        unproven,_=self.parcel(None,status='Reçu par le livreur',driver=self.driver)
+        transit,_=self.parcel(None,status='Transit',driver=self.driver,assignment=self.hub)
+        moved,_=self.parcel(self.foreign,status='Réceptionné',driver=self.driver,assignment=self.hub)
+        ids={p['id'] for p in self.client.get('/api/bootstrap').json['parcels']}
+        for pid in (remote,unproven,transit,moved):
+            self.assertNotIn(pid,ids)
+            self.assertEqual(self.client.get(f'/api/parcels/{pid}').status_code,404)
+
     def test_cross_hub_driver_and_parcel_denied_atomic_batch(self):
         pid,_=self.parcel(self.hub);foreign,tracking=self.parcel(self.foreign)
         r=self.scan('assign',[(pid,0),(foreign,0)]);self.assertEqual(r.status_code,404,r.json)
@@ -458,8 +487,8 @@ class HubDriverWorkspaceTests(unittest.TestCase):
             self.assertEqual((e['actor_id'],e['status']),(self.manager,'Reporté'))
         self.assertEqual(self.status_patch(pid,'Intéressé',revision=1).status_code,200)
 
-    def test_delivered_and_returned_are_immutable_for_manager(self):
-        for final in ('Livré','Retourné'):
+    def test_delivered_is_immutable_for_manager(self):
+        for final in ('Livré',):
             with self.subTest(final=final):
                 pid,_=self.parcel(self.hub,final,self.driver,self.hub)
                 for target in ('Réceptionné','Reporté',final):
@@ -475,10 +504,29 @@ class HubDriverWorkspaceTests(unittest.TestCase):
                 pid,_=self.parcel(self.hub,'En livraison',self.driver,self.hub)
                 r=self.status_patch(pid,target)
                 self.assertEqual(r.status_code,200,r.json)
-                self.assertEqual(self.status_patch(pid,'En livraison',revision=1).status_code,409)
+                self.assertEqual(self.status_patch(pid,'En livraison',revision=1).status_code,409 if target=='Livré' else 200)
         # Refusé is not one of the two immutable statuses requested.
         pid,_=self.parcel(self.hub,'Refusé',self.driver,self.hub)
         self.assertEqual(self.status_patch(pid,'Reporté').status_code,200)
+
+    def test_manager_changes_driver_tour_status_and_locks_only_delivered(self):
+        pid,_=self.parcel(self.hub)
+        self.assertEqual(self.scan('assign',[(pid,0)]).status_code,200)
+        row=next(p for p in self.client.get('/api/bootstrap').json['parcels'] if p['id']==pid)
+        self.assertTrue(row['hub_status_editable'])
+        r=self.status_patch(pid,'Reporté',revision=1);self.assertEqual(r.status_code,200,r.json)
+        r=self.status_patch(pid,'Retourné',revision=2);self.assertEqual(r.status_code,200,r.json)
+        r=self.status_patch(pid,'En livraison',revision=3);self.assertEqual(r.status_code,200,r.json)
+        r=self.status_patch(pid,'Livré',revision=4);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.status_patch(pid,'Reporté',revision=5).status_code,409)
+        row=self.client.get(f'/api/parcels/{pid}').json['parcel']
+        self.assertFalse(row['hub_status_editable'])
+        with self.m.conn() as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM audit_log WHERE entity_id=? AND action='hub_parcel_status_changed'",(str(pid),)).fetchone()[0],4)
+
+    def test_foreign_driver_tour_cannot_be_changed(self):
+        pid,_=self.parcel(None,'En livraison',self.other_driver,self.foreign)
+        self.assertEqual(self.status_patch(pid,'Reporté').status_code,404)
 
     def test_status_scope_fields_revision_csrf_and_inactive_hub(self):
         pid,_=self.parcel(self.hub)
