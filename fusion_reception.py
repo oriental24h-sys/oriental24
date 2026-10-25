@@ -158,6 +158,10 @@ def register_fusion_reception(app,s):
         for item in doc['documents']:
             subset=[l for l in ls if l['document_id']==item['id']]
             if subset:adapter['apply'](c,item,subset,u)
-        c.execute('UPDATE fusion_batches SET closed_at=? WHERE id=?',(now(),doc['id']))
+        remaining=c.execute('''SELECT count(*) FROM ops_document_lines l
+            JOIN fusion_batch_palettes f ON f.palette_id=l.document_id
+            WHERE f.batch_id=? AND l.received_at IS NULL AND l.missing_at IS NULL''',(doc['id'],)).fetchone()[0]
+        if not remaining:
+            c.execute('UPDATE fusion_batches SET closed_at=? WHERE id=?',(now(),doc['id']))
 
     s.setdefault('reception_adapters',{})['fusion']={'load':collection_load,'apply':collection_apply}

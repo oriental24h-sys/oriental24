@@ -374,7 +374,7 @@ def register_partner_palettes(app,s):
             event(c,l['parcel_id'],'Réceptionné',doc['reference']+' · réception physique ORIENTAL24 à '+doc['destination_name'],u)
         complete=len(received)==len(pending)
         c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Reçu' if complete else 'Partiellement reçu',at if complete else None,did))
-        audit(c,did,u,'Réception complète confirmée' if action=='receive-all' else 'Colis scanné reçu',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'hub_id':doc['destination_hub_id']})
+        audit(c,did,u,'Réception complète confirmée' if complete else 'Réception partielle confirmée',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'hub_id':doc['destination_hub_id']})
 
     def collection_load(c,did,u):
         if u['role'] not in ('admin','agent'):raise Error('Accès réservé.',403)

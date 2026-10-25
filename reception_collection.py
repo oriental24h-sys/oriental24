@@ -61,9 +61,10 @@ def register_reception_collection(app, s):
             if d.get('snapshot')!=snapshot:raise Error('Le manifeste ou une commande a changé. Rouvrez la réception et contrôlez les scans.',409)
             if doc['status'] not in ('En transit','Partiellement reçu','Départ partiel','Partiellement remis'):raise Error('Document indisponible pour réception.',409)
             pending=[l for l in lines if not l.get('received_at') and not l.get('missing_at') and not l.get('departure_reconciled_at')]
-            if set(ids)!={l['id'] for l in pending}:raise Error('Tous les colis restants doivent être scannés, sans ajout extérieur.',409)
-            if doc.get('departure_scan_required') and any(not l.get('departure_scanned_at') for l in pending):raise Error('Des colis n’ont pas encore été scannés au départ. Actualisez après leur départ.',409)
-            adapter['apply'](c,doc,pending,u)
-            result=dict(ok=True,id=did,received=len(pending))
+            if not set(ids).issubset({l['id'] for l in pending}):raise Error('Un colis est extérieur au bon, déjà réceptionné ou exclu.',409)
+            selected=[l for l in pending if l['id'] in set(ids)]
+            if doc.get('departure_scan_required') and any(not l.get('departure_scanned_at') for l in selected):raise Error('Des colis n’ont pas encore été scannés au départ. Actualisez après leur départ.',409)
+            adapter['apply'](c,doc,selected,u)
+            result=dict(ok=True,id=did,received=len(selected))
             c.execute('INSERT INTO reception_collection_keys VALUES(?,?,?,?)',(u['id'],key,fp,json.dumps(result)))
             return jsonify(result)

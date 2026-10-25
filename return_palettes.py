@@ -283,7 +283,7 @@ def register_return_palettes(app,s):
             status_changes.append({'parcel_id':l['parcel_id'],'tracking':l['tracking'],'from':old_status,'to':'Retourné'})
         complete=len(received)==len(pending)
         c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Remis' if complete else 'Partiellement remis',at if complete else None,did))
-        audit(c,did,u,'Retour remis au vendeur (complet)' if action=='receive-all' else 'Colis retour remis au vendeur',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'status':'Retourné','status_changes':status_changes})
+        audit(c,did,u,'Retour remis au vendeur (complet)' if complete else 'Retour remis au vendeur (partiel)',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'status':'Retourné','status_changes':status_changes})
 
     def collection_load(c,did,u):
         access(u);doc=get(c,did,u)
