@@ -72,6 +72,38 @@ class ReceptionCollectionTests(unittest.TestCase):
         self.assertEqual(self.client.get(f'/api/reception-collection/transfer/{did}',headers=self.other).status_code,404)
         self.assertEqual(self.client.get(f'/api/reception-collection/transfer/{did}',headers=self.t.headers('client',None,2)).status_code,403)
 
+    def test_received_line_can_be_forwarded_before_old_palette_complete(self):
+        did=self.transfer();self.dispatch(did)
+        d=self.body(self.manifest('transfer',did,self.central));d['line_ids']=d['line_ids'][:1]
+        self.assertEqual(self.commit('transfer',did,d,self.central).status_code,200)
+        with self.conn() as c:
+            rows=c.execute('SELECT parcel_id,active,received_at FROM ops_document_lines WHERE document_id=? ORDER BY parcel_id',(did,)).fetchall()
+            self.assertEqual(rows[0]['active'],0);self.assertIsNotNone(rows[0]['received_at'])
+            self.assertEqual(rows[1]['active'],1);self.assertIsNone(rows[1]['received_at'])
+            c.execute('UPDATE cities SET hub_id=20 WHERE id=2')
+        r=self.client.get('/api/logistics/palette-candidates?mode=standard&source_hub_id=90&destination_hub_id=20',headers=self.central)
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertIn(3,[p['id'] for p in r.json['rows']]);self.assertNotIn(4,[p['id'] for p in r.json['rows']])
+        new=self.t.create_palette('agent',90,'standard',90,20,[3],990)
+        self.assertEqual(new.status_code,200,new.json)
+        # Finish the first palette after its first received parcel was already forwarded.
+        rest=self.body(self.manifest('transfer',did,self.central))
+        self.assertEqual(self.commit('transfer',did,rest,self.central).status_code,200)
+        with self.conn() as c:
+            self.assertEqual(c.execute('SELECT active FROM ops_document_lines WHERE document_id=? AND parcel_id=3',(new.json['id'],)).fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=?',(did,)).fetchone()[0],2)
+
+    def test_legacy_received_lock_repair_is_idempotent(self):
+        from logistics import release_received_transfer_lines
+        did=self.transfer();self.dispatch(did)
+        d=self.body(self.manifest('transfer',did,self.central));d['line_ids']=d['line_ids'][:1]
+        self.assertEqual(self.commit('transfer',did,d,self.central).status_code,200)
+        with self.conn() as c:
+            c.execute('UPDATE ops_document_lines SET active=1 WHERE id=?',(d['line_ids'][0],))
+            self.assertEqual(release_received_transfer_lines(c),1)
+            self.assertEqual(release_received_transfer_lines(c),0)
+            self.assertEqual(c.execute('SELECT active FROM ops_document_lines WHERE document_id=? AND parcel_id=4',(did,)).fetchone()[0],1)
+
     def test_partial_departure_blocks_final_validation(self):
         did=self.transfer();self.dispatch(did,(3,))
         detail=self.manifest('transfer',did,self.central)

@@ -28,12 +28,50 @@ class DispatchCollectionTests(unittest.TestCase):
         for l in d['lines']:self.assertEqual(self.check('transfer',did,d,l['tracking'],self.source).status_code,200)
         self.assertEqual(self.t.parcel_state(3)['current_hub_id'],10)
         with self.conn() as c:self.assertEqual(c.execute('SELECT count(*) FROM ops_document_lines WHERE departure_scanned_at IS NOT NULL').fetchone()[0],0)
-        self.assertEqual(self.commit('transfer',did,{**p,'line_ids':p['line_ids'][:1]},self.source).status_code,409)
+        self.assertEqual(self.commit('transfer',did,{**p,'line_ids':[999999]},self.source).status_code,409)
         r=self.commit('transfer',did,p,self.source);self.assertEqual(r.status_code,200,r.json)
         self.assertIsNone(self.t.parcel_state(3)['current_hub_id']);self.assertEqual(self.t.parcel_state(3)['status'],'Transit')
         self.assertTrue(self.commit('transfer',did,p,self.source).json['replayed'])
         with self.conn() as c:self.assertEqual(c.execute("SELECT count(*) FROM ops_audit WHERE document_id=? AND action='Départ physique confirmé'",(did,)).fetchone()[0],1)
         self.assertTrue(hub_manager_route_allowed('GET',f'/api/dispatch-collection/transfer/{did}/check'))
+
+    def test_selected_dispatch_releases_unscanned_for_another_palette(self):
+        did=self.r.transfer();detail=self.manifest('transfer',did,self.source)
+        self.assertTrue(detail['allow_partial_dispatch'])
+        p=self.payload(detail);p['line_ids']=p['line_ids'][:1]
+        r=self.commit('transfer',did,p,self.source);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual((r.json['dispatched'],r.json['released']),(1,1))
+        self.assertTrue(self.commit('transfer',did,p,self.source).json['replayed'])
+        self.assertEqual(self.t.parcel_state(3)['status'],'Transit')
+        self.assertEqual(self.t.parcel_state(4)['current_hub_id'],10)
+        self.assertEqual(self.t.parcel_state(4)['status'],'Réceptionné')
+        with self.conn() as c:
+            doc=c.execute('SELECT * FROM ops_documents WHERE id=?',(did,)).fetchone()
+            self.assertEqual(doc['status'],'En transit')
+            ls=[dict(l) for l in c.execute('SELECT * FROM ops_document_lines WHERE document_id=? ORDER BY parcel_id',(did,))]
+            self.assertEqual(ls[1]['active'],0);self.assertIsNotNone(ls[1]['departure_reconciled_at'])
+            self.assertIsNone(ls[1]['departure_scanned_at'])
+            from hub_access import ops_manifest_counts
+            self.assertEqual(ops_manifest_counts(ls)['count'],1)
+        received=self.r.manifest('transfer',did,self.central)
+        self.assertEqual(len([l for l in received['lines'] if not l['excluded']]),1)
+        new=self.t.create_palette('agent',10,'standard',10,90,[4],910)
+        self.assertEqual(new.status_code,200,new.json)
+        self.assertEqual(self.r.commit('transfer',did,self.r.body(received),self.central).status_code,200)
+        with self.conn() as c:
+            self.assertEqual(c.execute('SELECT active FROM ops_document_lines WHERE document_id=?',(new.json['id'],)).fetchone()[0],1)
+        self.assertEqual(self.t.parcel_state(4)['current_hub_id'],10)
+
+    def test_selected_dispatch_failure_restores_released_locks(self):
+        did=self.r.transfer();p=self.payload(self.manifest('transfer',did));p['line_ids']=p['line_ids'][:1]
+        self.assertEqual(self.commit('transfer',did,{**p,'line_ids':[]}).status_code,400)
+        with self.conn() as c:
+            c.execute("CREATE TRIGGER fail_selected BEFORE UPDATE ON parcels WHEN NEW.id=3 AND NEW.status='Transit' BEGIN SELECT RAISE(ABORT,'test'); END")
+        with self.assertRaises(sqlite3.IntegrityError):self.commit('transfer',did,p)
+        with self.conn() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND active=1 AND departure_reconciled_at IS NULL',(did,)).fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT count(*) FROM dispatch_collection_keys').fetchone()[0],0)
+        self.assertEqual(self.t.parcel_state(3)['current_hub_id'],10)
 
     def test_transfer_source_scope_only(self):
         did=self.r.transfer();p=self.payload(self.manifest('transfer',did))
