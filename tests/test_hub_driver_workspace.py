@@ -45,6 +45,27 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual(r.status_code,200,r.json)
         self.headers={'X-CSRF-Token':r.json['csrf']}
 
+    def test_manager_analytics_real_scope_csv_details_and_inactive_guard(self):
+        pid,tracking=self.parcel(None,'En livraison',self.driver,self.hub)
+        other,foreign_tracking=self.parcel(None,'En livraison',self.other_driver,self.foreign)
+        with self.m.conn() as c:
+            c.execute("UPDATE ops_assignments SET created_at='2026-01-01T10:00:00+01:00' WHERE parcel_id IN (?,?)",(pid,other))
+            c.execute("INSERT INTO ops_attempts(parcel_id,driver_id,actor_id,outcome,note,request_key,payload_hash,created_at,operational_hub_id) VALUES(?,?,?,'Reporté','',?,'hash','2026-01-01T11:00:00+01:00',?)",(pid,self.driver,self.manager,uuid.uuid4().hex,self.hub))
+        endpoint='/api/hub-manager-analytics?from=2026-01-01&to=2026-01-02'
+        r=self.client.get(endpoint);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['hub']['id'],self.hub)
+        self.assertEqual((r.json['summary']['assigned'],r.json['summary']['processed'],r.json['summary']['delivered']),(1,1,0))
+        self.assertIn(tracking,[p['tracking'] for p in r.json['parcels']])
+        self.assertNotIn(foreign_tracking,str(r.json))
+        self.assertEqual(self.client.get(endpoint+'&driver_id='+str(self.other_driver)).status_code,404)
+        self.assertEqual(self.client.get(endpoint+'&hub_id='+str(self.foreign)).status_code,400)
+        for view in ('daily','drivers','hub'):
+            r=self.client.get(endpoint+'&format=csv&view='+view);self.assertEqual(r.status_code,200)
+            self.assertNotIn(foreign_tracking,r.data.decode())
+        self.assertEqual(self.client.post('/api/hub-manager-analytics',json={},headers=self.headers).status_code,405)
+        with self.m.conn() as c:c.execute('UPDATE ops_hubs SET active=0 WHERE id=?',(self.hub,))
+        self.assertEqual(self.client.get(endpoint).status_code,403)
+
     def test_admin_hub_full_receipt_real_csrf_and_manager_visibility(self):
         from hub_billing import generate, local_now
         self.parcel(None,'Livré',self.driver,self.hub)
