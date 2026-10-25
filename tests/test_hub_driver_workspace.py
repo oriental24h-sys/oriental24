@@ -104,6 +104,39 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual(evidence[ids[0]],'attempt')
         self.assertTrue(all(pid not in evidence for pid in ids[1:]))
 
+    def test_admin_hub_analytics_real_auth_filter_details_csv_and_manager_isolation(self):
+        from datetime import datetime
+        from hub_manager_analytics import TZ
+        pid,tracking=self.parcel(None,'En livraison',self.driver,self.hub)
+        other,foreign_tracking=self.parcel(None,'En livraison',self.other_driver,self.foreign)
+        day=datetime.now(TZ).date().isoformat()
+        endpoint=f'/api/admin-hub-analytics?from={day}&to={day}'
+        self.assertEqual(self.m.app.test_client().get(endpoint).status_code,401)
+        self.assertEqual(self.client.get(endpoint).status_code,403)
+        admin=self.m.app.test_client()
+        self.assertEqual(admin.post('/api/login',json={'email':'admin@oriental24.ma','password':'Oriental24!Demo'}).status_code,200)
+        result=admin.get(endpoint);self.assertEqual(result.status_code,200,result.json)
+        ids={r['id'] for r in result.json['rows']}
+        self.assertTrue({self.hub,self.foreign}.issubset(ids))
+        self.assertTrue({tracking,foreign_tracking}.issubset({p['tracking'] for p in result.json['parcels']}))
+        filtered=endpoint+'&hub_id='+str(self.hub)
+        r=admin.get(filtered);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual([h['id'] for h in r.json['rows']],[self.hub])
+        self.assertEqual({p['tracking'] for p in r.json['parcels']},{tracking})
+        for view in ('general','hubs','daily'):
+            r=admin.get(filtered+'&format=csv&view='+view)
+            self.assertEqual(r.status_code,200)
+            self.assertIn('text/csv',r.content_type)
+            self.assertNotIn(foreign_tracking,r.data.decode())
+        for extra in ('&driver_id=1','&hub_id=bad','&format=bad','&view=bad'):
+            self.assertEqual(admin.get(endpoint+extra).status_code,400)
+        self.assertEqual(admin.get(endpoint+'&hub_id=2147483647').status_code,404)
+        self.assertEqual(admin.post('/api/admin-hub-analytics',json={}).status_code,405)
+        manager=self.client.get(f'/api/hub-manager-analytics?from={day}&to={day}')
+        self.assertEqual(manager.status_code,200,manager.json)
+        self.assertEqual(manager.json['hub']['id'],self.hub)
+        self.assertNotIn(foreign_tracking,str(manager.json))
+
     def test_admin_hub_full_receipt_real_csrf_and_manager_visibility(self):
         from hub_billing import generate, local_now
         self.parcel(None,'Livré',self.driver,self.hub)
