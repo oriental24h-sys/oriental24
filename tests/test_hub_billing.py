@@ -82,6 +82,83 @@ class HubBillingTests(unittest.TestCase):
         self.assertEqual(self.issue()['count'],2)
         self.assertEqual(self.issue('new-run')['count'],0)
 
+    def payment(self,sid=1,key=None,**changes):
+        import uuid
+        payload=dict(amount_cents=10000,method='Espèces',reference='RECU-TEST',paid_on='2026-01-03',request_key=key or uuid.uuid4().hex,confirmed=True)
+        payload.update(changes)
+        return self.client.post(f'/api/hub-billing/{sid}/paid',json=payload)
+
+    def test_full_receipt_paid_visible_to_manager_and_pdf_csv(self):
+        from pypdf import PdfReader
+        from io import BytesIO
+        self.terms();self.issue()
+        r=self.payment();self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['invoice']['state'],'Paid')
+        self.assertEqual(r.json['invoice']['cash_remaining_cents'],0)
+        # Gross-method commission stays payable and is never fabricated as paid.
+        self.assertEqual(r.json['invoice']['commission_due_cents'],1300)
+        headers={'X-Role':'agent','X-Hub':'10'}
+        detail=self.client.get('/api/hub-billing/1',headers=headers).json
+        self.assertEqual(detail['invoice']['state'],'Paid')
+        self.assertEqual(detail['receipt']['amount_cents'],10000)
+        self.assertNotIn('payload_hash',detail['receipt'])
+        self.assertEqual(self.client.get('/api/hub-billing',headers=headers).json['rows'][0]['state'],'Paid')
+        text='\n'.join(p.extract_text() for p in PdfReader(BytesIO(self.client.get('/api/hub-billing/1/pdf',headers=headers).data)).pages)
+        self.assertIn('Paid',text);self.assertIn('RECU-TEST',text)
+        self.assertIn('Paid',self.client.get('/api/hub-billing/1/csv',headers=headers).data.decode())
+        self.assertEqual(self.audits[-1]['action'],'hub_invoice_paid')
+
+    def test_reject_partial_overpaid_unconfirmed_and_bad_dates(self):
+        self.terms();self.issue()
+        for changes in [dict(amount_cents=9999),dict(amount_cents=10001),dict(amount_cents=0),dict(amount_cents=True),dict(confirmed=False),dict(paid_on='2999-01-01'),dict(paid_on='2026-02-30'),dict(reference=''),dict(method='bad')]:
+            r=self.payment(**changes);self.assertIn(r.status_code,(400,409),r.json)
+        with self.conn() as c:self.assertEqual(c.execute('SELECT count(*) FROM hub_billing_receipts').fetchone()[0],0)
+        self.assertEqual(self.client.get('/api/hub-billing/1').json['invoice']['state'],'Not Paid')
+
+    def test_receipt_replay_is_idempotent_and_new_or_altered_duplicate_rejected(self):
+        key='receipt'+'a'*25;self.terms();self.issue()
+        self.assertEqual(self.payment(key=key).status_code,200)
+        r=self.payment(key=key);self.assertEqual(r.status_code,200);self.assertTrue(r.json['already_recorded'])
+        self.assertEqual(self.payment(key=key,reference='OTHER').status_code,409)
+        self.assertEqual(self.payment().status_code,409)
+        with self.conn() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM hub_billing_receipts').fetchone()[0],1)
+            with self.assertRaises(sqlite3.IntegrityError):c.execute('UPDATE hub_billing_receipts SET amount_cents=1')
+            with self.assertRaises(sqlite3.IntegrityError):c.execute('DELETE FROM hub_billing_receipts')
+
+    def test_receipt_admin_only_manager_cannot_mark_own_or_foreign(self):
+        self.terms();self.issue()
+        for role,hid in [('agent',10),('agent',20),('livreur',10)]:
+            r=self.client.post('/api/hub-billing/1/paid',json={},headers={'X-Role':role,'X-Hub':str(hid)})
+            self.assertEqual(r.status_code,403)
+        with self.conn() as c:self.assertEqual(c.execute('SELECT count(*) FROM hub_billing_receipts').fetchone()[0],0)
+
+    def test_parallel_full_receipts_only_one_succeeds(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import uuid
+        self.terms();self.issue()
+        def submit(_):
+            with self.app.test_client() as client:
+                return client.post('/api/hub-billing/1/paid',json=dict(amount_cents=10000,method='Espèces',reference='Concurrent',paid_on='2026-01-03',request_key=uuid.uuid4().hex,confirmed=True)).status_code
+        with ThreadPoolExecutor(max_workers=2) as pool:statuses=list(pool.map(submit,range(2)))
+        self.assertEqual(sorted(statuses),[200,409])
+        with self.conn() as c:self.assertEqual(c.execute('SELECT sum(amount_cents) FROM hub_billing_receipts').fetchone()[0],10000)
+
+    def test_net_full_receipt_is_exact_net_not_gross_and_snapshots_unchanged(self):
+        self.terms(mode='net');self.issue()
+        with self.conn() as c:
+            before=[tuple(r) for r in c.execute('SELECT * FROM hub_billing_statements')]
+        self.assertEqual(self.payment().status_code,409)
+        r=self.payment(amount_cents=8700);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['invoice']['state'],'Paid')
+        with self.conn() as c:self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM hub_billing_statements')],before)
+
+    def test_zero_cash_due_has_no_fake_receipt(self):
+        self.client.put('/api/hub-billing/terms/10',json=dict(mode='net',revision=0,delivered='1000',returned='100',refused='100'))
+        self.issue()
+        self.assertEqual(self.client.get('/api/hub-billing/1').json['invoice']['state'],'Solde nul')
+        self.assertIn(self.payment(amount_cents=1).status_code,(400,409))
+
     def test_hub_pdf_shared_layout_scope_and_frozen_identity(self):
         from pypdf import PdfReader
         from io import BytesIO

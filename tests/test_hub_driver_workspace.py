@@ -45,6 +45,29 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual(r.status_code,200,r.json)
         self.headers={'X-CSRF-Token':r.json['csrf']}
 
+    def test_admin_hub_full_receipt_real_csrf_and_manager_visibility(self):
+        from hub_billing import generate, local_now
+        self.parcel(None,'Livré',self.driver,self.hub)
+        admin=self.m.app.test_client()
+        self.assertEqual(admin.post('/api/login',json={'email':'admin@oriental24.ma','password':'Oriental24!Demo'}).status_code,200)
+        bootstrap=admin.get('/api/bootstrap').json;csrf={'X-CSRF-Token':bootstrap['csrf']}
+        r=admin.put('/api/hub-billing/terms/'+str(self.hub),json=dict(mode='net',revision=0,delivered='12',returned='0',refused='0'),headers=csrf)
+        self.assertEqual(r.status_code,200,r.json)
+        with self.m.conn() as c:
+            c.execute('BEGIN IMMEDIATE');generate(c,local_now(),bootstrap['user']['id'],'test:'+uuid.uuid4().hex)
+            sid=c.execute('SELECT id FROM hub_billing_statements WHERE hub_id=?',(self.hub,)).fetchone()[0]
+        endpoint=f'/api/hub-billing/{sid}/paid'
+        payload=dict(amount_cents=8800,method='Espèces',reference='TEST-'+uuid.uuid4().hex,paid_on=local_now().date().isoformat(),confirmed=True,request_key=uuid.uuid4().hex)
+        self.assertEqual(admin.post(endpoint,json=payload).status_code,403)
+        self.assertEqual(self.client.post(endpoint,json=payload,headers=self.headers).status_code,403)
+        r=admin.post(endpoint,json=payload,headers=csrf);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['invoice']['state'],'Paid')
+        self.assertEqual(self.client.get(f'/api/hub-billing/{sid}').json['invoice']['state'],'Paid')
+        self.assertEqual(admin.post(endpoint,json=payload,headers=csrf).json['already_recorded'],True)
+        with self.m.conn() as c:
+            row=c.execute("SELECT actor_id FROM audit_log WHERE action='hub_invoice_paid' AND entity_id=?",(str(sid),)).fetchone()
+            self.assertEqual(row['actor_id'],bootstrap['user']['id'])
+
     def test_hub_billing_real_auth_scope_admin_controls_and_csrf(self):
         # Exercise the real manager capability allowlist, not only module decorators.
         r=self.client.get('/api/hub-billing')
