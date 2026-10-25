@@ -707,6 +707,8 @@ async function renderView(background = false) {
       case "documents":
         html = opsDocsView(await api('/logistics/documents'));
         break;
+      case "admin-hub-analytics":
+        html=await adminHubAnalyticsView();break;
       case "hub-manager-analytics":
         html=await hubManagerAnalyticsView();break;
       case "hub-dashboard":
