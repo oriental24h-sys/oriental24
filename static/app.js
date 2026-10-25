@@ -2106,6 +2106,7 @@ function printLabels(ids) {
   return previewLabels(ids);
 }
 async function printInvoice(id) {
+  if(!opsOffline)return billingPrintPDF('client',id);
   const owner=S?.user?.id;
   try {
     const data=await api('/billing/client/'+id);

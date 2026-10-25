@@ -9,8 +9,9 @@ async function hubBillingWorkspace(embedded=false){
  const navigation=`<section class="card"><div class="billing-tabs">${tabs.map(([k,v])=>`<button class="${hubBillTab===k?'active':''}" onclick="hubBillSelect('${k}')">${esc(v)}</button>`).join('')}<span class="spacer"></span><button class="btn sm" onclick="renderView()">${icon('refresh')}Actualiser</button></div></section>`;
  const head=embedded?'':heading(admin?'Factures des Hubs':'Factures',admin?'Barèmes par Hub et émission quotidienne configurable. Aucun paiement automatique.':'Mes factures émises par Admin et factures des livreurs de mon Hub.');
  if(hubBillTab==='drivers'){
-  const d=await api('/logistics/hub/driver-statements');
-  return head+navigation+`<p class="form-hint">Les relevés de vos livreurs. Pour en créer un ou configurer son barème : Livreurs de mon Hub → Facture.</p><section class="card">`+simpleTable(['Facture','Livreur','Colis','COD MAD','Commission MAD','État'],(d.rows||[]).map(r=>[`<button class="tracking" onclick="openDriverStatement(${r.id})">${esc(r.reference)}</button>`,esc(r.driver_name),r.parcel_count,centMoney(r.cod_cents),centMoney(r.commission_cents),opsTag(r.status)]))+`</section>`;
+  if(billingOwner!==S.user.id||!billingFilters||billingFilters.kind!=='livreur')billingReset('livreur');
+  const d=await api('/billing?'+billingQuery());
+  return head+navigation+`<p class="form-hint">Factures des livreurs de votre Hub : documents PDF / CSV, impression et règlements réels avec confirmation. Création et barèmes : Livreurs de mon Hub → Facture.</p>`+billingView(d);
  }
  if(hubBillTab==='legacy')return head+navigation+hubInvoicesAdminView(await api('/logistics/hub-invoices'));
  const data=await api('/hub-billing');hubBillData=data;
@@ -47,11 +48,13 @@ function hubBillInvoiceHTML(d){
  return `<h2>${esc(x.reference)} · ${esc(x.hub_name)}</h2><p>Émise le ${esc(date(x.created_at))} · Barème v${x.terms_revision} · ${x.mode==='net'?'Net de commission':'COD intégral'}</p>${simpleTable(['Tracking','Ville','État facturé','COD MAD','Commission MAD'],d.lines.map(l=>[esc(l.tracking),esc(l.city),esc(l.status),centMoney(l.cod_cents),centMoney(l.commission_cents)]))}<p><b>COD : ${centMoney(x.cod_cents)} MAD · Commission Hub : ${centMoney(x.commission_cents)} MAD</b></p><p>Retenue : ${centMoney(x.retained_cents)} MAD<br>À remettre par le Hub : ${centMoney(x.cash_due_cents)} MAD<br>Commission à verser : ${centMoney(x.commission_due_cents)} MAD</p><p class="sub">Relevé interne, hors facture fiscale. Aucun règlement n’est attesté par ce document. COD et commissions livreurs ne sont pas recalculés ici.</p>`;
 }
 async function hubBillOpen(id){
- const owner=S.user.id;try{const d=await api('/hub-billing/'+id);if(S?.user?.id!==owner)return;modal(d.invoice.reference,hubBillInvoiceHTML(d)+`<div class="form-actions"><button class="btn" onclick="hubBillPrint(${id})">Imprimer / PDF</button><button class="btn" onclick="hubBillCSV(${id})">CSV</button></div>`,true)}catch(e){toast(e.message,true)}
+ const owner=S.user.id;try{const d=await api('/hub-billing/'+id);if(S?.user?.id!==owner)return;modal(d.invoice.reference,hubBillInvoiceHTML(d)+`<div class="form-actions"><button class="btn" onclick="hubBillPrint(${id})">Imprimer / PDF</button><button class="btn" onclick="billingHubPDF(${id})">Télécharger PDF</button><button class="btn" onclick="hubBillCSV(${id})">CSV</button></div>`,true)}catch(e){toast(e.message,true)}
 }
 async function hubBillPrint(id){
- const owner=S.user.id;try{const d=await api('/hub-billing/'+id);if(S?.user?.id!==owner)return;await doPrint(hubBillInvoiceHTML(d),root=>{if(S?.user?.id!==owner){root.innerHTML='';throw Error('Session modifiée.')}})}catch(e){toast(e.message,true)}
+ return billingPrintPDF('hub',id);
+
 }
+
 async function hubBillCSV(id){
  const owner=S.user.id;try{const r=await fetch('/api/hub-billing/'+id+'/csv',{credentials:'same-origin'});if(!r.ok)throw Error('CSV inaccessible.');const b=await r.blob();if(S?.user?.id!==owner)return;const url=URL.createObjectURL(b),a=document.createElement('a');a.href=url;a.download='HUB-'+String(id).padStart(6,'0')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}catch(e){toast(e.message,true)}
 }

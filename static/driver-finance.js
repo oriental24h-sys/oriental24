@@ -342,7 +342,7 @@ function financeBalanceCard(s, kind) {
     due = s[cash ? "cash_due_cents" : "commission_due_cents"],
     paid = s[cash ? "cash_received_cents" : "commission_paid_cents"],
     remaining = s[cash ? "cash_remaining_cents" : "commission_remaining_cents"];
-  return `<div class="finance-balance-card ${cash ? "cash" : "commission"}"><div class="flex between"><span>${cash ? "COD à remettre" : "Commission à payer"}</span>${icon(cash ? "download" : "upload")}</div><strong>${centMoney(remaining)} <small>MAD restants</small></strong><div class="bar"><span style="width:${s.cancelled_at ? 0 : due ? Math.min(100, Math.round((paid / due) * 100)) : 100}%"></span></div><div class="flex between"><small>${cash ? "Reçu" : "Payé"} : ${centMoney(paid)} MAD</small><small>Prévu : ${centMoney(due)} MAD</small></div>${S.user.role === "admin" && remaining > 0 && !s.cancelled_at ? `<button class="btn sm" onclick="recordDriverTransaction('${kind}')">${icon("plus")}${cash ? "Enregistrer une remise" : "Enregistrer un paiement"}</button>` : `<div class="finance-balance-caption">${s.cancelled_at ? "Relevé annulé" : remaining ? "Enregistrement par l’administration uniquement" : cash ? "Aucun COD restant à remettre" : "Aucune commission restant à payer"}</div>`}</div>`;
+  return `<div class="finance-balance-card ${cash ? "cash" : "commission"}"><div class="flex between"><span>${cash ? "COD à remettre" : "Commission à payer"}</span>${icon(cash ? "download" : "upload")}</div><strong>${centMoney(remaining)} <small>MAD restants</small></strong><div class="bar"><span style="width:${s.cancelled_at ? 0 : due ? Math.min(100, Math.round((paid / due) * 100)) : 100}%"></span></div><div class="flex between"><small>${cash ? "Reçu" : "Payé"} : ${centMoney(paid)} MAD</small><small>Prévu : ${centMoney(due)} MAD</small></div>${["admin","agent"].includes(S.user.role) && remaining > 0 && !s.cancelled_at ? `<button class="btn sm" onclick="recordDriverTransaction('${kind}')">${icon("plus")}${cash ? "Enregistrer une remise" : "Enregistrer un paiement"}</button>` : `<div class="finance-balance-caption">${s.cancelled_at ? "Relevé annulé" : remaining ? "Enregistrement par l’administration uniquement" : cash ? "Aucun COD restant à remettre" : "Aucune commission restant à payer"}</div>`}</div>`;
 }
 function renderDriverStatement() {
   const { statement: s, lines, transactions, audit } = financeDetail;
@@ -360,7 +360,7 @@ function renderDriverStatement() {
       )
       .join(
         "",
-      )}</div><div class="finance-detail-content">${financeDetailTab === "parcels" ? financeLinesTable(lines) : financeDetailTab === "transactions" ? financeTransactionTable(transactions, false) : `<div class="timeline">${audit.map((a) => `<div class="timeline-item"><b>${esc(a.action)}</b><p>${financeAuditText(a.details)}</p><small>${esc(a.actor_name)} · ${date(a.created_at)}</small></div>`).join("")}</div>`}</div><div class="finance-detail-actions"><div>${admin && !s.cancelled_at ? `<button class="btn sm danger" onclick="cancelDriverStatement(${s.id})">Annuler ce relevé</button>` : ""}</div>${S.user.role!=="agent"?`<button class="btn" onclick="billingDownload('livreur',${s.id},'pdf')">PDF</button><button class="btn" onclick="billingDownload('livreur',${s.id},'csv')">CSV</button>`:""}<button class="btn" onclick="printDriverStatement(${s.id})">${icon("print")}Imprimer / PDF</button></div>`,
+      )}</div><div class="finance-detail-content">${financeDetailTab === "parcels" ? financeLinesTable(lines) : financeDetailTab === "transactions" ? financeTransactionTable(transactions, false) : `<div class="timeline">${audit.map((a) => `<div class="timeline-item"><b>${esc(a.action)}</b><p>${financeAuditText(a.details)}</p><small>${esc(a.actor_name)} · ${date(a.created_at)}</small></div>`).join("")}</div>`}</div><div class="finance-detail-actions"><div>${admin && !s.cancelled_at ? `<button class="btn sm danger" onclick="cancelDriverStatement(${s.id})">Annuler ce relevé</button>` : ""}</div>${["admin","agent","livreur"].includes(S.user.role)?`<button class="btn" onclick="billingDownload('livreur',${s.id},'pdf')">PDF</button><button class="btn" onclick="billingDownload('livreur',${s.id},'csv')">CSV</button>`:""}<button class="btn" onclick="printDriverStatement(${s.id})">${icon("print")}Imprimer / PDF</button></div>`,
     true,
   );
 }
@@ -484,6 +484,7 @@ function cancelDriverStatement(id) {
   });
 }
 async function printDriverStatement(id) {
+  if(!opsOffline)return billingPrintPDF('livreur',id);
   const owner = S?.user?.id;
   try {
     const d = await api("/driver-finance/statements/" + id);
