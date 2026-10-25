@@ -180,6 +180,11 @@ async function editDriverTerms(id) {
         }),
         async()=>({revision:(await api("/driver-finance/terms")).find(x=>x.id===id)?.terms?.revision ?? 0}),
       );
+      if(S.user.role==='agent'){
+        closeModal();await refresh();await renderView();
+        await driverInvoice(id);toast('Barème enregistré · vérifiez la facture avant de confirmer');
+        return;
+      }
       financeTab = "rates";
       if (view !== "driver-finance") {
         await refresh();
