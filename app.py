@@ -208,7 +208,7 @@ def auth(*roles):
             if u['role']=='support':
                 path=request.path
                 read_only=(request.method in ('GET','HEAD') and (
-                    path in ('/api/bootstrap','/api/announcements') or
+                    path in ('/api/bootstrap','/api/announcements','/api/sidebar-counts') or
                     re.fullmatch(r'/api/parcels/\d+',path) or
                     re.fullmatch(r'/api/parcels/\d+/media/\d+',path)))
                 own_profile=request.method=='PATCH' and path=='/api/profile'
@@ -1102,6 +1102,8 @@ register_reception_collection(app, globals())
 from dispatch_collection import register_dispatch_collection
 register_dispatch_collection(app, globals())
 register_temporary_passwords(app, globals())
+from sidebar_counts import register_sidebar_counts
+register_sidebar_counts(app, globals())
 
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.

@@ -13,7 +13,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('POST', r'/api/driver-finance/preview'),
     ('POST', r'/api/driver-finance/preview/[a-f0-9]{32}/confirm'),
     ('GET', r'/api/driver-finance/statements/\d+'),
-    ('GET', r'/api/bootstrap'), ('GET', r'/api/parcels/\d+'),
+    ('GET', r'/api/sidebar-counts'), ('GET', r'/api/bootstrap'), ('GET', r'/api/parcels/\d+'),
     ('PATCH', r'/api/parcels/\d+'),
     ('POST', r'/api/logout'), ('PATCH', r'/api/profile'),
     ('GET', r'/api/tickets'), ('POST', r'/api/tickets'),
@@ -88,7 +88,7 @@ HUB_OPERATIONAL_PREFIXES = (
     '/api/parcels/', '/api/logistics/parcels/', '/api/logistics/config', '/api/logistics/documents', '/api/logistics/hub-dashboard', '/api/logistics/hub/', '/api/logistics/hub/drivers', '/api/logistics/cod/', '/api/logistics/notifications', '/api/partner-palettes',
     '/api/partner-palette-incidents', '/api/return-palettes', '/api/alerts',
     '/api/control-tower', '/api/logistics/palettes', '/api/logistics/palette-candidates',
-    '/api/ramassage-bons', '/api/reception-collection', '/api/dispatch-collection',
+    '/api/sidebar-counts', '/api/ramassage-bons', '/api/reception-collection', '/api/dispatch-collection',
 )
 
 
