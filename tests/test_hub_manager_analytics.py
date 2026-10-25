@@ -9,6 +9,7 @@ class HubManagerAnalyticsTests(unittest.TestCase):
         self.c.executescript('''CREATE TABLE users(id,name,role,driver_hub_id,active);
         CREATE TABLE parcels(id,tracking);
         CREATE TABLE ops_assignments(id INTEGER PRIMARY KEY,parcel_id,new_driver_id,hub_id,created_at);
+        CREATE TABLE events(id INTEGER PRIMARY KEY,parcel_id,actor_id,status,note,created_at);
         CREATE TABLE ops_attempts(id INTEGER PRIMARY KEY,parcel_id,driver_id,operational_hub_id,outcome,created_at);
         INSERT INTO users VALUES(1,'Driver A','livreur',10,1),(2,'Driver B','livreur',10,1),(3,'Foreign','livreur',20,1),(4,'Inactive','livreur',10,0);
         INSERT INTO parcels VALUES(1,'A'),(2,'B'),(3,'C'),(4,'D');''')
@@ -19,6 +20,56 @@ class HubManagerAnalyticsTests(unittest.TestCase):
     def attempt(self,pid,status='Reporté',did=1,hid=10,at='2026-01-01T11:00:00+01:00'):
         self.c.execute('INSERT INTO ops_attempts(parcel_id,driver_id,operational_hub_id,outcome,created_at) VALUES(?,?,?,?,?)',(pid,did,hid,status,at))
     def data(self):return analytics(self.c,10,self.start,self.end)
+    def status_event(self,pid,status,actor=1,at='2026-01-01T11:00:00+01:00',note='Statut mis à jour'):
+        self.c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(pid,actor,status,note,at))
+
+    def test_four_parcels_three_status_only_paths_are_all_processed(self):
+        for pid in (1,2,3,4):
+            self.assignment(pid)
+            self.status_event(pid,'En livraison',at='2026-01-01T10:00:00+01:00')
+        self.attempt(1,'Livré')
+        for pid,status in [(2,'Annulé'),(3,'Intéressé'),(4,'Programmé')]:
+            self.status_event(pid,status)
+            self.status_event(pid,status,actor=2,at='2026-01-01T18:00:00+01:00',note='Récupéré physiquement à l’agence')
+        r=self.data()['rows'][0]
+        self.assertEqual((r['assigned'],r['processed'],r['pending'],r['progress'],r['delivered']),(4,4,0,100,1))
+
+    def test_physical_recovery_without_driver_processing_is_not_a_treatment(self):
+        self.assignment(1)
+        self.status_event(1,'En livraison',at='2026-01-01T10:00:00+01:00')
+        self.status_event(1,'Reporté',actor=2,note='Récupéré physiquement à l’agence')
+        self.assertEqual(self.data()['summary']['processed'],0)
+
+    def test_legacy_null_attempt_hub_is_proven_by_assignment_not_city(self):
+        self.assignment(1);self.attempt(1,'Reporté',hid=None)
+        self.assertEqual(self.data()['summary']['processed'],1)
+        self.c.execute('UPDATE ops_assignments SET hub_id=NULL')
+        self.assertEqual(self.data()['summary']['assigned'],0)
+
+    def test_foreign_attempt_mirror_event_cannot_override_explicit_hub(self):
+        self.assignment(1);self.status_event(1,'En livraison',at='2026-01-01T10:00:00+01:00')
+        self.attempt(1,'Livré',hid=20);self.status_event(1,'Livré',note='Tentative : livraison déclarée')
+        self.assertEqual(self.data()['summary']['processed'],0)
+
+    def test_same_state_note_or_client_interest_is_not_courier_processing(self):
+        self.assignment(1);self.assignment(2)
+        self.status_event(1,'Reporté',actor=2,at='2026-01-01T09:00:00+01:00')
+        self.status_event(1,'Reporté',note='Preuve ajoutée')
+        self.status_event(2,'Intéressé',actor=2,note='Le client a marqué la commande')
+        self.assertEqual(self.data()['summary']['processed'],0)
+
+    def test_history_treatment_is_bound_to_same_assignment_cycle_and_cutoff(self):
+        self.assignment(1);self.assignment(1,did=3,hid=20,at='2026-01-01T12:00:00+01:00')
+        self.status_event(1,'Annulé',at='2026-01-01T13:00:00+01:00')
+        self.assignment(2);self.status_event(2,'Intéressé',at='2026-01-03T09:00:00+01:00')
+        self.assertEqual(self.data()['summary']['processed'],0)
+
+    def test_structured_and_event_mirror_are_not_counted_twice(self):
+        self.assignment(1);self.attempt(1,'Livré');self.status_event(1,'Livré',note='Tentative : livraison déclarée')
+        r=self.data()['rows'][0]
+        self.assertEqual((r['processed'],r['delivered']),(1,1))
+        self.assertEqual(self.data()['parcels'][0]['evidence_source'],'attempt')
+
     def test_own_hub_only_no_unknown_inference_and_all_roster_zero_days(self):
         self.assignment(1);self.assignment(2,hid=20);self.assignment(3,hid=None);self.assignment(4,did=3,hid=20)
         d=self.data();self.assertEqual(d['summary']['assigned'],1)

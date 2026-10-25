@@ -66,6 +66,43 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         with self.m.conn() as c:c.execute('UPDATE ops_hubs SET active=0 WHERE id=?',(self.hub,))
         self.assertEqual(self.client.get(endpoint).status_code,403)
 
+    def test_analytics_counts_real_driver_status_edits_and_preserves_after_recovery(self):
+        from werkzeug.security import generate_password_hash
+        from hub_manager_analytics import TZ
+        from datetime import datetime
+        with self.m.conn() as c:
+            c.execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash('TestPassword!123'),self.driver))
+        courier=self.m.app.test_client()
+        r=courier.post('/api/login',json={'email':'driver'+self.email,'password':'TestPassword!123'})
+        self.assertEqual(r.status_code,200,r.json)
+        headers={'X-CSRF-Token':courier.get('/api/bootstrap').json['csrf']}
+        ids=[]
+        for outcome in ('Livré','Annulé','Intéressé','Reporté'):
+            initial='En livraison' if outcome=='Livré' else 'Reçu par le livreur'
+            pid,_=self.parcel(None,initial,self.driver,self.hub);ids.append(pid)
+            with self.m.conn() as c:
+                self.m.event(c,pid,initial,'Remise physique au livreur',{'id':self.manager})
+            if outcome=='Livré':
+                r=courier.post(f'/api/logistics/parcels/{pid}/attempts',json=dict(outcome=outcome,revision=0,simple_delivery=True,request_key=uuid.uuid4().hex),headers=headers)
+            else:
+                r=courier.patch(f'/api/parcels/{pid}',json=dict(status=outcome,revision=0,note='Résultat confirmé par le livreur'),headers=headers)
+            self.assertEqual(r.status_code,200,r.json)
+        day=datetime.now(TZ).date().isoformat()
+        endpoint=f'/api/hub-manager-analytics?from={day}&to={day}'
+        result=self.client.get(endpoint)
+        self.assertEqual(result.status_code,200,result.json)
+        row=result.json['rows'][0]
+        self.assertEqual((row['assigned'],row['processed'],row['pending'],row['progress'],row['delivery_rate']),(4,4,0,100,25))
+        with self.m.conn() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM ops_attempts WHERE parcel_id IN (?,?,?,?)',ids).fetchone()[0],1)
+        r=self.scan('receive',[(pid,1) for pid in ids[1:]],hub=self.hub)
+        self.assertEqual(r.status_code,200,r.json)
+        row=self.client.get(endpoint).json['rows'][0]
+        self.assertEqual((row['processed'],row['pending'],row['progress'],row['delivery_rate']),(4,0,100,25))
+        evidence={p['parcel_id']:p['evidence_source'] for p in self.client.get(endpoint).json['parcels']}
+        self.assertEqual(evidence[ids[0]],'attempt')
+        self.assertTrue(all(evidence[pid]=='status_history' for pid in ids[1:]))
+
     def test_admin_hub_full_receipt_real_csrf_and_manager_visibility(self):
         from hub_billing import generate, local_now
         self.parcel(None,'Livré',self.driver,self.hub)
