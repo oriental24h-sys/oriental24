@@ -10,8 +10,10 @@ vm.runInContext(fs.readFileSync('static/hub-manager-analytics.js','utf8'),ctx);
 const run=s=>vm.runInContext(s,ctx);
 (async()=>{
  let html=await run('hubManagerAnalyticsView()');for(const label of ['Activité du Hub','Analyse des livreurs','Activité quotidienne','Hub A','Progression globale'])assert(html.includes(label));
- run("hmaTab='drivers'");html=await run('hubManagerAnalyticsView()');assert(html.includes('Local Driver'));assert(html.includes('En attente'));
- run('hmaRisk=true');assert.equal(run('hmaRows().length'),0);run("hmaRisk=false;hmaTab='daily'");html=await run('hubManagerAnalyticsView()');assert(html.includes('Matrice livreurs'));assert(html.includes("hmaDay(1,'2026-01-01')"));
+ assert(html.includes('ha-subnav'));assert(html.includes('ha-metrics four'));assert(html.includes('ha-ring'));assert(html.includes('stroke-dasharray'));assert(!html.includes('style="padding:22px"'));
+ run("hmaTab='drivers'");html=await run('hubManagerAnalyticsView()');assert(html.includes('Local Driver'));assert(html.includes('En attente'));assert(html.includes('ha-person-stats'));assert(html.includes('ha-progress-segment'));assert(html.includes('Taux de livraison'));assert(html.includes('ha-view-switch'));
+ run('hmaRisk=true');assert.equal(run('hmaRows().length'),0);run("hmaRisk=false;hmaTab='daily'");html=await run('hubManagerAnalyticsView()');assert(html.includes('Matrice livreurs'));assert(html.includes('ha-heat-legend'));assert(html.includes('data-heat='));assert(html.includes('ha-matrix'));assert(html.includes("hmaDay(1,'2026-01-01')"));
+ run("hmaDailyLayout='table'");html=await run('hubManagerAnalyticsView()');assert(html.includes('Activité quotidienne · liste'));assert(!html.includes('data-heat='));
  run('hmaNever=true');assert.equal(run('hmaRows().length'),1);run('hmaExport()');assert.equal(download,'ORIENTAL24-analytique-daily.csv');
  run('hmaDetail(1,true)');assert(modal.includes('LOCAL-TEST'));
  console.log('PASS: manager analytics navigation, Hub/cards/daily views, risk/never filters, drilldown and CSV');
