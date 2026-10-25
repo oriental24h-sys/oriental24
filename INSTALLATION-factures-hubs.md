@@ -21,7 +21,9 @@ Menu **Factures** :
 
 ## Configuration Admin
 
-Dans **Factures des Hubs** :
+L’accès Admin est désormais intégré à la section Facturation, dans un onglet commun. L’entrée séparée Factures des Hubs est masquée chez Admin. L’espace responsable Hub reste inchangé.
+
+Dans **Facturation → Factures des Hubs**, à côté de **Factures clients**, **Factures livreurs** et **Paiements vendeurs** :
 1. **Barèmes des Hubs** : configurer chaque Hub actif avec ses commissions par commande **Livré / Retourné / Refusé** en MAD. Saisir explicitement zéro pour un état non rémunéré. Aucun tarif par défaut n’est inventé.
 2. Choisir la méthode :
    - **Net** : commission retenue sur le COD livré, jusqu’à concurrence du COD ; l’éventuel complément de commission est affiché séparément.
