@@ -516,6 +516,32 @@ def register_logistics(app, services):
             audit(c,None,u,'Motif de suivi modifié',dict(parcel_id=pid,old_code=p['reason_code'],code=code,label=label))
             return jsonify(ok=True,changed=True)
 
+    @app.patch('/api/parcels/<int:pid>/followup')
+    @auth('livreur')
+    def driver_parcel_followup(pid):
+        d=request.get_json(silent=True);u=user()
+        if not isinstance(d,dict) or set(d)!={'reason_code','note','revision'}:
+            raise Error('Motif, note et version requis, sans autre modification.')
+        if not isinstance(d['note'],str) or not isinstance(d['reason_code'],(str,type(None))):
+            raise Error('Motif ou note invalide.')
+        note=text(d,'note',False,1000);code=d['reason_code']
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE');p=parcel(c,pid,u)
+            if p['driver_id']!=u['id']:raise Error('Commande non affectée à ce livreur.',403)
+            guard(c,p);revision(p,d)
+            if p['status'] in ('Livré','Retourné'):raise Error('Colis clôturé. Contactez l’administration.',409)
+            reason=c.execute('SELECT * FROM ops_reasons WHERE code=? AND active=1',(code,)).fetchone() if code else None
+            if code and not reason:raise Error('Motif inconnu ou désactivé.')
+            if not code and p['status']=='Programmé':raise Error('Un colis programmé doit conserver un motif.')
+            if code==p['reason_code'] and not note:return jsonify(ok=True,changed=False)
+            c.execute('UPDATE parcels SET reason_code=?,ops_revision=ops_revision+1 WHERE id=?',(code,pid))
+            parts=[]
+            if code!=p['reason_code']:parts.append('Motif de suivi : '+(reason['label'] if reason else 'Aucun motif'))
+            if note:parts.append('Note du livreur : '+note)
+            event(c,pid,p['status'],' · '.join(parts),u)
+            audit(c,None,u,'Suivi livreur enregistré',dict(parcel_id=pid,old_code=p['reason_code'],code=code,note=note))
+            return jsonify(ok=True,changed=True)
+
     @app.get(P+'/parcels/<int:pid>')
     @auth()
     def ops_parcel(pid):
