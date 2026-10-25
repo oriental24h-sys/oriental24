@@ -10,6 +10,7 @@ async function openReceptionCollection(kind,id,mode='receive'){
  const message=(kind,text)=>{if(!current())return;const box=ctx.node.querySelector('#rb-collect-feedback');box.className='pp-rx-msg '+kind;box.textContent=text};
  try{
   doc=await api(endpoint);if(!current())return;
+  const partialSend=sending&&doc.allow_partial_dispatch;
   doc.lines=doc.lines.map(l=>({...l,parcel_id:l.id,active:!l.excluded}));
   const lines=doc.lines.filter(l=>l.active||l.received_at),pending=lines.filter(l=>l.active&&!l.received_at);
   const byCode=new Map(lines.map(l=>[norm(l.tracking),l]));
@@ -22,14 +23,14 @@ async function openReceptionCollection(kind,id,mode='receive'){
   const paint=()=>{
    ctx.node.querySelector('#rb-collect-count').innerHTML=`${scanned.size}<small> / ${pending.length} scannés</small>`;
    const left=pending.length-scanned.size;
-   ctx.node.querySelector('#rb-collect-ready').className=(sending?left===0:scanned.size>0)?'ready':'';
+   ctx.node.querySelector('#rb-collect-ready').className=(sending&&!partialSend?left===0:scanned.size>0)?'ready':'';
    ctx.node.querySelector('#rb-collect-remaining').textContent=left?left+' restant(s) à scanner':'Tous les colis restants sont scannés';
    ctx.node.querySelector('#rb-collect-ready').textContent=!pending.length?(sending?'Aucun colis restant à envoyer':'Aucun colis restant à réceptionner'):left?'Il reste '+left+' colis à scanner':scanned.size+' / '+pending.length+' colis scannés ✓';
-   if(!sending){
-    confirm.textContent='Réceptionner les '+scanned.size+' colis scannés et valider';
-    ctx.node.querySelector('#rb-collect-ready').textContent=scanned.size?scanned.size+' colis à valider · '+left+' restant(s) pour plus tard':'Scannez au moins un colis pour valider';
+   if(!sending||partialSend){
+    confirm.textContent=(sending?'Envoyer':'Réceptionner')+' les '+scanned.size+' colis scannés et valider';
+    ctx.node.querySelector('#rb-collect-ready').textContent=scanned.size?scanned.size+' colis à valider · '+left+(sending?' non scanné(s) : disponibles pour une autre palette':' restant(s) pour plus tard'):'Scannez au moins un colis pour valider';
    }
-   confirm.disabled=busy||!scanned.size||!doc.available||(sending&&(left>0||pending.some(l=>l.blocked)))||[...scanned.values()].some(l=>l.blocked);
+   confirm.disabled=busy||!scanned.size||!doc.available||(sending&&!partialSend&&(left>0||pending.some(l=>l.blocked)))||[...scanned.values()].some(l=>l.blocked);
    ctx.node.querySelector('#rb-collect-list').innerHTML=lines.map(l=>`<div class="pp-rx-line ${l.received_at?'ok':scanned.has(l.parcel_id)?'scanned':''}"><span class="mono">${esc(l.tracking)}</span><span class="sub">${l.recipient||l.city?esc([l.recipient,l.city].filter(Boolean).join(' · ')):(sending?'Détails masqués hors de votre Hub':'Détails disponibles après réception')}</span>${l.received_at?`<span class="tag good">${sending?'Déjà envoyé':'Déjà réceptionné'}</span>`:scanned.has(l.parcel_id)?`<span class="tag good">✓ Scanné</span><button type="button" class="btn sm pp-rx-x" data-rb-undo="${l.parcel_id}" ${busy||frozen?'disabled':''} title="Retirer du lot">✕</button>`:linePlaceholder(l)}</div>`).join('');
   };
   const add=async code=>{
@@ -54,7 +55,7 @@ async function openReceptionCollection(kind,id,mode='receive'){
   ctx.node.querySelector('#rb-collect-close').onclick=()=>closeModal();
   ctx.node.querySelector('#rc-detail').onclick=()=>{if(kind==='partner')openPartnerPalette(id,true);else if(kind==='return')openReturnPalette(id,true);else if(kind==='transfer')openOpsDocument(id,true);else closeModal()};
   confirm.onclick=async()=>{
-   if(busy||!current()||!scanned.size||!doc.available||(sending&&scanned.size!==pending.length))return;
+   if(busy||!current()||!scanned.size||!doc.available||(sending&&!partialSend&&scanned.size!==pending.length))return;
    frozen=frozen||{line_ids:[...scanned.keys()],snapshot:doc.snapshot,confirmed:true,request_key:financeKey()};
    busy=true;input.disabled=true;form.querySelector('button').disabled=true;ctx.node.querySelector('#rb-collect-reset').disabled=true;paint();
    try{
