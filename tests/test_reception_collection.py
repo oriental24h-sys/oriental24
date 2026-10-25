@@ -58,11 +58,17 @@ class ReceptionCollectionTests(unittest.TestCase):
         detail=self.manifest('transfer',did,self.central);d=self.body(detail)
         self.assertTrue(all(not l['recipient'] for l in detail['lines']))
         self.assertEqual(self.t.parcel_state(3)['status'],'Transit')
-        self.assertEqual(self.commit('transfer',did,{**d,'line_ids':d['line_ids'][:1]},self.central).status_code,409)
-        self.assertEqual(self.t.parcel_state(3)['status'],'Transit')
-        r=self.commit('transfer',did,d,self.central);self.assertEqual(r.status_code,200,r.json)
+        first={**d,'line_ids':d['line_ids'][:1]}
+        r=self.commit('transfer',did,first,self.central);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['received'],1)
         self.assertEqual(self.t.parcel_state(3)['status'],'Réceptionné')
-        self.assertEqual(self.commit('transfer',did,d,self.central).json['replayed'],True)
+        self.assertEqual(self.t.parcel_state(4)['status'],'Transit')
+        self.assertTrue(self.commit('transfer',did,first,self.central).json['replayed'])
+        fresh=self.manifest('transfer',did,self.central)
+        self.assertEqual(fresh['status'],'Partiellement reçu')
+        remaining=self.body(fresh);self.assertEqual(len(remaining['line_ids']),1)
+        r=self.commit('transfer',did,remaining,self.central);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.manifest('transfer',did,self.central)['status'],'Reçu')
         self.assertEqual(self.client.get(f'/api/reception-collection/transfer/{did}',headers=self.other).status_code,404)
         self.assertEqual(self.client.get(f'/api/reception-collection/transfer/{did}',headers=self.t.headers('client',None,2)).status_code,403)
 
@@ -72,6 +78,12 @@ class ReceptionCollectionTests(unittest.TestCase):
         self.assertEqual(sum(x['blocked'] for x in detail['lines']),1)
         r=self.commit('transfer',did,self.body(detail),self.central);self.assertEqual(r.status_code,409)
         self.assertEqual(self.t.parcel_state(3)['status'],'Transit')
+        d=self.body(detail);d['line_ids']=[l['id'] for l in detail['lines'] if not l['blocked']]
+        r=self.commit('transfer',did,d,self.central);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.t.parcel_state(3)['status'],'Réceptionné')
+        self.assertNotEqual(self.t.parcel_state(4)['current_hub_id'],90)
+        fresh=self.manifest('transfer',did,self.central)
+        self.assertEqual(sum(bool(l['received_at']) for l in fresh['lines']),1)
 
     def test_stale_snapshot_and_rollback_on_second_parcel(self):
         did=self.transfer();self.dispatch(did);d=self.body(self.manifest('transfer',did))
@@ -146,6 +158,35 @@ class ReceptionCollectionTests(unittest.TestCase):
         self.assertEqual(len(d['line_ids']),1)
         r=self.commit('partner',did,d,self.central);self.assertEqual(r.status_code,200,r.json)
         self.assertEqual(self.t.parcel_state(4)['status'],'Créé')
+
+    def test_partial_partner_return_and_fusion_resume(self):
+        for kind in ('partner','return','fusion'):
+            with self.subTest(kind=kind):
+                with self.conn() as c:c.execute('DELETE FROM ops_document_lines')
+                if kind=='fusion':
+                    a=self.palette('partner',(3,));b=self.palette('partner',(4,))
+                    with self.conn() as c:
+                        did=c.execute("INSERT INTO fusion_batches(hub_destination_id,created_by,created_at) VALUES(90,1,'2026-01-02')").lastrowid
+                        c.executemany('INSERT INTO fusion_batch_palettes VALUES(?,?)',[(did,a),(did,b)])
+                else:did=self.palette(kind)
+                d=self.body(self.manifest(kind,did));d['line_ids']=d['line_ids'][:1]
+                r=self.commit(kind,did,d);self.assertEqual(r.status_code,200,r.json)
+                self.assertEqual(r.json['received'],1)
+                fresh=self.manifest(kind,did)
+                self.assertTrue(fresh['available'])
+                self.assertEqual(sum(bool(l['received_at']) for l in fresh['lines']),1)
+                rest=self.body(fresh);self.assertEqual(len(rest['line_ids']),1)
+                r=self.commit(kind,did,rest);self.assertEqual(r.status_code,200,r.json)
+                self.assertFalse(self.manifest(kind,did)['available'])
+
+    def test_empty_foreign_and_already_received_rejected(self):
+        did=self.palette('partner');d=self.body(self.manifest('partner',did))
+        self.assertEqual(self.commit('partner',did,{**d,'line_ids':[]}).status_code,400)
+        self.assertEqual(self.commit('partner',did,{**d,'line_ids':[999999]}).status_code,409)
+        d['line_ids']=d['line_ids'][:1]
+        self.assertEqual(self.commit('partner',did,d).status_code,200)
+        fresh=self.body(self.manifest('partner',did));fresh['line_ids']=d['line_ids']
+        self.assertEqual(self.commit('partner',did,fresh).status_code,409)
 
     def test_legacy_single_receipts_still_work_without_batch_count_regression(self):
         for kind in ('partner','return'):
