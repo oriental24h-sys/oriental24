@@ -45,6 +45,26 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual(r.status_code,200,r.json)
         self.headers={'X-CSRF-Token':r.json['csrf']}
 
+    def test_hub_billing_real_auth_scope_admin_controls_and_csrf(self):
+        # Exercise the real manager capability allowlist, not only module decorators.
+        r=self.client.get('/api/hub-billing')
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['hub']['id'],self.hub)
+        self.assertNotIn('schedule',r.json)
+        self.assertEqual(self.client.get('/api/hub-billing/preview').status_code,403)
+        self.assertEqual(self.client.put('/api/hub-billing/terms/'+str(self.hub),json={},headers=self.headers).status_code,403)
+        admin=self.m.app.test_client()
+        self.assertEqual(admin.post('/api/login',json={'email':'admin@oriental24.ma','password':'Oriental24!Demo'}).status_code,200)
+        payload=dict(mode='gross',revision=0,delivered='10',returned='4',refused='3')
+        endpoint='/api/hub-billing/terms/'+str(self.hub)
+        self.assertEqual(admin.put(endpoint,json=payload).status_code,403)
+        csrf=admin.get('/api/bootstrap').json['csrf']
+        r=admin.put(endpoint,json=payload,headers={'X-CSRF-Token':csrf})
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(admin.get('/api/hub-billing').status_code,200)
+        with self.m.conn() as c:c.execute('UPDATE ops_hubs SET active=0 WHERE id=?',(self.hub,))
+        self.assertEqual(self.client.get('/api/hub-billing').status_code,403)
+
     def test_read_notification_retention_and_first_read_timestamp(self):
         from datetime import datetime, timedelta
         old = (datetime.fromisoformat(self.m.now()) - timedelta(hours=3)).isoformat(timespec='seconds')
