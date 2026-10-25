@@ -3,6 +3,7 @@ import csv,io,json,hashlib,re
 from decimal import Decimal,ROUND_HALF_UP
 from flask import jsonify,request,Response
 from invoice_profile import profile
+from hub_access import driver_financial_hub_sql
 
 def driver_paid_sql(alias='p'):
     # No deletion/unassignment or physical receipt. A reversal automatically restores visibility.
@@ -25,6 +26,10 @@ def register_billing(app,s):
         c.execute('''CREATE TABLE IF NOT EXISTS billing_action_keys(request_key TEXT PRIMARY KEY,actor_id INTEGER NOT NULL REFERENCES users(id),payload_hash TEXT NOT NULL,created_at TEXT NOT NULL)''')
     def allowed(kind,u):
         if kind not in ('client','livreur'):raise Error('Type de facture invalide.')
+        if u['role']=='agent' and kind=='livreur':
+            with conn() as scope:
+                if not scope.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone():raise Error('Hub actif requis.',403)
+            return
         if u['role']!='admin' and u['role']!=kind:raise Error('Accès non autorisé.',403)
     def read(c,kind,iid,u,details=False):
         allowed(kind,u)
@@ -52,11 +57,14 @@ def register_billing(app,s):
         else:
             lines=[dict(tracking=p['tracking'],city=p['city'],phone=p['phone'],status=p['status'],amount_cents=cent(p['amount']),cod_cents=cent(p['amount']) if p['status']=='Livré' else 0,fees_cents=cent(p['fee'] if p['status']=='Livré' else p['return_fee'])) for p in c.execute('SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE invoice_id=? ORDER BY p.id',(iid,))]
             issuer=profile(c);recipient={}
-        return dict(invoice=r,lines=lines,transactions=tx,issuer=issuer,recipient=recipient,record=i)
+        return dict(invoice=r,lines=lines,transactions=tx,issuer=issuer,recipient=recipient,record=i,established_by=(snap or {}).get('established_by','') if kind=='livreur' else '')
     def listing(c,u):
-        kind=request.args.get('kind') or ('livreur' if u['role']=='livreur' else 'client');allowed(kind,u)
+        kind=request.args.get('kind') or ('livreur' if u['role'] in ('livreur','agent') else 'client');allowed(kind,u)
         table,key=('driver_statements','driver_id') if kind=='livreur' else ('invoices','client_id')
         cond,args=('1=1',[]) if u['role']=='admin' else (key+'=?',[u['id']])
+        if u['role']=='agent':
+            cond=f"hub_id=? AND NOT EXISTS(SELECT 1 FROM driver_statement_lines l LEFT JOIN parcels p ON p.id=l.parcel_id WHERE l.statement_id=driver_statements.id AND ({driver_financial_hub_sql()}) IS NOT ?)"
+            args=[u.get('agent_hub_id'),u.get('agent_hub_id')]
         rows=[read(c,kind,r['id'],u) for r in c.execute(f'SELECT id FROM {table} WHERE {cond} ORDER BY id DESC',args).fetchall()]
         parties=list({r['party_id']:{'id':r['party_id'],'name':r['name']} for r in reversed(rows)}.values())
         q=request.args.get('q','').strip().casefold();party=request.args.get('party','');state=request.args.get('state','');archive=request.args.get('archive','all')
@@ -95,7 +103,7 @@ def register_billing(app,s):
         totals={k:sum(r[k] for r in rows if r['state']!='Annulé') for k in ('cod_cents','fees_cents','net_cents','incoming_cents','outgoing_cents')}
         return dict(kind=kind,rows=rows,parties=parties,totals=totals,count=len(rows))
     @app.get('/api/billing')
-    @auth('admin','client','livreur')
+    @auth('admin','client','livreur','agent')
     def billing_list():
         with conn() as c:
             c.execute('BEGIN');result=listing(c,user())
@@ -104,7 +112,7 @@ def register_billing(app,s):
             if page<1 or size not in (10,20,30,50,80,100,200,500):raise Error('Pagination invalide.')
             page=min(page,max(1,(result['count']+size-1)//size));result.update(page=page,size=size,rows=result['rows'][(page-1)*size:page*size]);return jsonify(result)
     @app.get('/api/billing/<kind>/<int:iid>')
-    @auth('admin','client','livreur')
+    @auth('admin','client','livreur','agent')
     def billing_detail(kind,iid):
         with conn() as c:
             c.execute('BEGIN');return jsonify(read(c,kind,iid,user(),True))
@@ -124,7 +132,7 @@ def register_billing(app,s):
             except ValueError:raise Error('Date effective invalide ou future.')
         return d
     @app.post('/api/billing/<kind>/<int:iid>/<action>')
-    @auth('admin')
+    @auth('admin','agent')
     def billing_action(kind,iid,action):
         if action not in ('settle','reopen'):raise Error('Action inconnue.',404)
         d=payload(action);u=user();h=digest([kind,iid,action,d])
@@ -155,13 +163,13 @@ def register_billing(app,s):
         out=io.StringIO();w=csv.writer(out,delimiter=';');w.writerows([[safe(v) for v in row] for row in rows]);return Response('\ufeff'+out.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename="{name}.csv"','Cache-Control':'no-store'})
     money=lambda v:(Decimal(v)/100).quantize(Decimal('.01')) if v is not None else ''
     @app.get('/api/billing/export')
-    @auth('admin','client','livreur')
+    @auth('admin','client','livreur','agent')
     def billing_export():
         with conn() as c:
             c.execute('BEGIN');d=listing(c,user());rows=[['Facture','Type','Titulaire','État','COD MAD','Frais MAD','Net MAD','À encaisser MAD','À verser MAD','Émise le','Mise à jour']]+[[r['reference'],r['kind'],r['name'],r['state'],*(money(r[k]) for k in ('cod_cents','fees_cents','net_cents','incoming_cents','outgoing_cents')),r['created_at'],r['updated_at']] for r in d['rows']]
             return csv_response(rows,'ORIENTAL24-facturation-'+d['kind'])
     @app.get('/api/billing/<kind>/<int:iid>/<fmt>')
-    @auth('admin','client','livreur')
+    @auth('admin','client','livreur','agent')
     def billing_download(kind,iid,fmt):
         if fmt not in ('csv','pdf'):raise Error('Format inconnu.',404)
         with conn() as c:

@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from flask import jsonify, request, Response
 from hub_access import driver_financial_hub_sql
+from invoice_profile import issuer_for_actor, hub_identity
 
 TZ = ZoneInfo('Africa/Casablanca')
 
@@ -70,9 +71,11 @@ def ensure_schema(c):
         parcel_id INTEGER NOT NULL UNIQUE REFERENCES parcels(id),tracking TEXT NOT NULL,
         city TEXT NOT NULL,status TEXT NOT NULL,cod_cents INTEGER NOT NULL,
         commission_cents INTEGER NOT NULL,closed_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS hub_billing_print_snapshots(
+        statement_id INTEGER PRIMARY KEY REFERENCES hub_billing_statements(id),payload TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS hub_billing_statements_hub ON hub_billing_statements(hub_id,id);
     ''')
-    for table in ('hub_billing_statements', 'hub_billing_lines', 'hub_billing_runs'):
+    for table in ('hub_billing_statements', 'hub_billing_lines', 'hub_billing_runs', 'hub_billing_print_snapshots'):
         c.executescript(f'''
         CREATE TRIGGER IF NOT EXISTS {table}_no_update BEFORE UPDATE ON {table}
         BEGIN SELECT RAISE(ABORT,'{table} is immutable'); END;
@@ -160,6 +163,11 @@ def generate(c, cutoff, actor_id, run_key, automatic=False, expected=None):
                 'retained_cents','cash_due_cents','commission_due_cents')
         sid = c.execute('INSERT INTO hub_billing_statements('+','.join(keys)+',run_id,cutoff,created_by,created_at) VALUES('+','.join('?'*14)+')',
                         [g[k] for k in keys]+[run_id,cutoff.isoformat(),actor_id,at]).lastrowid
+        actor_row=c.execute('SELECT * FROM users WHERE id=?',(actor_id,)).fetchone()
+        actor=dict(actor_row) if actor_row else {}
+        printing=dict(issuer=issuer_for_actor(c,actor),recipient=hub_identity(c,g['hub_id']),
+                      established_by=actor.get('name',''))
+        c.execute('INSERT INTO hub_billing_print_snapshots VALUES(?,?)',(sid,json.dumps(printing,ensure_ascii=False)))
         ids.append(sid)
         c.executemany('''INSERT INTO hub_billing_lines(statement_id,parcel_id,tracking,city,status,cod_cents,commission_cents,closed_at)
                          VALUES(?,?,?,?,?,?,?,?)''',
@@ -242,6 +250,27 @@ def register_hub_billing(app, s):
         for l in d['lines']:
             w.writerow([d['invoice']['reference'],safe(d['invoice']['hub_name']),safe(l['tracking']),safe(l['city']),l['status'],f"{l['cod_cents']/100:.2f}",f"{l['commission_cents']/100:.2f}"])
         return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename="{d["invoice"]["reference"]}.csv"'})
+
+    @app.get('/api/hub-billing/<int:sid>/pdf')
+    @auth('admin','agent')
+    def hub_billing_pdf(sid):
+        from billing_pdf import invoice_pdf
+        with conn() as c:
+            c.execute('BEGIN')
+            d=detail(c,sid,user());i=d['invoice']
+            row=c.execute('SELECT payload FROM hub_billing_print_snapshots WHERE statement_id=?',(sid,)).fetchone()
+            snap=json.loads(row['payload']) if row else {}
+        recipient=snap.get('recipient',{})
+        r=dict(id=i['id'],kind='hub',reference=i['reference'],name=i['hub_name'],email=recipient.get('email',''),
+               state='Non suivi',parcel_count=i['parcel_count'],created_at=i['created_at'],cod_cents=i['cod_cents'],
+               fees_cents=i['commission_cents'],net_cents=i['cod_cents']-i['commission_cents'],
+               incoming_cents=i['cash_due_cents'],outgoing_cents=i['commission_due_cents'])
+        data=dict(invoice=r,record=i,issuer=snap.get('issuer',{}),recipient=recipient,transactions=[],
+                  established_by=snap.get('established_by',''),lines=[dict(tracking=l['tracking'],city=l['city'],phone='',
+                  status=l['status'],cod_cents=l['cod_cents'],amount_cents=l['cod_cents'] if l['status']=='Livré' else None,
+                  fees_cents=l['commission_cents']) for l in d['lines']])
+        return Response(invoice_pdf(data),mimetype='application/pdf',headers={
+            'Content-Disposition':f'attachment; filename="{i["reference"]}.pdf"','Cache-Control':'no-store'})
 
     @app.put('/api/hub-billing/terms/<int:hid>')
     @auth('admin')

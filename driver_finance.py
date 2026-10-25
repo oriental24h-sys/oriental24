@@ -123,6 +123,7 @@ def register_driver_finance(app, services):
     def statement(c, sid, u):
         s = c.execute('SELECT * FROM driver_statements WHERE id=?', (sid,)).fetchone()
         check_scope(s, u)
+        if u['role']=='agent' and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone():raise Error('Hub actif requis.',403)
         if u['role']=='agent' and s['hub_id']!=u.get('agent_hub_id'):
             raise Error('Relevé introuvable.',404)
         if u['role']=='agent':
@@ -200,7 +201,7 @@ def register_driver_finance(app, services):
                 'driver_name':dr['name'], 'driver_email':dr['email'], 'mode':terms['mode'],
                 'revision':terms['revision'], 'period_from':period_from, 'period_to':period_to,
                 'parcel_count':len(lines), 'cod_cents':cod, 'commission_cents':commission, 'retained_cents':retained,
-                'cash_due_cents':cod-retained, 'commission_due_cents':commission-retained, 'lines':lines, 'print_snapshot':print_snapshot(c,dr['id'],rows)}
+                'cash_due_cents':cod-retained, 'commission_due_cents':commission-retained, 'lines':lines, 'print_snapshot':print_snapshot(c,dr['id'],rows,user())}
         return data
 
     @app.get(PREFIX+'/terms')
@@ -366,11 +367,12 @@ def register_driver_finance(app, services):
     services['add_driver_transaction']=add_transaction
 
     @app.post(PREFIX+'/statements/<int:sid>/transactions')
-    @auth('admin')
+    @auth('admin','agent')
     def record_transaction(sid):
         d=payload();u=user()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
+            statement(c,sid,u)  # Scope before idempotent replay or any mutation.
             return jsonify(add_transaction(c,sid,u,d))
 
     def void_driver_transaction(c,tid,u,reason):

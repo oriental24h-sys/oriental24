@@ -11,9 +11,29 @@ def profile(c):
     row=c.execute('SELECT value FROM settings WHERE key=?',(KEY,)).fetchone()
     return json.loads(row['value']) if row else dict(revision=0,**{k:'' for k in FIELDS})
 
-def print_snapshot(c, did, rows):
+def hub_identity(c, hid):
+    """Only Hub-owned identity; never borrow the company's fiscal identifiers."""
+    row=c.execute('SELECT * FROM ops_hubs WHERE id=?',(hid,)).fetchone()
+    if not row:return {}
+    h=dict(row);city=''
+    if h.get('city_id'):
+        r=c.execute('SELECT name FROM cities WHERE id=?',(h['city_id'],)).fetchone()
+        city=r['name'] if r else ''
+    return dict(legal_name=h['name'],address=h.get('address',''),city=city,
+                phone=h.get('phone',''),email=h.get('email',''))
+
+
+def issuer_for_actor(c, actor):
+    if actor and actor.get('role')=='agent':
+        return hub_identity(c,actor.get('agent_hub_id'))
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'").fetchone():
+        return dict(legal_name='ORIENTAL24')
+    return profile(c)
+
+
+def print_snapshot(c, did, rows, actor=None):
     dr=c.execute('SELECT u.phone,u.driver_address,ci.name city FROM users u LEFT JOIN cities ci ON ci.id=u.driver_city_id WHERE u.id=?',(did,)).fetchone()
-    return {'version':1, 'issuer':profile(c), 'driver':dict(dr),
+    return {'version':1, 'issuer':issuer_for_actor(c,actor), 'established_by':(actor or {}).get('name',''), 'driver':dict(dr),
             'parcels':[{ 'parcel_id':r['id'], 'phone':r['phone'], 'amount':str(r['amount']) } for r in rows]}
 
 def register_invoice_profile(app, services):

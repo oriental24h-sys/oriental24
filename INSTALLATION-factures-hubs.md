@@ -1,3 +1,21 @@
+# Nouveau — modèle PDF unifié
+
+Les factures clients, livreurs et nouvelles factures de commission des Hubs utilisent le même moteur PDF A4 : logo ORIENTAL24, émetteur en haut à droite, numéro/date/destinataire, récapitulatif par statut et tarif exact, COD livré/frais/net, détail des colis, mentions disponibles et numéros de page.
+
+Le modèle s’inspire du PDF fourni, sans copier les données d’Olivraison, ses identifiants légaux ni son délai de paiement de 15 jours. Les soldes et avertissements nécessaires restent propres à chaque registre ; aucun montant n’est recalculé à partir de la facture d’exemple. Les CSV restent inchangés.
+
+**Émetteur :** les prochaines factures livreurs créées par un responsable portent le nom, l’adresse et la ville de son Hub. Aucun ICE/RC/IF de la société n’est attribué au Hub. Les informations absentes ne sont pas inventées. Les factures créées par Admin utilisent le profil ORIENTAL24 existant. Le destinataire est le client, le livreur ou le Hub concerné.
+
+L’identité des nouvelles factures livreurs et Hubs est archivée à l’émission. Les anciennes identités archivées ne sont pas réécrites. Les anciennes factures Hubs sans snapshot d’identité utilisent uniquement leur nom de Hub déjà figé et la marque ORIENTAL24, sans inventer d’adresse historique. Les factures clients conservent la politique existante de coordonnées entreprise actuelles.
+
+Les boutons Imprimer des factures clients, livreurs et Hubs utilisent désormais le même PDF que le téléchargement. Selon le navigateur, si l’impression PDF intégrée est bloquée, télécharger le PDF puis l’imprimer avec le lecteur PDF. La version HTML hors ligne conserve son ancien rendu ; cette modification vise l’application serveur.
+
+Les anciens registres COD historiques ne sont pas convertis dans ce nouveau modèle de commission Hub.
+
+**Contrôle :** 150 tests Python et le test JavaScript réussis. Test PDF de 70 colis : toutes les lignes apparaissent une seule fois, tableaux répartis sur plusieurs pages avec pagination et mentions. Exemple fictif fourni séparément ; aucun client réel dans cet exemple. Pas de déploiement ni test d’impression dans un navigateur réel.
+
+---
+
 # ORIENTAL24 — Factures et barèmes des Hubs
 
 ## Installation
@@ -14,10 +32,25 @@ Aucune dépendance Python supplémentaire. Pas de modification de `render.yaml` 
 ## Responsable Hub
 
 Menu **Factures** :
-- **Mes factures** : uniquement les factures de commission émises par Admin pour son propre Hub ; détail, impression / enregistrement PDF via le navigateur, CSV.
+- **Mes factures** : uniquement les factures de commission émises par Admin pour son propre Hub ; détail, téléchargement PDF, impression du même PDF et CSV.
 - **Factures livreurs** : relevés des livreurs du Hub ; les fonctions déjà livrées de création/configuration restent dans **Livreurs de mon Hub → Facture**.
 - Aucun onglet « Paiements vendeurs » ni factures clients dans cet espace. Les fonctions Admin de paiement vendeur sont inchangées.
 - Les anciennes factures COD restent consultables via le bouton dédié ; leur registre n’est ni supprimé ni converti.
+
+## Nouveau : factures livreurs chez le responsable Hub
+
+Dans **Factures → Factures livreurs**, le responsable dispose désormais du tableau de facturation : référence, livreur, état, COD, montant net, soldes à recevoir/verser, mise à jour et documents. Filtres, recherche, pagination, PDF et CSV par facture ou export CSV de la liste.
+
+Il peut ouvrir le détail, imprimer et télécharger les documents des seuls relevés de son Hub. Les factures Paid restent dans l’historique.
+
+Selon l’autorisation confirmée pour cette modification, il peut désormais :
+- enregistrer une remise COD ou une commission réellement réglée (paiement partiel) ;
+- passer à Paid après confirmation des flux réels, référence et date ;
+- revenir à Not Paid avec un motif obligatoire : les déclarations actives sont annulées avec trace, sans remboursement automatique ni suppression de l’historique.
+
+Les soldes déterminent le statut. Une relance du même règlement ne le duplique pas ; une version de solde obsolète est refusée. Chaque écriture conserve le responsable auteur. Aucun accès aux factures clients, aux paiements vendeurs ou aux relevés hors Hub. Un Hub inactif est bloqué. Un relevé contenant des lignes attribuées à un autre Hub est exclu de la liste et refusé en accès direct. L’annulation du relevé lui-même reste réservée à Admin.
+
+Cette autorisation concerne uniquement les factures **livreurs**, pas les nouvelles factures de commission **des Hubs**, qui restent des documents sans enregistrement de paiement dans ce module.
 
 ## Configuration Admin
 
@@ -52,7 +85,7 @@ Dans **Facturation → Factures des Hubs**, à côté de **Factures clients**, *
 
 ## Vérifications locales
 
-146 tests Python réussis, dont les accès réels/CSRF, cloisonnement Hub, trois commissions, versions figées, absence de double facturation, concurrence du moteur, contrôle de l’heure, reprise des échéances, rejet des prévisualisations obsolètes et préservation des registres COD/livreurs.
+150 tests Python réussis, dont les accès réels/CSRF, cloisonnement Hub, trois commissions, versions figées, absence de double facturation, concurrence du moteur, contrôle de l’heure, reprise des échéances, rejet des prévisualisations obsolètes et préservation des registres COD/livreurs.
 
 Test JavaScript de la nouvelle interface réussi ; vérification syntaxique des scripts et `git diff --check` réussis. Pas de validation visuelle dans un navigateur réel, ni déploiement effectué.
 
