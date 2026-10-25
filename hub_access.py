@@ -7,6 +7,7 @@ import re
 import sqlite3
 
 HUB_MANAGER_SCOPED_ROUTES = (
+    ('GET', r'/api/hub-manager-analytics'),
     ('GET', r'/api/billing'), ('GET', r'/api/billing/export'),
     ('GET', r'/api/billing/livreur/\d+'),
     ('GET', r'/api/billing/livreur/\d+/(?:pdf|csv)'),
@@ -96,6 +97,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
 )
 
 HUB_OPERATIONAL_PREFIXES = (
+    '/api/hub-manager-analytics',
     '/api/hub-billing',
     '/api/billing',
     '/api/drivers-workspace', '/api/driver-finance',
