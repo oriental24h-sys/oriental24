@@ -259,7 +259,7 @@ def hub_status_capability(p,u):
 
 def parcel(c,pid,u,follow_drivers=False):
     cond,args=scope(u,c=c,follow_drivers=follow_drivers)
-    p=c.execute(f'''SELECT p.*,su.name city_support_name,su.phone city_support_phone,su.active city_support_active,
+    p=c.execute(f'''SELECT p.*,(SELECT name FROM ops_hubs WHERE id=p.current_hub_id) current_hub_name,su.name city_support_name,su.phone city_support_phone,su.active city_support_active,
         i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,
         EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,
         EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,
@@ -274,7 +274,7 @@ def event(c,pid,status,note,u):
     if 'tech_notify_event' in globals(): tech_notify_event(c,pid,status,u)
 def list_parcels(c,u):
     cond,args=scope(u,c=c,follow_drivers=True)
-    rows = [dict(r) for r in c.execute(f'''SELECT p.*,
+    rows = [dict(r) for r in c.execute(f'''SELECT p.*,(SELECT name FROM ops_hubs WHERE id=p.current_hub_id) current_hub_name,
     COALESCE(sc.name,su.name) city_support_name,COALESCE(sc.phone,su.phone) city_support_phone,
     COALESCE(sc.active,su.active) city_support_active,
     i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,

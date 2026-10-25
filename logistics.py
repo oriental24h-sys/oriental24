@@ -582,10 +582,14 @@ def register_logistics(app, services):
             if outcome!='Livré' and not d.get('reason_code'):raise Error('Choisissez le motif du résultat.')
             cents=None
             if outcome=='Livré':
-                if not receiver:raise Error('Indiquez le nom du réceptionnaire déclaré.')
+                simple_delivery=u['role']=='livreur' and d.get('simple_delivery') is True
+                if not receiver and not simple_delivery:raise Error('Indiquez le nom du réceptionnaire déclaré.')
+                if p.get('otp_required'):
+                    if not secrets.compare_digest(str(d.get('otp','')),str(p.get('otp_code') or '')):
+                        raise Error('Code client à 4 chiffres requis ou incorrect.',400)
                 from decimal import Decimal, InvalidOperation
                 try:
-                    val=Decimal(str(d.get('collected_amount','')).replace(',','.'))
+                    val=Decimal(str(d.get('collected_amount',p['amount'] if simple_delivery else '')).replace(',','.'))
                     if not val.is_finite() or val<0 or val!=Decimal(str(p['amount'])):raise ValueError()
                     cents=int(val*100)
                 except (ValueError,InvalidOperation):raise Error('Le COD déclaré doit correspondre au montant du colis. Pas d’encaissement partiel dans ce parcours.')

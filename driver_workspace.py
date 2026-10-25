@@ -170,13 +170,10 @@ def register_driver_workspace(app,s):
                     s['ops_change'](c,p,dict(driver_id=uid,status='Reçu par le livreur',revision=d['revision']),u)
                     c.execute("UPDATE parcels SET driver_id=?,status='Reçu par le livreur',updated_at=? WHERE id=?",(uid,now(),p['id']));c.execute('DELETE FROM driver_receipts WHERE parcel_id=?',(p['id'],));status='Reçu par le livreur';note='Remise physique au livreur : '+dr['name']
                 else:
-                    status=p['status'] if p['status'] in CLOSED else 'Réceptionné'
-                    if p['status'] in CLOSED:
-                        # Keep closed result, attribution and timestamps for pending/issued commission lines.
-                        c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1 WHERE id=?',(hub,p['id']))
-                    else:
-                        s['ops_change'](c,p,dict(driver_id=None,status=status,revision=d['revision']),u)
-                        c.execute('UPDATE parcels SET driver_id=NULL,status=?,current_hub_id=?,updated_at=? WHERE id=?',(status,hub,now(),p['id']))
+                    status=p['status']
+                    # Recovery changes custody only: preserve outcome, reasons, appointment,
+                    # notes and historical courier/financial attribution for every status.
+                    c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1 WHERE id=?',(hub,p['id']))
                     c.execute('INSERT INTO driver_receipts(parcel_id,driver_id,received_at,hub_id) VALUES(?,?,?,?) ON CONFLICT(parcel_id) DO UPDATE SET driver_id=excluded.driver_id,received_at=excluded.received_at,hub_id=excluded.hub_id',(p['id'],uid,now(),hub));note='Récupéré physiquement à l’agence auprès de '+dr['name']+' · retiré de sa tournée'
                 record(c,uid,u,d['mode'],{'before':previous,'hub_id':hub,'financial_attribution_preserved':p['status'] in CLOSED},p['id']);event(c,p['id'],status,note,u)
             result=dict(ok=True,already=bool(already),parcel_id=p['id'],mode=d['mode']);c.execute('INSERT INTO driver_scan_keys VALUES(?,?,?,?)',(u['id'],key,fp,json.dumps(result)));return jsonify(**result)
@@ -248,13 +245,10 @@ def register_driver_workspace(app,s):
                     c.execute('DELETE FROM driver_receipts WHERE parcel_id=?',(p['id'],))
                     status='Reçu par le livreur';note='Remise physique au livreur : '+dr['name']
                 else:
-                    status=p['status'] if p['status'] in CLOSED else 'Réceptionné'
-                    if p['status'] in CLOSED:
-                        # Keep closed results, COD and commission attribution; receipt hides them from the route.
-                        c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1 WHERE id=?',(hub,p['id']))
-                    else:
-                        s['ops_change'](c,p,dict(driver_id=None,status=status,revision=p['ops_revision']),u)
-                        c.execute('UPDATE parcels SET driver_id=NULL,status=?,current_hub_id=?,updated_at=? WHERE id=?',(status,hub,now(),p['id']))
+                    status=p['status']
+                    # Recovery changes custody only: preserve outcome, reasons, appointment,
+                    # notes and historical courier/financial attribution for every status.
+                    c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1 WHERE id=?',(hub,p['id']))
                     c.execute('INSERT INTO driver_receipts(parcel_id,driver_id,received_at,hub_id) VALUES(?,?,?,?) ON CONFLICT(parcel_id) DO UPDATE SET driver_id=excluded.driver_id,received_at=excluded.received_at,hub_id=excluded.hub_id',(p['id'],uid,now(),hub))
                     note='Récupéré physiquement à l’agence auprès de '+dr['name']+' · retiré de sa tournée'
                 record(c,uid,u,mode,{'before':previous,'hub_id':hub,'financial_attribution_preserved':p['status'] in CLOSED},p['id'])
