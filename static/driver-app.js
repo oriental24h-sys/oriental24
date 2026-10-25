@@ -409,6 +409,7 @@
           <a class="btn sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=${encodeURIComponent(mapsAddr(p))}">${icon('pin')} Itinéraire</a>
           <a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${encodeURIComponent('Bonjour ' + p.recipient + ', ORIENTAL24 : votre colis ' + p.tracking + ' — statut actuel : ' + p.status + '.')}" data-cl-id="${p.id}" data-cl-phone="${esc(p.phone)}" data-cl-name="${esc(p.recipient)}" data-cl-msg="${esc('Bonjour ' + p.recipient + ', ORIENTAL24 : votre colis ' + p.tracking + ' — statut actuel : ' + p.status + '.')}" onclick="return o24ClWa(this)">${icon('chat')} Notifier</a>
           <button class="btn primary sm" onclick="closeModal();daStatusPick(${p.id})">${icon('edit')} Changer le statut</button>
+          ${parcelStateEditable(p)?`<button class="btn sm" onclick="openDriverFollowup(${p.id})">${icon('edit')} Motif / note</button>`:''}
           <button class="btn sm" onclick="closeModal();daMsgSheet(${p.id})">${icon('bell')} Prévenir le client</button>
           <button class="btn sm" onclick="closeModal();parcelDetail(${p.id})">${icon('eye')} Fiche complète</button>
         </div></div></div>`, true);

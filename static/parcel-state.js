@@ -3,7 +3,7 @@ function parcelStateEditable(p){return !['client','support','agent'].includes(S.
 function clientInterestedEligible(p){return S?.user?.role==='client'&&p.status!=='Intéressé'&&!['Livré','Retourné','Refusé','Annulé'].includes(p.status)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked&&!['Réglée','Soldé','Paid'].includes(p.invoice_status)}
 function hubParcelStatusEditable(p){return S?.user?.role==='agent'&&p.hub_status_editable===true&&p.status!=='Livré'&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked}
 function parcelStatusEditable(p){return S?.user?.role==='agent'?hubParcelStatusEditable(p):S?.user?.role==='client'?clientInterestedEligible(p):parcelStateEditable(p)}
-function parcelNoteControl(p){const label=p.reason_label||p.reason_code||'Aucun motif';return parcelStateEditable(p)?`<button class="parcel-note-button ${p.reason_code?'has-reason':''}" aria-label="Note de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelReason(${p.id},this)"><span>Note${p.reason_code?' · '+esc(label):''}</span>${icon('down')}</button>`:`<span class="parcel-note-readonly">${esc(label)}</span>`}
+function parcelNoteControl(p){if(S.user.role==='livreur'&&parcelStateEditable(p))return `<button class="parcel-note-button" onclick="openDriverFollowup(${p.id})">Motif / note ${icon('edit')}</button>`;const label=p.reason_label||p.reason_code||'Aucun motif';return parcelStateEditable(p)?`<button class="parcel-note-button ${p.reason_code?'has-reason':''}" aria-label="Note de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelReason(${p.id},this)"><span>Note${p.reason_code?' · '+esc(label):''}</span>${icon('down')}</button>`:`<span class="parcel-note-readonly">${esc(label)}</span>`}
 function parcelStatusControl(p){if(S?.user?.role==='client')return clientInterestedEligible(p)?`<button class="parcel-status-button client-interested-button" title="Marquer comme intéressé" aria-label="Marquer ${esc(p.tracking)} comme intéressé" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">Marquer intéressé${icon('down')}</button>`:'';return parcelStatusEditable(p)?`<button class="parcel-status-button" aria-label="État de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">${esc(p.status)}${icon('down')}</button>`:''}
 function parcelStateControls(p){return `<div class="parcel-state-controls">${tag(p.status)}${parcelStatusControl(p)}${parcelNoteControl(p)}</div>`}
 let activeReasonMenu=null;
@@ -90,4 +90,27 @@ async function submitParcelStatus(state,status,fields){
   if(inline){const b=document.querySelector(`.parcel-expand-button[onclick="toggleParcelRow(${state.id},this)"]`);if(b)await toggleParcelRow(state.id,b)}
   if(inModal)await parcelDetail(state.id);toast('État enregistré : '+status);
  }catch(e){statusMenuError(state,e)}
+}
+
+async function openDriverFollowup(id){
+ if(S?.user?.role!=='livreur')return;
+ const owner=S.user.id;
+ modal('Motif / note du livreur','<p class="sub">Chargement…</p>');
+ const node=document.querySelector('#modal-root .modal');
+ const current=()=>node?.isConnected&&S?.user?.id===owner;
+ try{
+  const [data,cfg]=await Promise.all([loadParcelCommand(id),api('/logistics/config')]);
+  if(!current())return;
+  const p=data.parcel;
+  if(p.driver_id!==owner||!parcelStateEditable(p))throw Error('Commande non modifiable ou non affectée à ce livreur.');
+  node.querySelector('.modal-body').innerHTML=`<p class="form-hint">${esc(p.tracking)} · ${esc(p.status)}. Le statut reste inchangé. Votre note sera ajoutée à la Chronologie, sans remplacer les instructions de livraison.</p><form><label>Motif de suivi<select name="reason_code"><option value="">Aucun motif</option>${cfg.reasons.filter(r=>r.active).map(r=>`<option value="${esc(r.code)}" ${r.code===p.reason_code?'selected':''}>${esc(r.label)}</option>`).join('')}</select></label><label>Note libre (facultative)<textarea name="note" maxlength="1000" placeholder="Votre commentaire de suivi…"></textarea></label><p class="reason-error" role="alert" hidden></p><div class="form-actions"><button type="button" class="btn" onclick="closeModal()">Annuler</button><button class="btn primary" type="submit">Enregistrer le suivi</button></div></form>`;
+  const f=node.querySelector('form');let busy=false;
+  f.onsubmit=async e=>{
+   e.preventDefault();if(busy||!current())return;busy=true;const btn=f.querySelector('[type=submit]'),err=f.querySelector('.reason-error');btn.disabled=true;err.hidden=true;
+   try{
+    await api('/parcels/'+id+'/followup','PATCH',{reason_code:f.elements.reason_code.value||null,note:f.elements.note.value.trim(),revision:p.ops_revision||0});
+    if(!current())return;closeModal();await refresh();await renderView();toast('Suivi enregistré · statut inchangé');
+   }catch(e){if(current()){err.hidden=false;err.textContent=e.message;btn.disabled=false;busy=false}}
+  };
+ }catch(e){if(current())node.querySelector('.modal-body').innerHTML=`<p class="reason-error">${esc(e.message)}</p><button class="btn" onclick="closeModal()">Fermer</button>`}
 }
