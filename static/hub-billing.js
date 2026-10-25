@@ -1,13 +1,13 @@
 /* Separate Hub commission ledger; never expose client billing/vendor payments to a manager. */
 let hubBillTab='mine',hubBillOwner=null,hubBillData=null;
 async function hubBillSelect(tab){hubBillTab=tab;await renderView()}
-async function hubBillingWorkspace(){
+async function hubBillingWorkspace(embedded=false){
  const identity=S.user.id+':'+S.user.role,admin=S.user.role==='admin';
  if(hubBillOwner!==identity){hubBillOwner=identity;hubBillTab='mine'}
- const tabs=admin?[['mine','Factures des Hubs'],['terms','Barèmes des Hubs'],['schedule','Génération automatique'],['legacy','Ancien registre COD']]:[['mine','Mes factures'],['drivers','Factures livreurs']];
+ const tabs=admin?[['mine',embedded?'Factures émises':'Factures des Hubs'],['terms','Barèmes des Hubs'],['schedule','Génération automatique'],['legacy','Ancien registre COD']]:[['mine','Mes factures'],['drivers','Factures livreurs']];
  if(!tabs.some(t=>t[0]===hubBillTab))hubBillTab='mine';
  const navigation=`<section class="card"><div class="billing-tabs">${tabs.map(([k,v])=>`<button class="${hubBillTab===k?'active':''}" onclick="hubBillSelect('${k}')">${esc(v)}</button>`).join('')}<span class="spacer"></span><button class="btn sm" onclick="renderView()">${icon('refresh')}Actualiser</button></div></section>`;
- const head=heading(admin?'Factures des Hubs':'Factures',admin?'Barèmes par Hub et émission quotidienne configurable. Aucun paiement automatique.':'Mes factures émises par Admin et factures des livreurs de mon Hub.');
+ const head=embedded?'':heading(admin?'Factures des Hubs':'Factures',admin?'Barèmes par Hub et émission quotidienne configurable. Aucun paiement automatique.':'Mes factures émises par Admin et factures des livreurs de mon Hub.');
  if(hubBillTab==='drivers'){
   const d=await api('/logistics/hub/driver-statements');
   return head+navigation+`<p class="form-hint">Les relevés de vos livreurs. Pour en créer un ou configurer son barème : Livreurs de mon Hub → Facture.</p><section class="card">`+simpleTable(['Facture','Livreur','Colis','COD MAD','Commission MAD','État'],(d.rows||[]).map(r=>[`<button class="tracking" onclick="openDriverStatement(${r.id})">${esc(r.reference)}</button>`,esc(r.driver_name),r.parcel_count,centMoney(r.cod_cents),centMoney(r.commission_cents),opsTag(r.status)]))+`</section>`;

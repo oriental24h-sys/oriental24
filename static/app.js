@@ -570,7 +570,7 @@ function shell() {
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => !(u.role==='agent'&&x[0]==='hub-driver-statements') && !adminHubSectionRemoved(x[0], u) && !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => !(u.role==='agent'&&x[0]==='hub-driver-statements') && !(u.role==='admin'&&x[0]==='hub-invoices') && !adminHubSectionRemoved(x[0], u) && !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
           ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${workspacePageTitle(key,t)}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
@@ -584,6 +584,7 @@ function adminHubSectionRemoved(section, u = S?.user) {
 }
 async function navigate(v) {
   if (!S) return;
+  if(S.user.role==='admin'&&v==='hub-invoices'){billingPane='hubs';v='invoices'}
   if (adminHubSectionRemoved(v)) v = ['agent','hub_manager'].includes(S.user.role) ? 'partner-palettes' : 'dashboard';
   if (clientSectionRemoved(v)) v = 'dashboard';
   // Responsable de hub : navigation limitée aux tâches et vues explicitement sûres.
@@ -713,7 +714,8 @@ async function renderView(background = false) {
         html = hubDriversView(await api('/logistics/hub/drivers'));
         break;
       case "hub-invoices":
-        html = await hubBillingWorkspace();
+        if(S.user.role==='admin'){billingPane='hubs';html=await billingHubView()}
+        else html = await hubBillingWorkspace();
         break;
       case "hub-driver-statements":
         html = hubDriverStatementsView(await api('/logistics/hub/driver-statements'));
@@ -739,6 +741,9 @@ async function renderView(background = false) {
         );
         break;
       case "invoices": {
+        if(S.user.role==='admin'&&billingPane==='hubs'){
+          html=await billingHubView();break;
+        }
         const data=await api(billingPane==="aging"&&S.user.role==="admin"?"/vendor-payables":"/billing?"+billingQuery(),"GET",undefined,background);
         if(current!==view||S?.user?.id!==owner)return;
         html=billingView(data);break;
