@@ -392,7 +392,7 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         r=self.scan('receive',[(pid,1)]);self.assertEqual(r.status_code,200,r.json)
         with self.m.conn() as c:
             p=c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone()
-            self.assertEqual((p['current_hub_id'],p['driver_id'],p['status']),(self.hub,None,'Réceptionné'))
+            self.assertEqual((p['current_hub_id'],p['driver_id'],p['status']),(self.hub,self.driver,'Reçu par le livreur'))
 
     def test_hub_keeps_read_only_tracking_after_driver_handoff(self):
         pid,_=self.parcel(self.hub)
@@ -430,6 +430,27 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         r=self.post(f'drivers-workspace/{self.driver}/scan-preview',dict(tracking=tracking,mode='assign'));self.assertEqual(r.status_code,404)
         r=self.scan('assign',[(pid,0)],driver=self.other_driver);self.assertEqual(r.status_code,404)
         self.assertEqual(self.client.get(f'/api/drivers-workspace/{self.other_driver}').status_code,404)
+
+    def test_evening_recovery_preserves_driver_outcome_and_followup(self):
+        for status in ('Reporté','Programmé','Refusé','Retourné','En livraison','Reçu par le livreur'):
+            with self.subTest(status=status):
+                pid,_=self.parcel(None,status,self.driver,self.hub)
+                with self.m.conn() as c:
+                    reason=c.execute('SELECT code FROM ops_reasons WHERE active=1 LIMIT 1').fetchone()[0]
+                    c.execute("UPDATE parcels SET reason_code=?,next_attempt_at='2026-12-01T12:00',note='Appeler demain' WHERE id=?",(reason,pid))
+                    before=dict(c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone())
+                r=self.scan('receive',[(pid,0)]);self.assertEqual(r.status_code,200,r.json)
+                with self.m.conn() as c:
+                    after=dict(c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone())
+                    for key in ('status','reason_code','next_attempt_at','note','driver_id','amount','invoice_id','updated_at','status_updated_at'):
+                        self.assertEqual(after[key],before[key],key)
+                    self.assertEqual(after['current_hub_id'],self.hub)
+                row=next(p for p in self.client.get('/api/bootstrap').json['parcels'] if p['id']==pid)
+                self.assertEqual(row['status'],status);self.assertTrue(row['driver_returned'])
+                self.assertTrue(row['current_hub_name'])
+                # Replay is safe and the parcel is no longer in the courier's outstanding tour.
+                self.assertEqual(self.scan('receive',[(pid,1)]).status_code,200)
+                self.assertNotIn(pid,[p['id'] for p in self.client.get(f'/api/drivers-workspace/{self.driver}').json['parcels']])
 
     def test_return_hub_tampering_and_stale_revision(self):
         pid,_=self.parcel(None,'Reçu par le livreur',self.driver,self.hub)
@@ -566,6 +587,35 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual(browser.patch(f'/api/parcels/{other}/followup',json=payload,headers=headers).status_code,404)
         with self.m.conn() as c:c.execute("UPDATE parcels SET status='Livré' WHERE id=?",(pid,))
         self.assertEqual(browser.patch(endpoint,json={**payload,'revision':after['ops_revision']},headers=headers).status_code,409)
+
+    def test_driver_simple_delivery_uses_order_cod_without_receiver(self):
+        from werkzeug.security import generate_password_hash
+        with self.m.conn() as c:
+            c.execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash('TestPassword!123'),self.driver))
+            email=c.execute('SELECT email FROM users WHERE id=?',(self.driver,)).fetchone()[0]
+        browser=self.m.app.test_client()
+        self.assertEqual(browser.post('/api/login',json={'email':email,'password':'TestPassword!123'}).status_code,200)
+        headers={'X-CSRF-Token':browser.get('/api/bootstrap').json['csrf']}
+        for amount in (0,125.50):
+            pid,_=self.parcel(None,'En livraison',self.driver,self.hub)
+            with self.m.conn() as c:c.execute('UPDATE parcels SET amount=? WHERE id=?',(amount,pid))
+            endpoint=f'/api/logistics/parcels/{pid}/attempts'
+            payload=dict(outcome='Livré',revision=0,request_key=uuid.uuid4().hex,simple_delivery=True)
+            bad={**payload,'collected_amount':999}
+            self.assertEqual(browser.post(endpoint,json=bad,headers=headers).status_code,400)
+            r=browser.post(endpoint,json=payload,headers=headers);self.assertEqual(r.status_code,200,r.json)
+            self.assertTrue(browser.post(endpoint,json=payload,headers=headers).json['already_recorded'])
+            with self.m.conn() as c:
+                attempt=c.execute('SELECT * FROM ops_attempts WHERE parcel_id=?',(pid,)).fetchone()
+                self.assertEqual(attempt['amount_cents'],round(amount*100))
+                self.assertFalse(attempt['receiver'])
+                self.assertEqual(c.execute('SELECT status FROM parcels WHERE id=?',(pid,)).fetchone()[0],'Livré')
+        pid,_=self.parcel(None,'En livraison',self.driver,self.hub)
+        with self.m.conn() as c:c.execute("UPDATE parcels SET otp_required=1,otp_code='1234' WHERE id=?",(pid,))
+        endpoint=f'/api/logistics/parcels/{pid}/attempts'
+        payload=dict(outcome='Livré',revision=0,request_key=uuid.uuid4().hex,simple_delivery=True)
+        self.assertEqual(browser.post(endpoint,json=payload,headers=headers).status_code,400)
+        self.assertEqual(browser.post(endpoint,json={**payload,'otp':'1234'},headers=headers).status_code,200)
 
     def test_status_scope_fields_revision_csrf_and_inactive_hub(self):
         pid,_=self.parcel(self.hub)
