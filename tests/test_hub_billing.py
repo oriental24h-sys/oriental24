@@ -82,6 +82,23 @@ class HubBillingTests(unittest.TestCase):
         self.assertEqual(self.issue()['count'],2)
         self.assertEqual(self.issue('new-run')['count'],0)
 
+    def test_hub_pdf_shared_layout_scope_and_frozen_identity(self):
+        from pypdf import PdfReader
+        from io import BytesIO
+        self.terms();self.terms(20);self.issue()
+        r=self.client.get('/api/hub-billing/1/pdf',headers={'X-Role':'agent','X-Hub':'10'})
+        self.assertEqual(r.status_code,200)
+        text='\n'.join(p.extract_text() for p in PdfReader(BytesIO(r.data)).pages)
+        for expected in ['Facture','Hub A','Total COD livré','Total Net','ID de suivi','Page :']:
+            self.assertIn(expected,text)
+        self.assertNotIn('Olivraison',text)
+        with self.conn() as c:c.execute("UPDATE ops_hubs SET name='Changed' WHERE id=10")
+        r=self.client.get('/api/hub-billing/1/pdf')
+        text='\n'.join(p.extract_text() for p in PdfReader(BytesIO(r.data)).pages)
+        self.assertIn('Hub A',text);self.assertNotIn('Changed',text)
+        self.assertEqual(self.client.get('/api/hub-billing/1/pdf',headers={'X-Role':'agent','X-Hub':'20'}).status_code,404)
+        self.assertEqual(self.client.get('/api/hub-billing/1/pdf',headers={'X-Role':'livreur'}).status_code,403)
+
     def test_net_calculation_and_missing_terms(self):
         self.terms(mode='net')
         with self.conn() as c:d=preview(c,self.cutoff)

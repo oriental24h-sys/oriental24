@@ -486,7 +486,53 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         pid,_=self.parcel(None,'Livré',self.driver,self.hub)
         self.assertEqual(self.scan('receive',[(pid,0)]).status_code,409)
 
-    def test_invoice_scope_confirm_and_no_payment_permissions(self):
+    def test_manager_driver_billing_documents_payments_and_foreign_scope(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        self.parcel(None,'Livré',self.driver,self.hub)
+        r=self.post('driver-finance/preview',dict(driver_id=self.driver));self.assertEqual(r.status_code,200,r.json)
+        r=self.post(f"driver-finance/preview/{r.json['token']}/confirm",{});self.assertEqual(r.status_code,200,r.json)
+        sid=r.json['statement_id'];endpoint=f'/api/billing/livreur/{sid}'
+        r=self.client.get('/api/billing?kind=livreur&size=10');self.assertEqual(r.status_code,200,r.json)
+        self.assertIn(sid,[x['id'] for x in r.json['rows']])
+        self.assertEqual(self.client.get('/api/billing?kind=client').status_code,403)
+        for fmt in ('csv','pdf'):
+            r=self.client.get(endpoint+'/'+fmt);self.assertEqual(r.status_code,200,r.data[:100])
+            if fmt=='pdf':
+                from pypdf import PdfReader
+                from io import BytesIO
+                text='\n'.join(p.extract_text() for p in PdfReader(BytesIO(r.data)).pages)
+                with self.m.conn() as c:hubname=c.execute('SELECT name FROM ops_hubs WHERE id=?',(self.hub,)).fetchone()[0]
+                self.assertIn(hubname,text)
+                self.assertIn('Local Driver',text)
+                self.assertNotIn('Olivraison',text)
+                self.assertNotIn('002323896000034',text)
+        r=self.client.get('/api/billing/export?kind=livreur');self.assertEqual(r.status_code,200)
+        info=self.client.get(endpoint).json['invoice']
+        payload=dict(version=info['version'],request_key=uuid.uuid4().hex,confirmed=True,method='Espèces',reference='test-'+uuid.uuid4().hex,payment_date=datetime.now(ZoneInfo('Africa/Casablanca')).date().isoformat())
+        self.assertEqual(self.client.post(endpoint+'/settle',json=payload).status_code,403)
+        r=self.client.post(endpoint+'/settle',json=payload,headers=self.headers);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['invoice']['state'],'Paid')
+        self.assertTrue(self.client.post(endpoint+'/settle',json=payload,headers=self.headers).json['already_recorded'])
+        with self.m.conn() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM driver_transactions WHERE statement_id=?',(sid,)).fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT created_by FROM driver_transactions WHERE statement_id=? LIMIT 1',(sid,)).fetchone()[0],self.manager)
+        current=self.client.get(endpoint).json['invoice']
+        correction=dict(version=current['version'],request_key=uuid.uuid4().hex,confirmed=True,reason='Erreur de saisie du reçu')
+        r=self.client.post(endpoint+'/reopen',json=correction,headers=self.headers);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['invoice']['state'],'Not Paid')
+        tx=dict(kind='cash',amount='1',method='Espèces',reference=uuid.uuid4().hex,paid_on=payload['payment_date'],note='',request_key=uuid.uuid4().hex)
+        self.assertEqual(self.post(f'driver-finance/statements/{sid}/transactions',tx).status_code,200)
+        self.assertEqual(self.client.get(endpoint).json['invoice']['state'],'Partiel')
+        with self.m.conn() as c:c.execute('UPDATE driver_statements SET hub_id=? WHERE id=?',(self.foreign,sid))
+        for suffix in ('','/csv','/pdf'):
+            self.assertEqual(self.client.get(endpoint+suffix).status_code,404)
+        self.assertEqual(self.client.post(endpoint+'/settle',json=payload,headers=self.headers).status_code,404)
+        self.assertEqual(self.post(f'driver-finance/statements/{sid}/transactions',tx).status_code,404)
+        r=self.client.get('/api/billing?kind=livreur&size=10');self.assertNotIn(sid,[x['id'] for x in r.json['rows']])
+        self.assertEqual(self.post(f'driver-finance/statements/{sid}/cancel',{}).status_code,403)
+
+    def test_invoice_scope_confirm_and_no_cancel_permissions(self):
         local,_=self.parcel(None,'Livré',self.driver,self.hub)
         self.parcel(None,'Livré',self.driver,self.foreign)
         self.parcel(None,'Livré',self.driver) # unknown legacy evidence: Admin only
@@ -496,7 +542,7 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         r=self.post(f'driver-finance/preview/{token}/confirm',{});self.assertTrue(r.json['already_created'])
         r=self.client.get(f'/api/driver-finance/statements/{sid}');self.assertEqual(r.status_code,200,r.json)
         self.assertEqual(r.json['statement']['hub_id'],self.hub)
-        self.assertEqual(self.post(f'driver-finance/statements/{sid}/transactions',{}).status_code,403)
+        self.assertEqual(self.post(f'driver-finance/statements/{sid}/transactions',{}).status_code,400)
         self.assertEqual(self.post(f'driver-finance/statements/{sid}/cancel',{}).status_code,403)
         self.assertEqual(self.post('driver-finance/preview',dict(driver_id=self.other_driver)).status_code,404)
         with self.m.conn() as c:c.execute('UPDATE driver_statements SET hub_id=? WHERE id=?',(self.foreign,sid))
