@@ -70,6 +70,58 @@ class HubManagerAnalyticsTests(unittest.TestCase):
         self.assertEqual((r['processed'],r['delivered']),(1,1))
         self.assertEqual(self.data()['parcels'][0]['evidence_source'],'attempt')
 
+    def custody_tables(self):
+        self.c.executescript("""CREATE TABLE driver_receipts(parcel_id PRIMARY KEY,driver_id,received_at,hub_id);
+        CREATE TABLE driver_workspace_audit(id INTEGER PRIMARY KEY,parcel_id,driver_id,action,created_at);""")
+
+    def recovery(self,pid,at='2026-01-01T18:00:00+01:00',did=1):
+        self.c.execute('INSERT INTO driver_workspace_audit(parcel_id,driver_id,action,created_at) VALUES(?,?,?,?)',(pid,did,'receive',at))
+        self.c.execute('INSERT OR REPLACE INTO driver_receipts VALUES(?,?,?,?)',(pid,did,at,10))
+
+    def test_four_scans_two_recoveries_leave_only_two_deliveries_in_both_views(self):
+        self.custody_tables()
+        for pid in (1,2,3,4):self.assignment(pid)
+        self.attempt(1,'Livré');self.attempt(2,'Livré')
+        self.attempt(3,'Reporté');self.attempt(4,'Refusé')
+        self.recovery(3);self.recovery(4)
+        d=self.data();r=d['rows'][0]
+        self.assertEqual((r['assigned'],r['processed'],r['delivered'],r['pending'],r['progress'],r['delivery_rate']),(2,2,2,0,100,100))
+        self.assertEqual(r['daily']['2026-01-01'],2)
+        self.assertEqual(d['summary']['assigned'],2)
+        self.assertEqual({p['parcel_id'] for p in d['parcels']},{1,2})
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM ops_assignments').fetchone()[0],4)
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM ops_attempts').fetchone()[0],4)
+
+    def test_delivery_is_retained_even_if_old_receipt_exists(self):
+        self.custody_tables();self.assignment(1);self.attempt(1,'Livré');self.recovery(1)
+        self.assertEqual(self.data()['summary']['assigned'],1)
+        self.assertEqual(self.data()['rows'][0]['daily']['2026-01-01'],1)
+
+    def test_recovery_after_selected_period_does_not_rewrite_earlier_snapshot(self):
+        self.custody_tables();self.assignment(1);self.recovery(1,at='2026-01-03T12:00:00+01:00')
+        self.assertEqual(self.data()['summary']['assigned'],1)
+
+    def test_reassignment_after_recovery_starts_a_new_visible_cycle(self):
+        self.custody_tables();self.assignment(1);self.recovery(1)
+        self.assignment(1,at='2026-01-02T09:00:00+01:00')
+        self.c.execute("INSERT INTO driver_workspace_audit(parcel_id,driver_id,action,created_at) VALUES(1,1,'assign','2026-01-02T09:00:00+01:00')")
+        d=self.data();self.assertEqual(d['summary']['assigned'],1)
+        self.assertEqual(d['rows'][0]['daily'],{'2026-01-01':0,'2026-01-02':1})
+
+    def test_recovery_without_attempt_removes_pending_not_marks_it_processed(self):
+        self.custody_tables();self.assignment(1);self.recovery(1)
+        z=self.data()['summary']
+        self.assertEqual((z['assigned'],z['pending'],z['processed'],z['progress']),(0,0,0,0))
+
+    def test_other_driver_receipt_does_not_remove_local_assignment(self):
+        self.custody_tables();self.assignment(1);self.recovery(1,did=3)
+        self.assertEqual(self.data()['summary']['assigned'],1)
+
+    def test_same_second_rescan_after_recovery_is_not_removed_by_stale_receipt(self):
+        self.custody_tables();self.assignment(1);self.recovery(1,at='2026-01-01T10:00:00+01:00')
+        self.c.execute("INSERT INTO driver_workspace_audit(parcel_id,driver_id,action,created_at) VALUES(1,1,'assign','2026-01-01T10:00:00+01:00')")
+        self.assertEqual(self.data()['summary']['assigned'],1)
+
     def test_own_hub_only_no_unknown_inference_and_all_roster_zero_days(self):
         self.assignment(1);self.assignment(2,hid=20);self.assignment(3,hid=None);self.assignment(4,did=3,hid=20)
         d=self.data();self.assertEqual(d['summary']['assigned'],1)

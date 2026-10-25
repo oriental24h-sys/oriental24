@@ -98,10 +98,11 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         r=self.scan('receive',[(pid,1) for pid in ids[1:]],hub=self.hub)
         self.assertEqual(r.status_code,200,r.json)
         row=self.client.get(endpoint).json['rows'][0]
-        self.assertEqual((row['processed'],row['pending'],row['progress'],row['delivery_rate']),(4,0,100,25))
+        self.assertEqual((row['assigned'],row['processed'],row['pending'],row['progress'],row['delivery_rate']),(1,1,0,100,100))
+        self.assertEqual(sum(row['daily'].values()),1)
         evidence={p['parcel_id']:p['evidence_source'] for p in self.client.get(endpoint).json['parcels']}
         self.assertEqual(evidence[ids[0]],'attempt')
-        self.assertTrue(all(evidence[pid]=='status_history' for pid in ids[1:]))
+        self.assertTrue(all(pid not in evidence for pid in ids[1:]))
 
     def test_admin_hub_full_receipt_real_csrf_and_manager_visibility(self):
         from hub_billing import generate, local_now
