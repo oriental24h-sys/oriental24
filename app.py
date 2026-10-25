@@ -14,7 +14,7 @@ from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, policy as status_polic
 from billing import driver_paid_sql
 import client_types
 from company_order_edit import company_order_flags, register_company_order_edit
-from hub_access import hub_manager_route_allowed, hub_manager_requires_active_hub, hub_parcel_scope, driver_dispatch_allowed, driver_team_member_ids
+from hub_access import hub_tracking_parcel_scope, hub_manager_route_allowed, hub_manager_requires_active_hub, hub_parcel_scope, driver_dispatch_allowed, driver_team_member_ids
 from temporary_passwords import generate_temporary_password, credential_response, register_temporary_passwords
 from parcel_transit import annotate_parcel_transit
 from hub_schema import ensure_hub_manager_can_leave
@@ -239,9 +239,9 @@ def number(d,k,minimum=0,maximum=1000000,integer=False):
 def team_member_ids(c,lead_id):
     """Expose team members only within their active lead's explicitly assigned Hub."""
     return driver_team_member_ids(c,lead_id)
-def scope(u,alias='p',c=None):
+def scope(u,alias='p',c=None,follow_drivers=False):
     if u['role']=='support': return f'{alias}.support_id=?',[u['id']]
-    if u['role']=='agent': return hub_parcel_scope(c,alias,u.get('agent_hub_id')) if c is not None else ('1=0',[])
+    if u['role']=='agent': return (hub_tracking_parcel_scope if follow_drivers else hub_parcel_scope)(c,alias,u.get('agent_hub_id')) if c is not None else ('1=0',[])
     if u['role']=='client': return f'{alias}.client_id=? AND NOT EXISTS(SELECT 1 FROM company_deleted_orders cd WHERE cd.parcel_id={alias}.id)',[u['id']]
     if u['role']=='livreur':
         # Un compte sans Hub reste en revue Admin : aucune tâche colis avant rattachement explicite.
@@ -252,8 +252,13 @@ def scope(u,alias='p',c=None):
         return f'{alias}.driver_id IN ({inlist}) AND ({alias}.current_hub_id IS NULL OR {alias}.current_hub_id=?) AND NOT EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id={alias}.id AND dw.driver_id={alias}.driver_id) AND NOT ({driver_paid_sql(alias)})',ids+[u['driver_hub_id']]
     return '1=1',[]
 
-def parcel(c,pid,u):
-    cond,args=scope(u,c=c)
+def hub_status_capability(p,u):
+    if u['role']=='agent':
+        p['hub_status_editable']=p['status']!='Livré' and not any(p.get(k) for k in ('invoice_id','financial_locked','operations_locked'))
+    return p
+
+def parcel(c,pid,u,follow_drivers=False):
+    cond,args=scope(u,c=c,follow_drivers=follow_drivers)
     p=c.execute(f'''SELECT p.*,su.name city_support_name,su.phone city_support_phone,su.active city_support_active,
         i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,
         EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,
@@ -262,13 +267,13 @@ def parcel(c,pid,u):
         FROM parcels p LEFT JOIN users su ON su.id=p.support_id LEFT JOIN invoices i ON i.id=p.invoice_id
         WHERE p.id=? AND {cond}''',[pid]+args).fetchone()
     if not p: raise APIError('Colis introuvable.',404)
-    return company_order_flags(c,annotate_parcel_transit(c,[dict(p)]),u)[0]
+    return hub_status_capability(company_order_flags(c,annotate_parcel_transit(c,[dict(p)]),u)[0],u)
 def event(c,pid,status,note,u):
     c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(pid,u['id'],status,note,now()))
     if 'ops_notify_event' in globals(): ops_notify_event(c,pid,status,u)
     if 'tech_notify_event' in globals(): tech_notify_event(c,pid,status,u)
 def list_parcels(c,u):
-    cond,args=scope(u,c=c)
+    cond,args=scope(u,c=c,follow_drivers=True)
     rows = [dict(r) for r in c.execute(f'''SELECT p.*,
     COALESCE(sc.name,su.name) city_support_name,COALESCE(sc.phone,su.phone) city_support_phone,
     COALESCE(sc.active,su.active) city_support_active,
@@ -293,7 +298,7 @@ def list_parcels(c,u):
     LEFT JOIN parcel_support ps ON ps.parcel_id=p.id LEFT JOIN support_contacts sc ON sc.id=ps.contact_id
     LEFT JOIN invoices i ON i.id=p.invoice_id
     WHERE {cond} ORDER BY COALESCE(julianday(p.status_updated_at),julianday(p.created_at),0) DESC,p.id DESC''',args)]
-    return company_order_flags(c,annotate_parcel_transit(c,rows),u)
+    return [hub_status_capability(p,u) for p in company_order_flags(c,annotate_parcel_transit(c,rows),u)]
 
 @app.route('/')
 @app.route('/login')
@@ -382,7 +387,7 @@ def bootstrap():
 def detail(pid):
     with conn() as c:
         c.execute('BEGIN')
-        p=parcel(c,pid,user())
+        p=parcel(c,pid,user(),follow_drivers=True)
         ev=[dict(r) for r in c.execute('SELECT e.*,u.name actor FROM events e JOIN users u ON u.id=e.actor_id WHERE parcel_id=? ORDER BY e.id DESC',(pid,))]
         media=[dict(r) for r in c.execute('SELECT pm.id,pm.kind,pm.mime,pm.created_at,u.name actor FROM pod_media pm JOIN users u ON u.id=pm.actor_id WHERE parcel_id=? ORDER BY pm.id DESC',(pid,))]
         return jsonify(parcel=parcel_contact_info(c,p),events=ev,media=media)
@@ -420,17 +425,17 @@ def update_parcel(pid):
     d=request.get_json() or {};u=user()
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
-        p=parcel(c,pid,u)
+        p=parcel(c,pid,u,follow_drivers=u['role']=='agent')
         if isinstance(d,dict) and d.get('status')=='Vers Hub Central':
             raise APIError('Cet état est réservé au scan de départ d’un retour vers le Hub Central.',409)
         if u['role']=='agent':
-            # The existing parcel() loader scopes this operation to the active
-            # manager's physical Hub. Never grant generic parcel editing rights.
+            # Scoped to physical stock or a courier handoff recorded by this Hub.
+            # Status-only permission: no generic parcel or assignment editing rights.
             allowed={'status','revision','note','reason_code','next_attempt_at','otp'}
             if not isinstance(d,dict) or set(d)-allowed or 'status' not in d or type(d.get('revision')) is not int:
                 raise APIError('Le responsable de Hub peut uniquement modifier la situation avec sa version.',403)
-            if p['status'] in ('Livré','Retourné'):
-                raise APIError('Commande Livré ou Retourné : situation définitivement verrouillée pour le responsable de Hub.',409)
+            if p['status']=='Livré':
+                raise APIError('Commande Livré : situation définitivement verrouillée pour le responsable de Hub.',409)
             if d['status'] not in STATUSES:raise APIError('Statut invalide.')
             if p['invoice_id'] or p['financial_locked'] or p['operations_locked']:
                 raise APIError('Commande verrouillée dans un relevé financier ou un document actif.',409)

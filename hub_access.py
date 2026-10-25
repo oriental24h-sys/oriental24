@@ -222,6 +222,21 @@ def hub_parcel_scope(conn, alias, hub_id):
     return f'{alias}.current_hub_id=?', [hub_id]
 
 
+def hub_tracking_parcel_scope(conn, alias, hub_id):
+    """Read-only visibility: physical stock plus tours handed off by this Hub.
+    Mutations must continue using hub_parcel_scope (physical custody only).
+    Never infer ownership from the courier's current Hub or the recipient city.
+    """
+    physical, args = hub_parcel_scope(conn, alias, hub_id)
+    if not args:
+        return '1=0', []
+    return f"""({physical} OR ({alias}.current_hub_id IS NULL
+        AND {alias}.driver_id IS NOT NULL AND {alias}.status NOT IN ('Transit','Vers Hub Central')
+        AND EXISTS(SELECT 1 FROM ops_assignments a
+            WHERE a.parcel_id={alias}.id AND a.new_driver_id={alias}.driver_id AND a.hub_id=?
+              AND a.id=(SELECT max(latest.id) FROM ops_assignments latest WHERE latest.parcel_id={alias}.id))))""", [hub_id, hub_id]
+
+
 def parcel_by_tracking_at_hub(conn, tracking, hub_id):
     """Fetch a parcel only when it is physically recorded at the selected Hub."""
     if isinstance(hub_id, bool) or not isinstance(hub_id, int) or hub_id <= 0:
