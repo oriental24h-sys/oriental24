@@ -16,5 +16,8 @@ const run=s=>vm.runInContext(s,ctx);
  run("hmaDailyLayout='table'");html=await run('hubManagerAnalyticsView()');assert(html.includes('Activité quotidienne · liste'));assert(!html.includes('data-heat='));
  run('hmaNever=true');assert.equal(run('hmaRows().length'),1);run('hmaExport()');assert.equal(download,'ORIENTAL24-analytique-daily.csv');
  run('hmaDetail(1,true)');assert(modal.includes('LOCAL-TEST'));
+ data.parcels[0].processed=true;data.parcels[0].outcome='Reporté';data.parcels[0].evidence_source='status_history';
+ run('hmaDetail(1)');assert(modal.includes('Changement d’état'));assert(modal.includes('Dernier traitement'));
+ run("hmaTab='drivers'");html=await run('hubManagerAnalyticsView()');assert(html.includes('retour physique seul ne suffit pas')); 
  console.log('PASS: manager analytics navigation, Hub/cards/daily views, risk/never filters, drilldown and CSV');
 })().catch(e=>{console.error(e);process.exitCode=1});
