@@ -18,6 +18,6 @@ const run=s=>vm.runInContext(s,ctx);
  run('hmaDetail(1,true)');assert(modal.includes('LOCAL-TEST'));
  data.parcels[0].processed=true;data.parcels[0].outcome='Reporté';data.parcels[0].evidence_source='status_history';
  run('hmaDetail(1)');assert(modal.includes('Changement d’état'));assert(modal.includes('Dernier traitement'));
- run("hmaTab='drivers'");html=await run('hubManagerAnalyticsView()');assert(html.includes('retour physique seul ne suffit pas')); 
+ run("hmaTab='drivers'");html=await run('hubManagerAnalyticsView()');assert(html.includes('scans moins récupérations')); 
  console.log('PASS: manager analytics navigation, Hub/cards/daily views, risk/never filters, drilldown and CSV');
 })().catch(e=>{console.error(e);process.exitCode=1});
