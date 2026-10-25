@@ -540,6 +540,13 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         browser=self.m.app.test_client()
         self.assertEqual(browser.post('/api/login',json={'email':email,'password':'TestPassword!123'}).status_code,200)
         headers={'X-CSRF-Token':browser.get('/api/bootstrap').json['csrf']}
+        # The exact modal prerequisites must both succeed for the courier.
+        self.assertEqual(browser.get(f'/api/parcels/{pid}').status_code,200)
+        vocabulary=browser.get('/api/logistics/followup-reasons')
+        self.assertEqual(vocabulary.status_code,200,vocabulary.json)
+        self.assertEqual(set(vocabulary.json),{'reasons'})
+        self.assertIn(reason,[r['code'] for r in vocabulary.json['reasons']])
+        self.assertEqual(browser.get('/api/logistics/config').status_code,403)
         payload=dict(reason_code=reason,note='Client joignable après 18h',revision=before['ops_revision'])
         endpoint=f'/api/parcels/{pid}/followup'
         self.assertEqual(browser.patch(endpoint,json=payload).status_code,403)
