@@ -350,7 +350,7 @@
        ${p.otp_required && o.key === 'livre' ? `<div class="field full"><label for="f-otp">Code reçu par le client *</label><input id="f-otp" name="otp" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code" required placeholder="4 chiffres"></div>` : ''}
        ${o.cod ? `<div class="full form-hint orange">« Livré » confirme que le montant de ${money(p.amount)} MAD a été collecté auprès du destinataire.</div>` : ''}
        ${o.date ? `<div class="field full"><label for="f-next_at">Date *</label><input type="date" id="f-next_at" name="next_at" required min="${iso(new Date())}"></div>` : ''}
-       ${o.prefill ? textarea('note', 'Motif', o.prefill) : textarea('note', o.motif === 'required' ? 'Motif' : 'Motif / commentaire (optionnel)', '', o.motif === 'required')}
+       ${o.key==='livre'?'':o.prefill ? textarea('note', 'Motif', o.prefill) : textarea('note', o.motif === 'required' ? 'Motif' : 'Motif / commentaire (optionnel)', '', o.motif === 'required')}
        ${o.key === 'noresponse' ? `<div class="full form-hint">Sera enregistré comme « Reporté » avec ce motif (l’ancien rendez-vous est retiré).</div>` : ''}`,
       'Confirmer'));
     bindForm(async (d) => {
@@ -367,7 +367,8 @@
       await saved('Statut mis à jour : ' + o.label);
       daPos(true);   // v1.8.0 : à chaque étape, la position suit la tournée
       render();
-      if (o.key === 'livre') daPodModal(id);   // v1.4.28 : proposition photo / signature après une livraison
+      // Optional proof remains available separately, not forced after confirmation.
+      // if (o.key === 'livre') daPodModal(id);   // v1.4.28 : proposition photo / signature après une livraison
     });
   };
   /* v1.4.28 : preuve de livraison — photo (caméra du téléphone, compressée) ou signature tactile du
