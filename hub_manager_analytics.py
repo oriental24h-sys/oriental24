@@ -75,6 +75,23 @@ def last_processing_evidence(c,pid,did,hid,assigned,cutoff,next_assignment):
     return found
 
 
+def recovered_in_cycle(c,pid,did,assigned,cutoff,next_assignment):
+    """Read custody history only; never change dispatch, receipts or parcel state."""
+    until=next_assignment if next_assignment is not None else cutoff+1
+    tables={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'driver_workspace_audit' in tables:
+        row=c.execute("""SELECT action FROM driver_workspace_audit WHERE parcel_id=? AND driver_id=?
+            AND action IN ('assign','receive') AND hma_stamp(created_at)>=?
+            AND hma_stamp(created_at)<=? AND hma_stamp(created_at)<?
+            ORDER BY hma_stamp(created_at) DESC,id DESC LIMIT 1""",(pid,did,assigned,cutoff,until)).fetchone()
+        if row:return row['action']=='receive'
+    if 'driver_receipts' in tables:
+        return bool(c.execute("""SELECT 1 FROM driver_receipts WHERE parcel_id=? AND driver_id=?
+            AND hma_stamp(received_at)>=? AND hma_stamp(received_at)<=?
+            AND hma_stamp(received_at)<?""",(pid,did,assigned,cutoff,until)).fetchone())
+    return False
+
+
 def analytics(c,hid,start,end,driver_id=None):
     c.create_function('hma_stamp',1,stamp,deterministic=True)
     drivers=[dict(r) for r in c.execute("SELECT id,name,active FROM users WHERE role='livreur' AND driver_hub_id=? ORDER BY name,id",(hid,))]
@@ -91,18 +108,23 @@ def analytics(c,hid,start,end,driver_id=None):
     daily={r['id']:{day:set() for day in days} for r in drivers}
     latest={}
     for a in assignments:
-        day=datetime.fromtimestamp(stamp(a['created_at']),TZ).date().isoformat()
-        daily[a['new_driver_id']][day].add(a['parcel_id'])
-        # One parcel per driver in the selected cohort, even after repeated handoffs.
-        latest[(a['new_driver_id'],a['parcel_id'])]=a
-    detail=[]
-    for (did,pid),a in latest.items():
+        did,pid=a['new_driver_id'],a['parcel_id']
         assigned=stamp(a['created_at'])
-        # A later assignment ends this assignment cycle, including a handoff to another Hub.
-        nxt=c.execute('''SELECT hma_stamp(created_at) ts FROM ops_assignments WHERE parcel_id=?
+        nxt=c.execute("""SELECT hma_stamp(created_at) ts FROM ops_assignments WHERE parcel_id=?
             AND (hma_stamp(created_at)>? OR (hma_stamp(created_at)=? AND id>?))
-            ORDER BY hma_stamp(created_at),id LIMIT 1''',(pid,assigned,assigned,a['id'])).fetchone()
-        attempts=last_processing_evidence(c,pid,did,hid,assigned,end.timestamp(),nxt['ts'] if nxt else None)
+            ORDER BY hma_stamp(created_at),id LIMIT 1""",(pid,assigned,assigned,a['id'])).fetchone()
+        until=nxt['ts'] if nxt else None
+        attempts=last_processing_evidence(c,pid,did,hid,assigned,end.timestamp(),until)
+        recovered=recovered_in_cycle(c,pid,did,assigned,end.timestamp(),until)
+        included=not recovered or bool(attempts and attempts['outcome']=='Livré')
+        if included:
+            day=datetime.fromtimestamp(assigned,TZ).date().isoformat()
+            daily[did][day].add(pid)
+        # Do not resurrect an older cycle when the newest cycle was de-scanned.
+        latest[(did,pid)]=(a,attempts,included)
+    detail=[]
+    for (did,pid),(a,attempts,included) in latest.items():
+        if not included:continue
         detail.append(dict(parcel_id=pid,tracking=a['tracking'],driver_id=did,assigned_at=a['created_at'],
             processed=bool(attempts),outcome=attempts['outcome'] if attempts else 'Sans tentative',
             attempted_at=attempts['created_at'] if attempts else None,
