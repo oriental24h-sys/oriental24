@@ -617,6 +617,30 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual(browser.post(endpoint,json=payload,headers=headers).status_code,400)
         self.assertEqual(browser.post(endpoint,json={**payload,'otp':'1234'},headers=headers).status_code,200)
 
+    def test_manager_configures_only_own_driver_terms_then_issues_statement(self):
+        with self.m.conn() as c:c.execute('DELETE FROM driver_terms WHERE driver_id=?',(self.driver,))
+        r=self.client.get('/api/driver-finance/terms');self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual({d['id'] for d in r.json},{self.driver})
+        self.assertIsNone(r.json[0]['terms'])
+        data=dict(mode='gross',delivered='15',returned='5',refused='3',revision=0,overrides=[])
+        endpoint=f'/api/driver-finance/terms/{self.driver}'
+        self.assertEqual(self.client.put(endpoint,json=data).status_code,403)
+        self.assertEqual(self.client.put(f'/api/driver-finance/terms/{self.other_driver}',json=data,headers=self.headers).status_code,404)
+        r=self.client.put(endpoint,json=data,headers=self.headers);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.client.put(endpoint,json=data,headers=self.headers).status_code,409)
+        r=self.client.get(endpoint+'/history');self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json[0]['actor_id'],self.manager)
+        self.assertEqual(self.client.get(f'/api/driver-finance/terms/{self.other_driver}/history').status_code,404)
+        pid,_=self.parcel(None,'Refusé',self.driver,self.hub)
+        preview=self.post('driver-finance/preview',dict(driver_id=self.driver));self.assertEqual(preview.status_code,200,preview.json)
+        issued=self.post(f"driver-finance/preview/{preview.json['token']}/confirm",{});self.assertEqual(issued.status_code,200,issued.json)
+        sid=issued.json['statement_id']
+        before=self.client.get(f'/api/driver-finance/statements/{sid}').json
+        r=self.client.put(endpoint,json={**data,'revision':1,'refused':'9'},headers=self.headers);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.client.get(f'/api/driver-finance/statements/{sid}').json,before)
+        with self.m.conn() as c:c.execute('UPDATE ops_hubs SET active=0 WHERE id=?',(self.hub,))
+        self.assertEqual(self.client.put(endpoint,json={**data,'revision':2},headers=self.headers).status_code,403)
+
     def test_status_scope_fields_revision_csrf_and_inactive_hub(self):
         pid,_=self.parcel(self.hub)
         foreign,_=self.parcel(self.foreign)
