@@ -100,7 +100,7 @@ def register_driver_finance(app, services):
         if not row or (active and not row['active']):
             raise Error('Choisissez un livreur actif.', 400)
         actor=user()
-        if actor['role']=='agent' and row['driver_hub_id']!=actor.get('agent_hub_id'):
+        if actor['role']=='agent' and (row['driver_hub_id']!=actor.get('agent_hub_id') or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(actor.get('agent_hub_id'),)).fetchone()):
             raise Error('Livreur introuvable.',404)
         return dict(row)
 
@@ -204,20 +204,23 @@ def register_driver_finance(app, services):
         return data
 
     @app.get(PREFIX+'/terms')
-    @auth('admin', 'livreur')
+    @auth('admin', 'livreur', 'agent')
     def get_terms():
         u = user()
         with conn() as c:
             sql = "SELECT id,name,email,phone,active FROM users WHERE role='livreur'"
             args = []
             if u['role']=='livreur': sql += ' AND id=?'; args.append(u['id'])
+            if u['role']=='agent':
+                sql += ' AND driver_hub_id=? AND EXISTS(SELECT 1 FROM ops_hubs h WHERE h.id=users.driver_hub_id AND h.active=1)'
+                args.append(u.get('agent_hub_id'))
             drivers = []
             for row in c.execute(sql+' ORDER BY name', args).fetchall():
                 drivers.append({**dict(row), 'terms':term_data(c, row['id'])})
             return jsonify(drivers)
 
     @app.put(PREFIX+'/terms/<int:did>')
-    @auth('admin')
+    @auth('admin','agent')
     def save_terms(did):
         u = user(); d = payload(); mode = d.get('mode')
         if mode not in ('net','gross'): raise Error('Choisissez une méthode de règlement.')
@@ -251,7 +254,7 @@ def register_driver_finance(app, services):
         return jsonify(ok=True, revision=revision+1)
 
     @app.get(PREFIX+'/terms/<int:did>/history')
-    @auth('admin', 'livreur')
+    @auth('admin','livreur','agent')
     def terms_history(did):
         u = user()
         if u['role']=='livreur' and did!=u['id']: raise Error('Barème introuvable.',404)
