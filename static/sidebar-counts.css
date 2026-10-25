@@ -1,0 +1,14 @@
+/* A task badge remains visible even in the collapsed desktop navigation. */
+.sidebar .nav-item { position: relative; }
+.sidebar .nav-count.pending-count {
+  background: #f97316; color: #fff; border-radius: 999px;
+  min-width: 22px; padding: 1px 6px; font-size: 11px; font-weight: 700;
+  text-align: center; flex-shrink: 0; margin-left: auto;
+}
+@media (min-width:721px) {
+  #root.sidebar-auto:not(.sidebar-peek) .sidebar .nav-item .pending-count {
+    display: inline-flex; opacity: 1; visibility: visible; width: auto;
+    position: absolute; top: 1px; right: 2px; min-width: 17px;
+    padding: 0 4px; font-size: 9px; line-height: 15px;
+  }
+}

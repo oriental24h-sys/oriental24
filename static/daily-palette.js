@@ -62,18 +62,8 @@
     catch (e) { toast(e.message, true); return null; }
   }
 
-  /* Badge latéral : nombre de colis du brouillon du jour, à côté de « Palettes partenaires ». */
-  function updateSidebarBadge(d) {
-    if (!societyId()) return;
-    const btn = document.querySelector('.nav-item[data-nav="partner-palettes"]');
-    if (!btn) return;
-    let b = btn.querySelector('.daily-badge');
-    const n = d && d.status === 'Préparé' ? (d.count || 0) : 0;
-    if (!n) { if (b) b.remove(); return; }
-    if (!b) { b = document.createElement('span'); b.className = 'nav-count daily-badge'; btn.appendChild(b); }
-    b.textContent = n;
-    b.title = 'Colis dans la palette du jour (brouillon à envoyer)';
-  }
+  /* Sidebar now counts pending palettes, never parcel lines inside a draft. */
+  function updateSidebarBadge() {}
   function tag(status) { return status === 'Préparé' ? 'warn' : status === 'En transit' ? 'blue' : status === 'Partiellement reçu' ? 'blue' : status === 'Reçu' ? 'good' : 'info'; }
   function drawEmpty(node, dayTxt, note) {
     node.innerHTML = `<div class="card daily-palette-empty"><div class="flex between"><div><h3>Palette du jour</h3><p class="sub">${dayTxt} · votre envoi quotidien vers ORIENTAL24</p><p class="form-hint" style="margin:10px 0 0">${note || 'Les commandes que vous saisissez aujourd’hui (statut Créé) rejoindront la palette tout au long de la journée.'}</p></div><button type="button" class="btn" data-ldp="refresh">${icon('refresh')}Actualiser</button></div></div>`;
