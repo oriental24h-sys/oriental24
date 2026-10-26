@@ -646,6 +646,7 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.post(f'driver-finance/statements/{sid}/transactions',tx).status_code,404)
         r=self.client.get('/api/billing?kind=livreur&size=10');self.assertNotIn(sid,[x['id'] for x in r.json['rows']])
         self.assertEqual(self.post(f'driver-finance/statements/{sid}/cancel',{}).status_code,403)
+        self._exercise_new_cmd_stock_lifecycle()
 
     def test_invoice_scope_confirm_and_no_cancel_permissions(self):
         local,_=self.parcel(None,'Livré',self.driver,self.hub)
@@ -830,6 +831,47 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertNotIn(unpaid,[x['id'] for x in r.json['rows']])
         r=admin.get(base+'&from=2026-01-01T00%3A00&to=2026-01-01T00%3A59&party='+str(first)+'&state=Paid')
         self.assertEqual([x['id'] for x in r.json['rows']],[paid])
+
+    def _exercise_new_cmd_stock_lifecycle(self):
+        from werkzeug.security import generate_password_hash
+        unique=uuid.uuid4().hex
+        client_email='stock-client-'+unique+'@example.test';admin_email='stock-admin-'+unique+'@example.test'
+        with self.m.conn() as c:
+            client_id=c.execute("INSERT INTO users(name,email,password,role,company,created_at) VALUES(?, ?, ?,'client', ?,?)",
+                                ('Stock Client',client_email,generate_password_hash('ClientPass!123'),'Stock Shop',self.m.now())).lastrowid
+            c.execute("INSERT INTO users(name,email,password,role,created_at) VALUES(?,?,?,'admin',?)",
+                      ('Stock Admin',admin_email,generate_password_hash('AdminPass!123'),self.m.now()))
+        client=self.m.app.test_client();admin=self.m.app.test_client()
+        self.assertEqual(client.post('/api/login',json={'email':client_email,'password':'ClientPass!123'},environ_overrides={'REMOTE_ADDR':'10.61.0.1'}).status_code,200)
+        self.assertEqual(admin.post('/api/login',json={'email':admin_email,'password':'AdminPass!123'},environ_overrides={'REMOTE_ADDR':'10.62.0.1'}).status_code,200)
+        client_headers={'X-CSRF-Token':client.get('/api/bootstrap').json['csrf']}
+        admin_headers={'X-CSRF-Token':admin.get('/api/bootstrap').json['csrf']}
+        created=client.post('/api/products',json={'name':'Stock Item','reference':'SKU-'+unique[:10]},headers=client_headers)
+        self.assertEqual(created.status_code,200,created.json)
+        with self.m.conn() as c:product_id=c.execute('SELECT id FROM products WHERE reference=?',('SKU-'+unique[:10],)).fetchone()[0]
+        stocked=admin.post(f'/api/products/{product_id}/movements',json={'delta':10,'note':'استلام ابتدائي'},headers=admin_headers)
+        self.assertEqual(stocked.status_code,200,stocked.json)
+        base={'recipient':'Test Recipient','phone':'0612345678','address':'Agadir','city_id':self.city,'amount':'120','note':'','items':[{'product_id':product_id,'quantity':3}]}
+        # A regular CMD stores a product description only and must not move stock.
+        normal=client.post('/api/parcels',json={**base,'product':'Stock Item × 3'},headers=client_headers)
+        self.assertEqual(normal.status_code,200,normal.json)
+        # A stock-linked CMD reserves units; physical quantity stays put until preparation.
+        prep=client.post('/api/fulfillment/orders',json={**base,'request_key':uuid.uuid4().hex},headers=client_headers)
+        self.assertEqual(prep.status_code,200,prep.json)
+        product=next(p for p in client.get('/api/products').json if p['id']==product_id)
+        self.assertEqual((product['quantity'],product['reserved'],product['available']),(10,3,7))
+        cancelled=client.post(f"/api/fulfillment/orders/{prep.json['id']}/cancel",json={'reason':'Client annule'},headers=client_headers)
+        self.assertEqual(cancelled.status_code,200,cancelled.json)
+        product=next(p for p in client.get('/api/products').json if p['id']==product_id)
+        self.assertEqual((product['quantity'],product['reserved'],product['available']),(10,0,10))
+        prep=client.post('/api/fulfillment/orders',json={**base,'request_key':uuid.uuid4().hex},headers=client_headers)
+        self.assertEqual(prep.status_code,200,prep.json)
+        shipped=admin.post(f"/api/fulfillment/orders/{prep.json['id']}/ship",json={'hub_id':self.hub,'checked':True},headers=admin_headers)
+        self.assertEqual(shipped.status_code,200,shipped.json)
+        product=next(p for p in client.get('/api/products').json if p['id']==product_id)
+        self.assertEqual((product['quantity'],product['reserved'],product['available']),(7,0,7))
+        detail=client.get(f"/api/fulfillment/orders/{prep.json['id']}").json
+        self.assertEqual(detail['status'],'Préparé');self.assertTrue(detail['tracking'])
 
     def test_manager_finance_overview_and_export_are_own_hub_only(self):
         self.parcel(None,'Livré',self.driver,self.hub)
