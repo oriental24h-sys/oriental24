@@ -3,6 +3,16 @@
    Hand-reviewed common labels in i18n.js take precedence. */
 window.O24_AUTO_TRANSLATIONS = [
   [
+    "Retours envoye vers agence",
+    "Returns sent to the hub",
+    "مرتجعات أُرسلت إلى الوكالة"
+  ],
+  [
+    "Retour reçu en entrepôt",
+    "Return received at the warehouse",
+    "مرتجع استُلم في المستودع"
+  ],
+  [
     "envoyé",
     "sent",
     "أرسلت"

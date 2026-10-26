@@ -2471,6 +2471,8 @@ td strong {
 .parcel-policy-badges{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:5px}
 .parcel-policy-badges .parcel-policy-tag{font-size:9px;line-height:1.25;padding:3px 7px;border-radius:999px;white-space:normal}
 .table-wrap .parcel-policy-badges{max-width:190px}
+.return-state-tag{display:inline-flex;margin-top:6px;white-space:normal}
+.return-state-tag.received{background:#ffe4c7;color:#b4611c}
 .parcel-create-flags{display:grid;gap:8px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#fafbfd}
 .parcel-create-flag{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:4px 0}
 .parcel-create-flag+.parcel-create-flag{border-top:1px solid var(--line);padding-top:12px}
