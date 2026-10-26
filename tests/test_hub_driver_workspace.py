@@ -798,6 +798,63 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual(browser.post(endpoint,json=payload,headers=headers).status_code,400)
         self.assertEqual(browser.post(endpoint,json={**payload,'otp':'1234'},headers=headers).status_code,200)
 
+    def test_admin_client_invoice_filters_and_morocco_local_date_window(self):
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        from werkzeug.security import generate_password_hash
+        unique=uuid.uuid4().hex
+        with self.m.conn() as c:
+            admin_email='billing-admin-'+unique+'@example.test'
+            c.execute("INSERT INTO users(name,email,password,role,created_at) VALUES('Billing Admin',?,?,'admin',?)",
+                      (admin_email,generate_password_hash('TestPassword!123'),self.m.now()))
+            first=c.execute("INSERT INTO users(name,email,password,role,company,created_at) VALUES(?,?,'unused','client',?,?)",
+                            ('Client A','billing-a-'+unique+'@example.test','Vitex '+unique,self.m.now())).lastrowid
+            second=c.execute("INSERT INTO users(name,email,password,role,company,created_at) VALUES(?,?,'unused','client',?,?)",
+                             ('Client B','billing-b-'+unique+'@example.test','RayanShop '+unique,self.m.now())).lastrowid
+            local=datetime(2026,1,1,0,30,tzinfo=ZoneInfo('Africa/Casablanca'))
+            utc_created=local.astimezone(timezone.utc).isoformat(timespec='seconds')
+            paid=c.execute("INSERT INTO invoices(client_id,cod,fees,total,status,created_at) VALUES(?,100,10,90,'Réglée',?)",(first,utc_created)).lastrowid
+            unpaid=c.execute("INSERT INTO invoices(client_id,cod,fees,total,status,created_at) VALUES(?,100,10,90,'À régler','2026-01-01T02:00:00+00:00')",(first,)).lastrowid
+            other=c.execute("INSERT INTO invoices(client_id,cod,fees,total,status,created_at) VALUES(?,100,10,90,'Réglée','2026-01-01T00:30:00+00:00')",(second,)).lastrowid
+        admin=self.m.app.test_client()
+        login=admin.post('/api/login',json={'email':admin_email,'password':'TestPassword!123'})
+        self.assertEqual(login.status_code,200,login.json)
+        base='/api/billing?kind=client'
+        r=admin.get(base+f'&party={first}&state=Paid')
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual([x['id'] for x in r.json['rows']],[paid])
+        r=admin.get(base+f'&q=FAC-{other:04d}')
+        self.assertEqual([x['id'] for x in r.json['rows']],[other])
+        r=admin.get(base+'&from=2026-01-01T00%3A00&to=2026-01-01T00%3A59')
+        self.assertIn(paid,[x['id'] for x in r.json['rows']])
+        self.assertNotIn(unpaid,[x['id'] for x in r.json['rows']])
+        r=admin.get(base+'&from=2026-01-01T00%3A00&to=2026-01-01T00%3A59&party='+str(first)+'&state=Paid')
+        self.assertEqual([x['id'] for x in r.json['rows']],[paid])
+
+    def test_manager_finance_overview_and_export_are_own_hub_only(self):
+        self.parcel(None,'Livré',self.driver,self.hub)
+        preview=self.post('driver-finance/preview',dict(driver_id=self.driver))
+        self.assertEqual(preview.status_code,200,preview.json)
+        issued=self.post(f"driver-finance/preview/{preview.json['token']}/confirm",{})
+        self.assertEqual(issued.status_code,200,issued.json)
+        sid=issued.json['statement_id']
+        listing=self.client.get('/api/driver-finance')
+        self.assertEqual(listing.status_code,200,listing.json)
+        self.assertEqual([s['id'] for s in listing.json['statements']],[sid])
+        self.assertGreater(listing.json['summary']['cod_cents'],0)
+        exported=self.client.get('/api/driver-finance/export')
+        self.assertEqual(exported.status_code,200)
+        self.assertIn(f'DRV-{sid:06d}',exported.get_data(as_text=True))
+        with self.m.conn() as c:c.execute('UPDATE driver_statements SET hub_id=? WHERE id=?',(self.foreign,sid))
+        listing=self.client.get('/api/driver-finance')
+        self.assertEqual(listing.status_code,200,listing.json)
+        self.assertEqual(listing.json['statements'],[])
+        self.assertEqual(listing.json['summary']['cod_cents'],0)
+        self.assertNotIn(f'DRV-{sid:06d}',self.client.get('/api/driver-finance/export').get_data(as_text=True))
+        with self.m.conn() as c:c.execute('UPDATE ops_hubs SET active=0 WHERE id=?',(self.hub,))
+        self.assertEqual(self.client.get('/api/driver-finance').status_code,403)
+        self.assertEqual(self.client.get('/api/driver-finance/export').status_code,403)
+
     def test_manager_configures_only_own_driver_terms_then_issues_statement(self):
         with self.m.conn() as c:c.execute('DELETE FROM driver_terms WHERE driver_id=?',(self.driver,))
         r=self.client.get('/api/driver-finance/terms');self.assertEqual(r.status_code,200,r.json)
