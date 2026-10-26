@@ -68,9 +68,132 @@ class HubBillingTests(unittest.TestCase):
     def tearDown(self):self.tmp.cleanup()
     def terms(self,hid=10,mode='gross',revision=0,**extra):
         return self.client.put(f'/api/hub-billing/terms/{hid}',json=dict(mode=mode,revision=revision,delivered='10',returned='4',refused='3',**extra))
-    def issue(self,key='manual:test',at=None):
+    def issue(self,key='manual:test',at=None,hub_id=None):
         with self.conn() as c:
-            c.execute('BEGIN IMMEDIATE');return generate(c,at or self.cutoff,1,key)
+            c.execute('BEGIN IMMEDIATE');return generate(c,at or self.cutoff,1,key,hub_id=hub_id)
+
+    def city_fixture(self):
+        with self.conn() as c:
+            c.execute('ALTER TABLE cities ADD COLUMN hub_id INTEGER')
+            c.execute('UPDATE cities SET hub_id=10 WHERE id=1')
+            c.execute("INSERT INTO cities VALUES(2,'City Two',10),(3,'Foreign City',20)")
+            c.execute('UPDATE parcels SET city_id=2 WHERE id=2')
+    def city_terms(self,revision=0,**changes):
+        payload=dict(mode='gross',revision=revision,cities=[dict(city_id=1,delivered='10',returned='4',refused='3'),dict(city_id=2,delivered='25',returned='8',refused='7')])
+        payload.update(changes)
+        return self.client.put('/api/hub-billing/terms/10',json=payload)
+
+    def test_city_rates_match_parcel_city_and_snapshot_old_invoices(self):
+        self.city_fixture();self.assertEqual(self.city_terms().status_code,200)
+        with self.conn() as c:
+            d=preview(c,self.cutoff);h=d['hubs'][0]
+            self.assertEqual(h['commission_cents'],1700)
+            self.assertEqual([l['commission_cents'] for l in h['lines']],[1000,700])
+        result=self.issue();sid=result['statement_ids'][0]
+        before=self.client.get(f'/api/hub-billing/{sid}').json
+        self.assertEqual(self.city_terms(1,mode='net',cities=[dict(city_id=1,delivered='99',returned='88',refused='77'),dict(city_id=2,delivered='66',returned='55',refused='44')]).status_code,200)
+        self.assertEqual(self.client.get(f'/api/hub-billing/{sid}').json,before)
+        self.assertIn('cities',self.audits[-1]['old_value'])
+
+    def test_five_assigned_cities_all_require_their_own_rates(self):
+        self.city_fixture()
+        with self.conn() as c:
+            c.execute("INSERT INTO cities VALUES(4,'Four',10),(5,'Five',10),(6,'Six',10)")
+        cities=[dict(city_id=cid,delivered=str(cid),returned='0',refused='0') for cid in (1,2,4,5,6)]
+        self.assertEqual(self.city_terms(cities=cities).status_code,200)
+        h=next(h for h in self.client.get('/api/hub-billing').json['hubs'] if h['id']==10)
+        self.assertEqual(len(h['cities']),5)
+        self.assertTrue(h['city_mode'])
+        self.assertEqual({c['id']:c['delivered_cents'] for c in h['cities']},{cid:cid*100 for cid in (1,2,4,5,6)})
+
+    def test_new_city_without_rate_is_skipped_with_explicit_warning(self):
+        self.city_fixture();self.city_terms()
+        with self.conn() as c:
+            c.execute("INSERT INTO cities VALUES(4,'New City',10)")
+            c.execute('UPDATE parcels SET city_id=4 WHERE id=2')
+            d=preview(c,self.cutoff)
+            self.assertEqual(d['hubs'][0]['parcel_count'],1)
+            self.assertEqual(d['missing_city_terms'],[dict(hub_id=10,hub_name='Hub A',city_id=4,city='New City')])
+        result=self.issue();self.assertEqual(result['missing_city_terms'][0]['city_id'],4)
+        with self.conn() as c:self.assertFalse(c.execute('SELECT 1 FROM hub_billing_lines WHERE parcel_id=2').fetchone())
+
+    def test_city_validation_no_partial_or_foreign_or_duplicate_city_save(self):
+        self.city_fixture()
+        valid=[dict(city_id=1,delivered='10',returned='0',refused='0'),dict(city_id=2,delivered='20',returned='0',refused='0')]
+        for cities in (valid[:1],valid+[dict(valid[0],city_id=3)]):
+            self.assertEqual(self.city_terms(cities=cities).status_code,409)
+        for cities in ([],None,valid+[valid[0]], [dict(valid[0],city_id=True),valid[1]], [dict(valid[0],delivered='-1'),valid[1]], [dict(valid[0],delivered=None),valid[1]]):
+            self.assertEqual(self.city_terms(cities=cities).status_code,400)
+        with self.conn() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM hub_billing_city_terms').fetchone()[0],0)
+
+    def test_city_mode_cannot_silently_revert_to_general_and_stale_revision_rejected(self):
+        self.city_fixture();self.city_terms()
+        self.assertEqual(self.terms(revision=1).status_code,409)
+        self.assertEqual(self.city_terms().status_code,409)
+        self.assertEqual(self.city_terms(1).status_code,200)
+
+    def test_city_tariffs_do_not_infer_operational_hub_from_city(self):
+        self.city_fixture();self.city_terms()
+        with self.conn() as c:
+            d=preview(c,self.cutoff)
+            self.assertEqual(d['unassigned_count'],1)
+            self.assertNotIn(4,[l['parcel_id'] for h in d['hubs'] for l in h['lines']])
+
+    def test_legacy_general_rates_still_apply_until_explicit_city_configuration(self):
+        self.city_fixture();self.terms()
+        with self.conn() as c:self.assertEqual(preview(c,self.cutoff)['hubs'][0]['commission_cents'],1300)
+        self.assertEqual(self.city_terms(1).status_code,200)
+        with self.conn() as c:self.assertEqual(preview(c,self.cutoff)['hubs'][0]['commission_cents'],1700)
+
+    def test_changed_city_mapping_rejects_stale_complete_form(self):
+        self.city_fixture()
+        with self.conn() as c:c.execute('UPDATE cities SET hub_id=20 WHERE id=2')
+        self.assertEqual(self.city_terms().status_code,409)
+
+    def test_city_rates_net_mode_and_zero_prices(self):
+        self.city_fixture()
+        self.assertEqual(self.city_terms(mode='net',cities=[dict(city_id=1,delivered='0',returned='0',refused='0'),dict(city_id=2,delivered='25',returned='8',refused='7')]).status_code,200)
+        with self.conn() as c:
+            h=preview(c,self.cutoff)['hubs'][0]
+            self.assertEqual((h['commission_cents'],h['retained_cents'],h['cash_due_cents']),(700,700,9300))
+
+    def test_manual_preview_and_generation_can_target_one_hub_only(self):
+        self.terms(10);self.terms(20)
+        with self.conn() as c:
+            d=preview(c,self.cutoff,hub_id=10)
+            self.assertEqual([h['hub_id'] for h in d['hubs']],[10])
+            self.assertEqual(d['unassigned_count'],0)
+        result=self.issue('manual:hub-a',hub_id=10)
+        self.assertEqual(result['count'],1)
+        with self.conn() as c:
+            rows=c.execute('SELECT hub_id FROM hub_billing_statements ORDER BY id').fetchall()
+            self.assertEqual([r['hub_id'] for r in rows],[10])
+            self.assertEqual([r[0] for r in c.execute('SELECT parcel_id FROM hub_billing_lines ORDER BY parcel_id')],[1,2])
+            other=preview(c,self.cutoff,hub_id=20)
+            self.assertEqual([h['hub_id'] for h in other['hubs']],[20])
+        second=self.issue('manual:hub-b',hub_id=20)
+        self.assertEqual(second['count'],1)
+        with self.conn() as c:
+            self.assertEqual([r[0] for r in c.execute('SELECT hub_id FROM hub_billing_statements ORDER BY id')],[10,20])
+
+    def test_manual_api_requires_active_hub_and_keeps_all_hubs_scope(self):
+        self.terms(10);self.terms(20)
+        all_preview=self.client.get('/api/hub-billing/preview')
+        one_preview=self.client.get('/api/hub-billing/preview?hub_id=10')
+        self.assertEqual(all_preview.status_code,200);self.assertEqual(len(all_preview.json['hubs']),2)
+        self.assertEqual(one_preview.status_code,200);self.assertEqual([h['hub_id'] for h in one_preview.json['hubs']],[10])
+        self.assertEqual(self.client.get('/api/hub-billing/preview?hub_id=30').status_code,404)
+        self.assertEqual(self.client.get('/api/hub-billing/preview?hub_id=abc').status_code,400)
+        payload=dict(cutoff=one_preview.json['cutoff'],snapshot=one_preview.json['snapshot'],request_key='hub-only-request-123456',confirmed=True,hub_id=10)
+        result=self.client.post('/api/hub-billing/generate',json=payload)
+        self.assertEqual(result.status_code,200);self.assertEqual(result.json['count'],1)
+        with self.conn() as c:
+            self.assertEqual([r[0] for r in c.execute('SELECT hub_id FROM hub_billing_statements')],[10])
+        bad={**payload,'request_key':'hub-bad-request-123456','hub_id':30}
+        self.assertEqual(self.client.post('/api/hub-billing/generate',json=bad).status_code,404)
+        invalid={**payload,'request_key':'hub-invalid-request-123456','hub_id':True}
+        self.assertEqual(self.client.post('/api/hub-billing/generate',json=invalid).status_code,400)
 
     def test_rates_and_outcomes_and_no_destination_inference(self):
         self.assertEqual(self.terms().status_code,200);self.assertEqual(self.terms(20).status_code,200)
