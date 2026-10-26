@@ -51,6 +51,15 @@ def ensure_schema(c):
         returned_cents INTEGER NOT NULL CHECK(returned_cents>=0),
         refused_cents INTEGER NOT NULL CHECK(refused_cents>=0),
         revision INTEGER NOT NULL,updated_by INTEGER NOT NULL REFERENCES users(id),updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS hub_billing_city_config(
+        hub_id INTEGER PRIMARY KEY REFERENCES ops_hubs(id));
+    CREATE TABLE IF NOT EXISTS hub_billing_city_terms(
+        hub_id INTEGER NOT NULL REFERENCES ops_hubs(id),city_id INTEGER NOT NULL REFERENCES cities(id),
+        delivered_cents INTEGER NOT NULL CHECK(delivered_cents>=0),
+        returned_cents INTEGER NOT NULL CHECK(returned_cents>=0),
+        refused_cents INTEGER NOT NULL CHECK(refused_cents>=0),
+        revision INTEGER NOT NULL,updated_by INTEGER NOT NULL,updated_at TEXT NOT NULL,
+        PRIMARY KEY(hub_id,city_id));
     CREATE TABLE IF NOT EXISTS hub_billing_schedule(
         id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL DEFAULT 0,
         time TEXT NOT NULL DEFAULT '23:59',revision INTEGER NOT NULL DEFAULT 0,
@@ -92,13 +101,20 @@ def ensure_schema(c):
         ''')
 
 
+def billing_cities(c,hid):
+    if 'hub_id' not in {r['name'] for r in c.execute('PRAGMA table_info(cities)')}:return []
+    return [dict(r) for r in c.execute("""SELECT ci.id,ci.name,t.delivered_cents,t.returned_cents,t.refused_cents,t.revision
+        FROM cities ci LEFT JOIN hub_billing_city_terms t ON t.city_id=ci.id AND t.hub_id=?
+        WHERE ci.hub_id=? ORDER BY ci.name,ci.id""",(hid,hid))]
+
+
 def candidates(c, cutoff):
     # Physical routing/destination city is NOT evidence of a closing operation.
     # Use the recorded closing attempt or courier handoff Hub, just like driver finance.
     # Parcel timestamps use app.now(): naive SERVER-local time, not Morocco wall time.
     cutoff = cutoff.astimezone().replace(tzinfo=None).isoformat(timespec='seconds')
     return [dict(r) for r in c.execute(f'''
-        SELECT p.id,p.tracking,p.status,p.amount,ci.name city,
+        SELECT p.id,p.tracking,p.status,p.amount,p.city_id,ci.name city,
             COALESCE(NULLIF(p.status_updated_at,''),NULLIF(p.updated_at,''),p.created_at) closed_at,
             {driver_financial_hub_sql()} hub_id
         FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id
@@ -119,13 +135,18 @@ def statement_summary(row, receipt=None):
     return d
 
 
-def preview(c, cutoff):
+def preview(c, cutoff, hub_id=None):
     terms = {r['hub_id']: dict(r) for r in c.execute('SELECT * FROM hub_billing_terms')}
     hubs = {r['id']: dict(r) for r in c.execute('SELECT id,name,active FROM ops_hubs')}
     grouped = {}
+    city_mode={r[0] for r in c.execute('SELECT hub_id FROM hub_billing_city_config')}
+    city_terms={(r['hub_id'],r['city_id']):dict(r) for r in c.execute('SELECT * FROM hub_billing_city_terms')}
+    missing_cities={}
     missing, unknown = set(), 0
     for p in candidates(c, cutoff):
         hid = p['hub_id']
+        if hub_id is not None and hid != hub_id:
+            continue
         if hid not in hubs or not hubs[hid]['active']:
             unknown += 1
             continue
@@ -133,6 +154,10 @@ def preview(c, cutoff):
             missing.add(hid)
             continue
         t = terms[hid]
+        rate=city_terms.get((hid,p['city_id'])) if hid in city_mode else t
+        if rate is None:
+            missing_cities[(hid,p['city_id'])]=dict(hub_id=hid,hub_name=hubs[hid]['name'],city_id=p['city_id'],city=p['city'] or 'Ville inconnue')
+            continue
         key = {'Livré': 'delivered_cents', 'Retourné': 'returned_cents', 'Refusé': 'refused_cents'}[p['status']]
         cod = int((Decimal(str(p['amount'])) * 100).quantize(Decimal('1'))) if p['status'] == 'Livré' else 0
         if cod < 0:
@@ -140,7 +165,7 @@ def preview(c, cutoff):
         g = grouped.setdefault(hid, dict(hub_id=hid, hub_name=hubs[hid]['name'], mode=t['mode'],
                                          terms_revision=t['revision'], lines=[]))
         g['lines'].append(dict(parcel_id=p['id'], tracking=p['tracking'], city=p['city'] or '',
-                               status=p['status'], cod_cents=cod, commission_cents=t[key], closed_at=p['closed_at']))
+                               status=p['status'], cod_cents=cod, commission_cents=rate[key], closed_at=p['closed_at']))
     for g in grouped.values():
         g['parcel_count'] = len(g['lines'])
         g['cod_cents'] = sum(l['cod_cents'] for l in g['lines'])
@@ -149,26 +174,28 @@ def preview(c, cutoff):
         g['cash_due_cents'] = g['cod_cents'] - g['retained_cents']
         g['commission_due_cents'] = g['commission_cents'] - g['retained_cents']
     data = dict(hubs=list(grouped.values()), missing_terms=[hubs[h] for h in sorted(missing)],
-                unassigned_count=unknown, cutoff=cutoff.isoformat())
+                unassigned_count=unknown, missing_city_terms=list(missing_cities.values()), cutoff=cutoff.isoformat())
     data['snapshot'] = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
     return data
 
 
-def generate(c, cutoff, actor_id, run_key, automatic=False, expected=None):
+def generate(c, cutoff, actor_id, run_key, automatic=False, expected=None, hub_id=None):
     """Caller holds BEGIN IMMEDIATE. Entire run + all Hub invoices commit together."""
-    fingerprint=hashlib.sha256(json.dumps([cutoff.isoformat(),actor_id,automatic,expected],sort_keys=True).encode()).hexdigest()
+    fingerprint_payload=[cutoff.isoformat(),actor_id,automatic,expected]
+    if hub_id is not None:fingerprint_payload.append(hub_id)
+    fingerprint=hashlib.sha256(json.dumps(fingerprint_payload,sort_keys=True).encode()).hexdigest()
     prior = c.execute('SELECT * FROM hub_billing_runs WHERE run_key=?', (run_key,)).fetchone()
     if prior:
         if prior['fingerprint']!=fingerprint:raise ValueError('Clé déjà utilisée pour une autre génération.')
         return {**json.loads(prior['result']), 'statement_ids':[r[0] for r in c.execute('SELECT id FROM hub_billing_statements WHERE run_id=?',(prior['id'],))], 'replayed': True}
-    data = preview(c, cutoff)
+    data = preview(c, cutoff, hub_id=hub_id)
     if expected is not None and data['snapshot'] != expected:
         raise ValueError('Les commandes ou les barèmes ont changé. Rechargez la prévisualisation.')
     at = local_now().isoformat(timespec='seconds')
     run_id = c.execute('INSERT INTO hub_billing_runs(run_key,cutoff,automatic,created_by,created_at,result,fingerprint) VALUES(?,?,?,?,?,?,?)',
                        (run_key, cutoff.isoformat(), int(automatic), actor_id, at,
                         json.dumps(dict(cutoff=data['cutoff'], count=len(data['hubs']),
-                                        missing_terms=data['missing_terms'], unassigned_count=data['unassigned_count'])),fingerprint)).lastrowid
+                                        missing_terms=data['missing_terms'], missing_city_terms=data['missing_city_terms'], unassigned_count=data['unassigned_count'])),fingerprint)).lastrowid
     ids = []
     for g in data['hubs']:
         keys = ('hub_id','hub_name','mode','terms_revision','parcel_count','cod_cents','commission_cents',
@@ -184,7 +211,7 @@ def generate(c, cutoff, actor_id, run_key, automatic=False, expected=None):
         c.executemany('''INSERT INTO hub_billing_lines(statement_id,parcel_id,tracking,city,status,cod_cents,commission_cents,closed_at)
                          VALUES(?,?,?,?,?,?,?,?)''',
                       [(sid, l['parcel_id'], l['tracking'], l['city'], l['status'], l['cod_cents'], l['commission_cents'], l['closed_at']) for l in g['lines']])
-    return dict(count=len(ids), statement_ids=ids, missing_terms=data['missing_terms'], unassigned_count=data['unassigned_count'])
+    return dict(count=len(ids), statement_ids=ids, missing_terms=data['missing_terms'], missing_city_terms=data['missing_city_terms'], unassigned_count=data['unassigned_count'])
 
 
 def scheduled_tick(conn, at=None):
@@ -238,6 +265,9 @@ def register_hub_billing(app, s):
             result = dict(hub=h, rows=[statement_summary(r,c.execute('SELECT * FROM hub_billing_receipts WHERE statement_id=?',(r['id'],)).fetchone()) for r in rows], read_only=True)
             if u['role']=='admin':
                 result['hubs'] = [dict(r) for r in c.execute('SELECT h.id,h.name,h.active,t.mode,t.delivered_cents,t.returned_cents,t.refused_cents,t.revision FROM ops_hubs h LEFT JOIN hub_billing_terms t ON t.hub_id=h.id ORDER BY h.name')]
+                for hub in result['hubs']:
+                    hub['cities']=billing_cities(c,hub['id'])
+                    hub['city_mode']=bool(c.execute('SELECT 1 FROM hub_billing_city_config WHERE hub_id=?',(hub['id'],)).fetchone())
                 result['schedule'] = dict(c.execute('SELECT * FROM hub_billing_schedule WHERE id=1').fetchone())
                 result['scheduler_running'] = bool(app.extensions.get('hub_billing_scheduler'))
                 last = c.execute('SELECT result FROM hub_billing_runs WHERE automatic=1 ORDER BY id DESC LIMIT 1').fetchone()
@@ -331,8 +361,17 @@ def register_hub_billing(app, s):
         d = request.get_json(silent=True)
         if not isinstance(d,dict) or d.get('mode') not in ('net','gross') or type(d.get('revision')) is not int:
             raise Error('Méthode, montants et version requis.')
+        city_payload=d.get('cities')
+        city_values=None
         try:
-            values = [amount_cents(d.get(k)) for k in ('delivered','returned','refused')]
+            if 'cities' in d:
+                if not isinstance(city_payload,list) or not city_payload:raise ValueError('Configurez les villes de ce Hub avant de saisir leur barème.')
+                city_values={}
+                for city in city_payload:
+                    if not isinstance(city,dict) or type(city.get('city_id')) is not int or city['city_id'] in city_values:raise ValueError('Ville invalide ou en double.')
+                    city_values[city['city_id']]=[amount_cents(city.get(k)) for k in ('delivered','returned','refused')]
+                values=[0,0,0]  # Unused legacy columns; city mode never falls back to them.
+            else:values = [amount_cents(d.get(k)) for k in ('delivered','returned','refused')]
         except ValueError as e:
             raise Error(str(e))
         u = user()
@@ -341,15 +380,28 @@ def register_hub_billing(app, s):
             if not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hid,)).fetchone():
                 raise Error('Hub actif introuvable.',404)
             old = c.execute('SELECT * FROM hub_billing_terms WHERE hub_id=?',(hid,)).fetchone()
+            old_city_terms=[dict(r) for r in c.execute('SELECT * FROM hub_billing_city_terms WHERE hub_id=?',(hid,))]
             revision = old['revision'] if old else 0
             if d['revision'] != revision:
                 raise Error('Le barème a changé. Rechargez-le.',409)
+            if city_values is not None:
+                assigned={city['id'] for city in billing_cities(c,hid)}
+                if set(city_values)!=assigned:raise Error('Saisissez un barème pour chaque ville actuellement rattachée à ce Hub, sans ville étrangère. Rechargez la liste.',409)
+                for cid,rates in city_values.items():
+                    c.execute('''INSERT INTO hub_billing_city_terms VALUES(?,?,?,?,?,?,?,?)
+                        ON CONFLICT(hub_id,city_id) DO UPDATE SET delivered_cents=excluded.delivered_cents,
+                        returned_cents=excluded.returned_cents,refused_cents=excluded.refused_cents,
+                        revision=excluded.revision,updated_by=excluded.updated_by,updated_at=excluded.updated_at''',
+                        (hid,cid,*rates,revision+1,u['id'],s['now']()))
+                c.execute('INSERT OR IGNORE INTO hub_billing_city_config VALUES(?)',(hid,))
+            elif c.execute('SELECT 1 FROM hub_billing_city_config WHERE hub_id=?',(hid,)).fetchone():
+                raise Error('Ce Hub utilise des barèmes par ville. Rechargez le formulaire.',409)
             c.execute('''INSERT INTO hub_billing_terms VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(hub_id) DO UPDATE SET
                 mode=excluded.mode,delivered_cents=excluded.delivered_cents,returned_cents=excluded.returned_cents,
                 refused_cents=excluded.refused_cents,revision=excluded.revision,updated_by=excluded.updated_by,updated_at=excluded.updated_at''',
                       (hid,d['mode'],*values,revision+1,u['id'],s['now']()))
             s['append_audit_log'](c,actor_id=u['id'],actor_name=u['name'],action='hub_billing_terms_changed',entity_type='hub',entity_id=hid,
-                                  old_value=dict(old) if old else None,new_value=dict(mode=d['mode'],delivered_cents=values[0],returned_cents=values[1],refused_cents=values[2],revision=revision+1),created_at=s['now']())
+                                  old_value={'terms':dict(old) if old else None,'cities':old_city_terms},new_value=dict(cities=city_values,mode=d['mode'],delivered_cents=values[0],returned_cents=values[1],refused_cents=values[2],revision=revision+1),created_at=s['now']())
         return jsonify(ok=True)
 
     @app.put('/api/hub-billing/schedule')
@@ -373,8 +425,15 @@ def register_hub_billing(app, s):
     @auth('admin')
     def hub_billing_preview():
         cutoff=local_now().replace(microsecond=0)
+        raw_hub_id=request.args.get('hub_id')
+        hub_id=None
+        if raw_hub_id is not None:
+            try:hub_id=int(raw_hub_id)
+            except (TypeError,ValueError):raise Error('Hub invalide.')
+            if hub_id<=0:raise Error('Hub invalide.')
         with conn() as c:
-            return jsonify(preview(c,cutoff))
+            if hub_id is not None and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise Error('Hub actif introuvable.',404)
+            return jsonify(preview(c,cutoff,hub_id=hub_id))
 
     @app.post('/api/hub-billing/generate')
     @auth('admin')
@@ -387,10 +446,13 @@ def register_hub_billing(app, s):
             if cutoff.tzinfo is None or cutoff>local_now():raise ValueError()
         except (ValueError,TypeError,KeyError):
             raise Error('Date de prévisualisation invalide.')
+        hub_id=d.get('hub_id')
+        if hub_id is not None and (type(hub_id) is not int or hub_id<=0):raise Error('Hub invalide.')
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
+            if hub_id is not None and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise Error('Hub actif introuvable.',404)
             try:
-                result=generate(c,cutoff,u['id'],'manual:'+d['request_key'],expected=d.get('snapshot') or 'invalid')
+                result=generate(c,cutoff,u['id'],'manual:'+d['request_key'],expected=d.get('snapshot') or 'invalid',hub_id=hub_id)
             except ValueError as e:raise Error(str(e),409)
         return jsonify(result)
 
