@@ -528,7 +528,7 @@
     const isManager=typeof S!=='undefined'&&S.user?.role==='agent';
     const canManage=isAdmin||isManager;
     const pickupCities=d.pickup_cities||[];
-    const date=new Date().toISOString().slice(0,10);
+    const date=window.o24CasablancaDay?.(new Date())||new Date().toISOString().slice(0,10);
     const alerts=(d.gps_alerts||[]).map(x=>`${escText(x.name)} — GPS désactivé`).join(' · ');
     return heading(isManager?`Tour de contrôle — Ramassage · ${escText(d.manager_hub?.name||'mon Hub')}`:'Tour de contrôle — Ramassage',isManager?'Votre périmètre : demandes, clients et livreurs rattachés à votre Hub uniquement. Toute affectation automatique reste dans votre zone. Mise à jour toutes les 8 secondes.':'Carte temps réel des livreurs et demandes de collecte · mise à jour automatique toutes les 8 secondes.',
       `<button class="btn sm" type="button" onclick="renderView()">${icon('refresh')}Actualiser</button>${isAdmin?`<button class="btn sm" type="button" onclick="rtZoneSettings()">${icon('pin')}Zones</button><button class="btn sm primary" type="button" onclick="tourDispatchPanel()">${icon('scan')}Répartition colis</button>`:''}`)+

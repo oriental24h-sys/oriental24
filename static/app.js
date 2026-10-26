@@ -1,3 +1,10 @@
+window.o24CasablancaDay = function (date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Casablanca', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const get = (key) => parts.find((part) => part.type === key)?.value || '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+};
 const $ = (s) => document.querySelector(s);
 const esc = (v) =>
   String(v ?? "").replace(

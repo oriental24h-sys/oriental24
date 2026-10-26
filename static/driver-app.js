@@ -20,7 +20,9 @@
     (typeof matchMedia !== 'undefined' && matchMedia('(display-mode: standalone)').matches) ||
     (typeof location !== 'undefined' && /(^|[?&])app=1(&|$)/.test(location.search || ''));
   const setAppShell = (on) => { if (typeof document !== 'undefined' && document.body) document.body.classList.toggle('o24-app', !!on); };
-  const iso = (d) => d.toISOString().slice(0, 10);
+  const iso = (d) => typeof window.o24CasablancaDay === 'function'
+    ? window.o24CasablancaDay(d)
+    : new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Casablanca', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
   const daLocale = () => ({ en: 'en-GB', ar: 'ar-MA' }[window.o24CurrentLanguage?.()] || 'fr-FR');
   const frDay = (s) => new Intl.DateTimeFormat(daLocale(), { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(s + 'T12:00:00'));
 
@@ -29,7 +31,11 @@
   const state = { q: '', from: '', to: '', status: '', treatment: '', quick: '', driver: '' };
   /* v1.5.0 : membres de l'équipe (visibles dans le bootstrap quand l'utilisateur est chef). */
   const members = () => (S.users || []).filter((u) => u.role === 'livreur' && u.team_lead_id === S.user.id && u.active);
-  function resetRange() { const t = new Date(), f = new Date(Date.now() - 59 * 86400000); state.from = iso(f); state.to = iso(t); }
+  function resetRange() {
+    const to = iso(new Date()), from = new Date(to + 'T12:00:00Z');
+    from.setUTCDate(from.getUTCDate() - 59);
+    state.from = iso(from); state.to = to;
+  }
   resetRange();
 
   const digits = (s) => String(s || '').replace(/\D/g, '');
