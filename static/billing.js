@@ -24,7 +24,7 @@ function billingView(d){
 }
 async function billingSwitch(kind){billingReset(kind);billingPane='factures';await renderView()}
 async function billingArchive(v){billingFilters.archive=v;billingFilters.page=1;billingFilters.state='';await renderView()}
-async function billingApply(e){e.preventDefault();const b=e.target.querySelector('[type=submit]');if(b.disabled)return;b.disabled=true;const values=Object.fromEntries(new FormData(e.target));if(values.from&&values.to&&values.from>values.to){toast('La date de début doit précéder la date de fin.',true);b.disabled=false;return}Object.assign(billingFilters,values,{page:1});await renderView();b.disabled=false}
+async function billingApply(e){e.preventDefault();const form=e.currentTarget||e.target,b=form.querySelector('[type=submit]');if(b.disabled)return;b.disabled=true;const values={};for(const name of ['from','to','state','party','q'])values[name]=form.elements.namedItem(name)?.value||'';if(values.from&&values.to&&values.from>values.to){toast('La date de début doit précéder la date de fin.',true);b.disabled=false;return}Object.assign(billingFilters,values,{page:1});try{await renderView()}finally{if(b.isConnected!==false)b.disabled=false}}
 async function billingPage(n){billingFilters.page+=n;await renderView()}
 async function billingReload(){await refresh();await renderView()}
 function billingOpen(kind,id){return kind==='client'?invoiceDetail(id):openDriverStatement(id)}
