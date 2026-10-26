@@ -378,7 +378,10 @@ function cancelStockRequest(id) {
 }
 
 function labelMarkup(p) {
-  return `<article class="shipping-label"><header><img src="/static/wordmark.png" alt="ORIENTAL24"><span>LIVRAISON À DOMICILE</span></header><div class="label-destination"><div><span>DESTINATION</span><h2>${esc(p.city)}</h2><p>${esc(p.tracking)}</p></div><img src="${p.qr}" alt="QR de suivi ${esc(p.tracking)}"></div><div class="label-address"><span>DESTINATAIRE</span><h3>${esc(p.recipient)}</h3><strong>${esc(p.phone)}</strong><p>${esc(p.address)}</p></div><div class="label-cod"><span>MONTANT À COLLECTER</span><strong>${money(p.amount)} <small>MAD</small></strong></div><div class="label-sender"><span>EXPÉDITEUR</span><b>${esc(p.company || p.client)}</b>${parcelPolicyBadges(p)}<p>${esc(p.product || "Colis")}</p>${p.note ? `<p class="label-note">${esc(p.note)}</p>` : ""}</div><div class="label-barcode"><img src="${p.barcode}" alt="Code 128 ${esc(p.tracking)}"></div><footer><span>${date(p.created_at)}</span><span>QR & Code 128 · Référence de suivi</span></footer></article>`;
+  const stockLines=p.stock_lines||[];
+  const skuBlock=stockLines.length?`<div class="label-stock-lines"><b>SKU / QUANTITÉ</b>${stockLines.map(l=>`<span><strong>${esc(l.sku)}</strong> · ${esc(l.name)} × ${Number(l.quantity)}</span>`).join('')}</div>`:`<p>${esc(p.product || "Colis")}</p>`;
+  const returnNotice=p.stock_return_required?`<aside class="stock-return-ticket"><strong>RETOUR AU STOCK — PAS AU CLIENT</strong><span>Retour : faire revenir le colis au Hub Central dans une palette « Retour vers Hub Central ». Le scan de réception de la palette réintègre le stock automatiquement. Ne pas remettre au client.</span><small>${p.stock_order_id?'Préparation PREP-'+String(p.stock_order_id).padStart(5,'0'):''}</small></aside>`:'';
+  return `<article class="shipping-label"><header><img src="/static/wordmark.png" alt="ORIENTAL24"><span>LIVRAISON À DOMICILE</span></header><div class="label-destination"><div><span>DESTINATION</span><h2>${esc(p.city)}</h2><p>${esc(p.tracking)}</p></div><img src="${p.qr}" alt="QR de suivi ${esc(p.tracking)}"></div><div class="label-address"><span>DESTINATAIRE</span><h3>${esc(p.recipient)}</h3><strong>${esc(p.phone)}</strong><p>${esc(p.address)}</p></div><div class="label-cod"><span>MONTANT À COLLECTER</span><strong>${money(p.amount)} <small>MAD</small></strong></div><div class="label-sender"><span>EXPÉDITEUR</span><b>${esc(p.company || p.client)}</b>${parcelPolicyBadges(p)}${skuBlock}${p.note ? `<p class="label-note">${esc(p.note)}</p>` : ""}</div>${returnNotice}<div class="label-barcode"><img src="${p.barcode}" alt="Code 128 ${esc(p.tracking)}"></div><footer><span>${date(p.created_at)}</span><span>QR & Code 128 · Référence de suivi</span></footer></article>`;
 }
 async function previewLabels(ids) {
   if (!ids.length || ids.length > 50) {
@@ -407,6 +410,7 @@ function renderLabelPreview() {
   );
 }
 function labelIsLong(p) {
+  if (p.stock_return_required) return true;
   return (
     [
       "recipient",

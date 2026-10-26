@@ -78,7 +78,7 @@ async function openDriverScan(id,mode,anchor){
    if(ctx.scans.length>=200){driverScanSignal('err');show('error','Limite de 200 colis par lot atteinte. Confirmez ce lot avant d’en commencer un autre.');code.value='';return}
    ctx.busy=true;code.disabled=true;formNode.querySelector('#driver-scan-add').disabled=true;err.textContent='';err.style.display='none';
    try{
-    const result=await api('/drivers-workspace/'+id+'/scan-preview','POST',{tracking,mode});
+    const result=await api('/drivers-workspace/'+id+'/scan-preview','POST',{tracking,mode,hub_id:hub?.value?Number(hub.value):null});
     if(!ctx.current())return;
     const p=result.parcel;
     if(result.already||queued(p.id)){
