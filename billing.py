@@ -1,5 +1,7 @@
 """Unified read model and explicit payment actions, backed by the two existing ledgers."""
 import csv,io,json,hashlib,re
+from datetime import datetime,timedelta,timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal,ROUND_HALF_UP
 from flask import jsonify,request,Response
 from invoice_profile import profile
@@ -15,6 +17,13 @@ def driver_paid_sql(alias='p'):
 def cent(v):return int((Decimal(str(v))*100).quantize(Decimal('1'),rounding=ROUND_HALF_UP))
 def digest(x):return hashlib.sha256(json.dumps(x,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 def state_label(v):return {'Réglée':'Paid','Soldé':'Paid','À régler':'Not Paid','Partiellement réglée':'Partiel'}.get(v,v)
+BILLING_TZ=ZoneInfo('Africa/Casablanca')
+def billing_instant(value):
+    try:
+        dt=datetime.fromisoformat(str(value))
+        if dt.tzinfo is None:dt=dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(BILLING_TZ)
+    except (TypeError,ValueError,OverflowError):return None
 def safe(v):
     if isinstance(v,(int,Decimal)):return v
     v=str(v if v is not None else '')
@@ -98,7 +107,13 @@ def register_billing(app,s):
             bounds.append(v)
         start,end=bounds
         if start and end and start>end:raise Error('La date de début doit précéder la date de fin.')
-        rows=[r for r in rows if (not q or q in (r['reference']+' '+r['name']+' '+r['email']+' '+r.get('_tracking_search','')).casefold()) and (not party or str(r['party_id'])==party) and (not state or r['state']==state) and (archive=='all' or (archive=='paid')==(r['state']=='Paid')) and (not start or r['created_at']>=start) and (not end or r['created_at']<=end+':59')]
+        start_at=datetime.fromisoformat(start).replace(tzinfo=BILLING_TZ) if start else None
+        end_at=(datetime.fromisoformat(end).replace(tzinfo=BILLING_TZ)+timedelta(seconds=59,microseconds=999999)) if end else None
+        def in_emission_range(row):
+            if start_at is None and end_at is None:return True
+            created=billing_instant(row['created_at'])
+            return created is not None and (start_at is None or created>=start_at) and (end_at is None or created<=end_at)
+        rows=[r for r in rows if (not q or q in (r['reference']+' '+r['name']+' '+r['email']+' '+r.get('_tracking_search','')).casefold()) and (not party or str(r['party_id'])==party) and (not state or r['state']==state) and (archive=='all' or (archive=='paid')==(r['state']=='Paid')) and in_emission_range(r)]
         for row in rows:row.pop('_tracking_search',None)
         totals={k:sum(r[k] for r in rows if r['state']!='Annulé') for k in ('cod_cents','fees_cents','net_cents','incoming_cents','outgoing_cents')}
         return dict(kind=kind,rows=rows,parties=parties,totals=totals,count=len(rows))
