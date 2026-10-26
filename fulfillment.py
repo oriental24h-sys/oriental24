@@ -136,7 +136,9 @@ def register_fulfillment(app, services):
                 except (TypeError,ValueError):central_id=None
                 hub=c.execute('SELECT * FROM ops_hubs WHERE id=? AND active=1',(central_id,)).fetchone() if central_id else None
                 if not hub:raise Error('Configurez un Hub Central actif pour préparer une commande depuis le stock.',409)
-                if type(d.get('hub_id')) is not int or d['hub_id']!=central_id:raise Error('Le stock des commandes est conservé au Hub Central : sélectionnez ce Hub pour préparer le colis.',409)
+                try:hub_sel=number(d,'hub_id',1,1000000000,True)
+                except Exception:hub_sel=None
+                if hub_sel!=central_id:raise Error('Le stock des commandes est conservé au Hub Central : sélectionnez ce Hub pour préparer le colis.',409)
                 if d.get('checked') is not True:raise Error('Confirmez le contrôle physique des produits.')
                 sh=o['shipping'];city=c.execute('SELECT * FROM cities WHERE id=? AND delivery=1',(sh['city_id'],)).fetchone()
                 if not city:raise Error('Cette ville n’est plus ouverte. Annulez la réservation pour libérer le stock.',409)
