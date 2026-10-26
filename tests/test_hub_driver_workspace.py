@@ -837,10 +837,18 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         unique=uuid.uuid4().hex
         client_email='stock-client-'+unique+'@example.test';admin_email='stock-admin-'+unique+'@example.test'
         with self.m.conn() as c:
+            previous=c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
+            previous_central=previous['value'] if previous else None
+            c.execute("INSERT INTO settings(key,value) VALUES('central_hub_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(self.hub),))
             client_id=c.execute("INSERT INTO users(name,email,password,role,company,created_at) VALUES(?, ?, ?,'client', ?,?)",
                                 ('Stock Client',client_email,generate_password_hash('ClientPass!123'),'Stock Shop',self.m.now())).lastrowid
             c.execute("INSERT INTO users(name,email,password,role,created_at) VALUES(?,?,?,'admin',?)",
                       ('Stock Admin',admin_email,generate_password_hash('AdminPass!123'),self.m.now()))
+        def restore_central_setting():
+            with self.m.conn() as c:
+                if previous_central is None:c.execute("DELETE FROM settings WHERE key='central_hub_id'")
+                else:c.execute("UPDATE settings SET value=? WHERE key='central_hub_id'",(previous_central,))
+        self.addCleanup(restore_central_setting)
         client=self.m.app.test_client();admin=self.m.app.test_client()
         self.assertEqual(client.post('/api/login',json={'email':client_email,'password':'ClientPass!123'},environ_overrides={'REMOTE_ADDR':'10.61.0.1'}).status_code,200)
         self.assertEqual(admin.post('/api/login',json={'email':admin_email,'password':'AdminPass!123'},environ_overrides={'REMOTE_ADDR':'10.62.0.1'}).status_code,200)
@@ -855,7 +863,12 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         # A regular CMD stores a product description only and must not move stock.
         normal=client.post('/api/parcels',json={**base,'product':'Stock Item × 3'},headers=client_headers)
         self.assertEqual(normal.status_code,200,normal.json)
-        # A stock-linked CMD reserves units; physical quantity stays put until preparation.
+        normal_id=next(p['id'] for p in client.get('/api/bootstrap').json['parcels'] if p['tracking']==normal.json['tracking'])
+        normal_label=client.post('/api/labels',json={'ids':[normal_id]},headers=client_headers)
+        self.assertEqual(normal_label.status_code,200,normal_label.json)
+        self.assertFalse(normal_label.json[0]['stock_return_required'])
+        self.assertEqual(normal_label.json[0]['stock_lines'],[])
+        # Stock CMD reserves first; physical deduction happens at Central when Admin creates the parcel.
         prep=client.post('/api/fulfillment/orders',json={**base,'request_key':uuid.uuid4().hex},headers=client_headers)
         self.assertEqual(prep.status_code,200,prep.json)
         product=next(p for p in client.get('/api/products').json if p['id']==product_id)
@@ -866,12 +879,63 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertEqual((product['quantity'],product['reserved'],product['available']),(10,0,10))
         prep=client.post('/api/fulfillment/orders',json={**base,'request_key':uuid.uuid4().hex},headers=client_headers)
         self.assertEqual(prep.status_code,200,prep.json)
+        other_hub=admin.post(f"/api/fulfillment/orders/{prep.json['id']}/ship",json={'hub_id':self.foreign,'checked':True},headers=admin_headers)
+        self.assertEqual(other_hub.status_code,409,other_hub.json)
         shipped=admin.post(f"/api/fulfillment/orders/{prep.json['id']}/ship",json={'hub_id':self.hub,'checked':True},headers=admin_headers)
         self.assertEqual(shipped.status_code,200,shipped.json)
         product=next(p for p in client.get('/api/products').json if p['id']==product_id)
         self.assertEqual((product['quantity'],product['reserved'],product['available']),(7,0,7))
         detail=client.get(f"/api/fulfillment/orders/{prep.json['id']}").json
         self.assertEqual(detail['status'],'Préparé');self.assertTrue(detail['tracking'])
+        self.assertEqual(detail['dispatch_hub_id'],self.hub);self.assertTrue(detail['stock_deducted_at'])
+        stock_label=client.post('/api/labels',json={'ids':[detail['parcel_id']]},headers=client_headers)
+        self.assertEqual(stock_label.status_code,200,stock_label.json)
+        self.assertTrue(stock_label.json[0]['stock_return_required'])
+        self.assertEqual(stock_label.json[0]['stock_order_id'],prep.json['id'])
+        self.assertEqual(stock_label.json[0]['stock_lines'],[{'sku':'SKU-'+unique[:10],'name':'Stock Item','quantity':3}])
+        with self.m.conn() as c:
+            deduction=c.execute('SELECT delta,note FROM movements WHERE fulfillment_order_id=?',(prep.json['id'],)).fetchall()
+            self.assertEqual([r['delta'] for r in deduction],[-3])
+            self.assertIn('CMD stock créée',deduction[0]['note'])
+        # A physical driver scan is not the inventory trigger; the stock was already debited at preparation.
+        dispatch={'mode':'assign','scans':[{'parcel_id':detail['parcel_id'],'revision':0}],'hub_id':None,'request_key':uuid.uuid4().hex,'confirmed':True}
+        departed=admin.post(f"/api/drivers-workspace/{self.driver}/scan-batch",json=dispatch,headers=admin_headers)
+        self.assertEqual(departed.status_code,200,departed.json)
+        product=next(p for p in client.get('/api/products').json if p['id']==product_id)
+        self.assertEqual(product['quantity'],7)
+        # The actual return palette runs from a secondary Hub to Central; only its receive scan restores stock.
+        with self.m.conn() as c:
+            c.execute("UPDATE parcels SET status='Refusé',current_hub_id=?,ops_revision=ops_revision+1 WHERE id=?",(self.foreign,detail['parcel_id']))
+        palette=admin.post('/api/logistics/documents',json={
+            'kind':'transfer','palette_purpose':'return_to_central','source_hub_id':self.foreign,
+            'destination_hub_id':self.hub,'parcel_ids':[detail['parcel_id']],
+            'transport':'Test return','tracking_code':'RET-'+unique[:8],'lots':1,'note':''
+        },headers=admin_headers)
+        self.assertEqual(palette.status_code,200,palette.json)
+        did=palette.json['id']
+        scanned_out=admin.post(f'/api/logistics/documents/{did}/departure-scan',json={'tracking':detail['tracking']},headers=admin_headers)
+        self.assertEqual(scanned_out.status_code,200,scanned_out.json)
+        product=next(p for p in client.get('/api/products').json if p['id']==product_id)
+        self.assertEqual(product['quantity'],7)
+        manifest=admin.get(f'/api/reception-collection/transfer/{did}')
+        self.assertEqual(manifest.status_code,200,manifest.json)
+        line_ids=[line['id'] for line in manifest.json['lines'] if not line['received_at']]
+        receive_payload={'snapshot':manifest.json['snapshot'],'line_ids':line_ids,'confirmed':True,'request_key':uuid.uuid4().hex}
+        received=admin.post(f'/api/reception-collection/transfer/{did}',json=receive_payload,headers=admin_headers)
+        self.assertEqual(received.status_code,200,received.json)
+        self.assertEqual(received.json['stock_restocked'],[detail['tracking']])
+        product=next(p for p in client.get('/api/products').json if p['id']==product_id)
+        self.assertEqual((product['quantity'],product['reserved'],product['available']),(10,0,10))
+        self.assertTrue(client.get(f"/api/fulfillment/orders/{prep.json['id']}").json['stock_restocked_at'])
+        replay=admin.post(f'/api/reception-collection/transfer/{did}',json=receive_payload,headers=admin_headers)
+        self.assertEqual(replay.status_code,200,replay.json)
+        self.assertTrue(replay.json['replayed'])
+        with self.m.conn() as c:
+            restocks=c.execute('SELECT delta,note FROM movements WHERE fulfillment_order_id=? AND delta>0',(prep.json['id'],)).fetchall()
+            self.assertEqual(len(restocks),1)
+            self.assertEqual(restocks[0]['delta'],3)
+            self.assertIn('Retour palette reçu',restocks[0]['note'])
+        self.assertEqual(admin.post(f"/api/fulfillment/orders/{prep.json['id']}/restock",json={'checked':True,'reason':'manual'},headers=admin_headers).status_code,409)
 
     def test_manager_finance_overview_and_export_are_own_hub_only(self):
         self.parcel(None,'Livré',self.driver,self.hub)
