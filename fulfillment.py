@@ -39,8 +39,8 @@ def register_fulfillment(app, services):
     def restock_on_return_palette_receive(c,pid,actor,hub_id):
         order=c.execute('SELECT * FROM fulfillment_orders WHERE parcel_id=?',(pid,)).fetchone()
         if not order:return None
-        parcel=c.execute('SELECT status,current_hub_id FROM parcels WHERE id=?',(pid,)).fetchone()
-        if not parcel or parcel['status']!='Retourné' or parcel['current_hub_id']!=hub_id:
+        parcel=c.execute('SELECT return_state,current_hub_id FROM parcels WHERE id=?',(pid,)).fetchone()
+        if not parcel or parcel['return_state']!='recu_entrepot' or parcel['current_hub_id']!=hub_id:
             return {'restocked':False,'reason':'not_received_return','order_id':order['id']}
         if type(order['dispatch_hub_id']) is not int or hub_id!=order['dispatch_hub_id']:
             return {'restocked':False,'reason':'wrong_hub','order_id':order['id'],'hub_id':order['dispatch_hub_id']}

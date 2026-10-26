@@ -91,6 +91,11 @@ def register_logistics(app, services):
         line_columns={r['name'] for r in c.execute('PRAGMA table_info(ops_document_lines)')}
         if 'return_transit_status' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN return_transit_status TEXT')
         if 'return_status' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN return_status TEXT')
+        # Return state lives on the parcel (delivery status stays untouched). Ensure the
+        # column exists (test fixtures may create parcels without running the app migration)
+        # before backfilling returns that used to flip the status to 'Retourné'.
+        if 'return_state' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute("ALTER TABLE parcels ADD COLUMN return_state TEXT")
+        c.execute("UPDATE parcels SET return_state='recu_entrepot' WHERE status='Retourné' AND (return_state IS NULL OR return_state='') AND EXISTS(SELECT 1 FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id WHERE l.parcel_id=parcels.id AND d.kind='transfer' AND d.palette_purpose='return_to_central' AND l.received_at IS NOT NULL)")
         if 'departure_scanned_at' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_scanned_at TEXT')
         if 'departure_scanned_by' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_scanned_by INTEGER')
         if 'departure_reconciled_at' not in line_columns:c.execute('ALTER TABLE ops_document_lines ADD COLUMN departure_reconciled_at TEXT')
@@ -1026,9 +1031,10 @@ def register_logistics(app, services):
         cur=c.execute('UPDATE ops_document_lines SET departure_scanned_at=?,departure_scanned_by=? WHERE id=? AND departure_scanned_at IS NULL',(scanned_at,u['id'],line['id']))
         if cur.rowcount!=1:raise Error('Le scan vient d’être enregistré. Rechargez le manifeste.',409)
         if doc.get('palette_purpose')=='return_to_central':
-            c.execute("UPDATE ops_document_lines SET return_transit_status='Vers Hub Central' WHERE id=?",(line['id'],))
-            c.execute("UPDATE parcels SET status='Vers Hub Central',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
-            event(c,p['id'],'Vers Hub Central',doc['reference']+' · retour scanné au départ vers le Hub Central; réception attendue',u)
+            # The return keeps the command's delivery status untouched: only the
+            # return state is set so it stays identifiable without changing its status.
+            c.execute("UPDATE parcels SET return_state='envoye',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
+            event(c,p['id'],p['status'],doc['reference']+' · retour scanné au départ vers le Hub Central; statut inchangé, réception attendue',u)
         elif special_return:
             # Onward sorting from Central preserves the received return state.
             c.execute('UPDATE parcels SET current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?',(scanned_at,p['id']))
@@ -1042,7 +1048,7 @@ def register_logistics(app, services):
         c.execute('UPDATE ops_documents SET status=?,dispatched_at=?,completed_at=?,revision=revision+1 WHERE id=?',(next_status,scanned_at if complete else None,completed_at,did))
         audit(c,did,u,'Scan de sortie enregistré',{'tracking':tracking,'parcel_id':p['id'],'source_hub_id':doc['source_hub_id']})
         if complete:audit(c,did,u,'Départ physique confirmé',{'count':doc['count'],'source_hub_id':doc['source_hub_id'],'destination_hub_id':doc['destination_hub_id']})
-        return jsonify(ok=True,already_scanned=False,departure_scanned=departure_scanned,count=doc['count'],dispatched=complete,parcel_status='Vers Hub Central' if doc.get('palette_purpose')=='return_to_central' else p['status'] if special_return else 'Transit')
+        return jsonify(ok=True,already_scanned=False,departure_scanned=departure_scanned,count=doc['count'],dispatched=complete,parcel_status=p['status'] if special_return else 'Transit')
 
     @app.post(P+'/documents/<int:did>/reconcile-departure')
     @auth('admin')
@@ -1164,14 +1170,16 @@ def register_logistics(app, services):
         central_return=doc.get('palette_purpose')=='return_to_central'
         stock_movement=None
         if central_return:
-            c.execute("UPDATE parcels SET status='Retourné',next_attempt_at=NULL,reason_code=NULL WHERE id=?",(p['id'],))
+            # Central receipt: the delivery status stays untouched. Only the return
+            # state is set, and stock commands are restored to stock automatically.
+            c.execute("UPDATE parcels SET return_state='recu_entrepot',next_attempt_at=NULL,reason_code=NULL WHERE id=?",(p['id'],))
             stock_receive=services.get('stock_return_palette_receive')
             if stock_receive:stock_movement=stock_receive(c,p['id'],u,doc['destination_hub_id'])
             if stock_events is not None and stock_movement and stock_movement.get('restocked'):
                 stock_events.append(tracking)
         sync_central_receipts(c,parcel_id=p['id'])
-        event_status='Retourné' if central_return else p['status'] if doc['kind']=='return' or special_return else received_status
-        event_note=doc['reference']+(' · retour réceptionné physiquement au Hub Central · statut Retourné confirmé' if central_return else ' · réception physique déclarée'+(' · état de retour conservé' if special_return else ''))
+        event_status=p['status'] if central_return else p['status'] if doc['kind']=='return' or special_return else received_status
+        event_note=doc['reference']+(' · retour réceptionné physiquement au Hub Central · statut inchangé, retour marqué' if central_return else ' · réception physique déclarée'+(' · état de retour conservé' if special_return else ''))
         event(c,p['id'],event_status,event_note,u)
         audit(c,did,u,'Colis reçu',{'tracking':tracking,'parcel_id':p['id'],'palette_purpose':doc.get('palette_purpose','standard'),'financial_status_preserved':bool(special_return and not central_return),'previous_status':p['status'],'new_status':event_status,'stock_restocked':bool(stock_movement and stock_movement.get('restocked'))})
 

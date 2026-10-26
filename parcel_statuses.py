@@ -3,7 +3,7 @@ CENTRAL_RETURN_TRANSIT = 'Vers Hub Central'
 STATUSES = [CENTRAL_RETURN_TRANSIT,'Transit','Reporté','Programmé','Réceptionné','Reçu par le livreur','Livré','Refusé','Intéressé',
             'Créé','Confirmé','Ramassé','Au hub','En livraison','Retourné','Annulé']
 STATUS_HELP = {
- CENTRAL_RETURN_TRANSIT:'Retour scanné au départ vers le Hub Central. Retourné uniquement après réception physique au Hub destinataire par Admin ou son responsable.',
+ CENTRAL_RETURN_TRANSIT:'État de transit d’un retour (obsolète, conservé pour l’historique). Les retours ne modifient plus le statut de la commande ; leur état (envoyé / reçu en entrepôt) est suivi séparément.',
  'Transit':'Transport entre agences. Aucun encaissement ni livraison au destinataire.',
  'Reporté':'Livraison différée sans rendez-vous fixé. L’ancien rendez-vous est retiré.',
  'Programmé':'Livraison avec un motif et un rendez-vous futur, heure du Maroc.',

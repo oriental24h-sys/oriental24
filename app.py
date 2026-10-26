@@ -81,6 +81,13 @@ def init_db():
         if 'is_exchange' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN is_exchange INTEGER NOT NULL DEFAULT 0')
         client_types.migrate(c)
         if 'support_id' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN support_id INTEGER REFERENCES users(id)')
+        # Return tracking is a dimension separate from the delivery status: a return
+        # keeps the command's delivery status untouched and only sets this state.
+        if 'return_state' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute("ALTER TABLE parcels ADD COLUMN return_state TEXT")
+        # In-transit returns previously used the 'Vers Hub Central' status; carry them over
+        # to the return state. (The 'recu_entrepot' backfill runs in logistics.migrate, after
+        # the ops tables exist.)
+        c.execute("UPDATE parcels SET return_state='envoye' WHERE status='Vers Hub Central' AND (return_state IS NULL OR return_state='')")
         # Every new command (web, import, partner API, fulfillment) is routed by its city.
         # A city has one support owner; this snapshot stays on the parcel if mappings change.
         c.executescript('''
@@ -433,7 +440,7 @@ def update_parcel(pid):
         c.execute('BEGIN IMMEDIATE')
         p=parcel(c,pid,u,follow_drivers=u['role']=='agent')
         if isinstance(d,dict) and d.get('status')=='Vers Hub Central':
-            raise APIError('Cet état est réservé au scan de départ d’un retour vers le Hub Central.',409)
+            raise APIError('Cet état de transit est géré automatiquement (obsolète) ; il ne peut pas être fixé manuellement.',409)
         if u['role']=='agent':
             # Scoped to physical stock or a courier handoff recorded by this Hub.
             # Status-only permission: no generic parcel or assignment editing rights.
