@@ -224,8 +224,9 @@ class HubPaletteFlowTests(unittest.TestCase):
 
         with self.conn() as c:
             rows=c.execute('SELECT id,status,current_hub_id,origin_hub_id,amount,invoice_id FROM parcels WHERE id IN (1,2) ORDER BY id').fetchall()
+        # Departure to Central keeps the delivery status (only the return state is set).
         self.assertEqual([(r['status'],r['current_hub_id'],r['origin_hub_id'],r['amount'],r['invoice_id']) for r in rows],
-                         [('Vers Hub Central',None,10,125.5,700),('Vers Hub Central',None,None,86.25,701)])
+                         [('Refusé',None,10,125.5,700),('Retourné',None,None,86.25,701)])
 
         self.assertEqual(self.receive(doc_id,'TRK-RETURN-1',90,990).status_code,200)
         self.assertEqual(self.receive(doc_id,'TRK-RETURN-2',90,990).status_code,200)
@@ -261,8 +262,9 @@ class HubPaletteFlowTests(unittest.TestCase):
         self.assertEqual(self.receive(second_id,'TRK-RETURN-2',10,910).status_code,200)
         with self.conn() as c:
             rows=c.execute('SELECT id,status,current_hub_id,origin_hub_id,amount,invoice_id FROM parcels WHERE id IN (1,2) ORDER BY id').fetchall()
+        # The return-to-origin journey never changed the delivery status either.
         self.assertEqual([(r['status'],r['current_hub_id'],r['origin_hub_id'],r['amount'],r['invoice_id']) for r in rows],
-                         [('Retourné',10,10,125.5,700),('Retourné',10,10,86.25,701)])
+                         [('Refusé',10,10,125.5,700),('Retourné',10,10,86.25,701)])
 
     def test_manager_access_route_is_hub_scoped_and_blocking_revokes_access(self):
         blocked=self.client.post('/api/logistics/hub/drivers/101/access',json={
@@ -309,7 +311,8 @@ class HubPaletteFlowTests(unittest.TestCase):
         self.assertEqual(self.parcel_state(1)['status'],'Refusé')
         r=self.scan_departure(did,'TRK-RETURN-1',10,910)
         self.assertEqual(r.status_code,200,r.get_json())
-        self.assertEqual(self.parcel_state(1)['status'],'Vers Hub Central')
+        self.assertEqual(self.parcel_state(1)['status'],'Refusé')
+        self.assertEqual(self.parcel_state(1)['return_state'],'envoye')
         self.assertIsNone(self.parcel_state(1)['current_hub_id'])
         self.assertEqual(self.parcel_state(2)['current_hub_id'],10)
         self.assertEqual(self.parcel_state(2)['status'],'Retourné')
@@ -317,14 +320,15 @@ class HubPaletteFlowTests(unittest.TestCase):
         self.assertEqual(self.receive(did,'TRK-RETURN-1',20,920).status_code,404)
         self.assertEqual(self.receive(did,'TRK-RETURN-1',10,910).status_code,404)
         self.assertEqual(self.receive(did,'TRK-RETURN-2',90,990).status_code,404)
-        self.assertEqual(self.parcel_state(1)['status'],'Vers Hub Central')
+        self.assertEqual(self.parcel_state(1)['status'],'Refusé')
         r=self.receive(did,'TRK-RETURN-1',90,990)
         self.assertEqual(r.status_code,200,r.get_json())
-        self.assertEqual((self.parcel_state(1)['status'],self.parcel_state(1)['current_hub_id']),('Retourné',90))
+        self.assertEqual((self.parcel_state(1)['status'],self.parcel_state(1)['current_hub_id'],self.parcel_state(1)['return_state']),('Refusé',90,'recu_entrepot'))
         # The unscanned parcel stays at source, even after a partial Central receipt.
         self.assertEqual(self.parcel_state(2)['current_hub_id'],10)
         self.assertEqual(self.scan_departure(did,'TRK-RETURN-2',10,910).status_code,200)
-        self.assertEqual(self.parcel_state(2)['status'],'Vers Hub Central')
+        self.assertEqual(self.parcel_state(2)['status'],'Retourné')
+        self.assertEqual(self.parcel_state(2)['return_state'],'envoye')
         self.assertEqual(self.receive(did,'TRK-RETURN-2',90,990).status_code,200)
         with self.conn() as c:self.assertEqual(c.execute('SELECT status FROM ops_documents WHERE id=?',(did,)).fetchone()[0],'Reçu')
 
@@ -336,7 +340,7 @@ class HubPaletteFlowTests(unittest.TestCase):
         r=self.scan_departure(did,'TRK-RETURN-1',10,910)
         self.assertTrue(r.get_json()['already_scanned']);self.assertEqual(self.parcel_state(1)['ops_revision'],revision)
         r=self.client.post(f'/api/logistics/documents/{did}/receive',json={'tracking':'TRK-RETURN-1'},headers=self.headers('admin'))
-        self.assertEqual(r.status_code,200,r.get_json());self.assertEqual(self.parcel_state(1)['status'],'Retourné')
+        self.assertEqual(r.status_code,200,r.get_json());self.assertEqual((self.parcel_state(1)['status'],self.parcel_state(1)['return_state']),('Refusé','recu_entrepot'))
         revision=self.parcel_state(1)['ops_revision']
         r=self.receive(did,'TRK-RETURN-1',90,990);self.assertTrue(r.get_json()['already_received'])
         self.assertEqual(self.parcel_state(1)['ops_revision'],revision)
@@ -345,20 +349,26 @@ class HubPaletteFlowTests(unittest.TestCase):
     def test_new_transit_marker_rejects_status_tampering(self):
         r=self.create_palette('agent',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
         self.assertEqual(self.scan_departure(did,'TRK-RETURN-1',10,910).status_code,200)
-        with self.conn() as c:c.execute("UPDATE parcels SET status='Refusé' WHERE id=1")
+        # The delivery status is the source of truth for a return; if it is tampered to a
+        # contradictory state, the Central receipt must be rejected.
+        with self.conn() as c:c.execute("UPDATE parcels SET status='Livré' WHERE id=1")
         self.assertEqual(self.receive(did,'TRK-RETURN-1',90,990).status_code,404)
         r=self.client.post(f'/api/logistics/documents/{did}/receive',json={'tracking':'TRK-RETURN-1'},headers=self.headers('admin'))
         self.assertEqual(r.status_code,409)
 
     def test_legacy_inflight_return_can_still_be_received(self):
         r=self.create_palette('agent',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
-        # Simulate an already dispatched pre-update manifest (no transit marker).
+        # Simulate a return dispatched by the pre-update departure scan, which stamped the
+        # legacy 'Vers Hub Central' transit marker on both the line and the parcel.
         with self.conn() as c:
             c.execute("UPDATE ops_documents SET status='En transit',dispatched_at='2026-10-10T12:00:00' WHERE id=?",(did,))
-            c.execute("UPDATE ops_document_lines SET departure_scanned_at='2026-10-10T12:00:00' WHERE document_id=?",(did,))
-            c.execute('UPDATE parcels SET current_hub_id=NULL WHERE id=1')
+            c.execute("UPDATE ops_document_lines SET departure_scanned_at='2026-10-10T12:00:00',return_transit_status='Vers Hub Central' WHERE document_id=?",(did,))
+            c.execute("UPDATE parcels SET current_hub_id=NULL,status='Vers Hub Central' WHERE id=1")
         self.assertEqual(self.receive(did,'TRK-RETURN-1',90,990).status_code,200)
-        self.assertEqual(self.parcel_state(1)['status'],'Retourné')
+        p=self.parcel_state(1)
+        self.assertEqual(p['status'],'Vers Hub Central')  # legacy transit marker preserved
+        self.assertEqual(p['return_state'],'recu_entrepot')
+        self.assertEqual(p['current_hub_id'],90)
 
     def test_seller_collected_list_tracks_real_transfer_until_each_central_receipt(self):
         from ramassage_bon import register_ramassage_bon

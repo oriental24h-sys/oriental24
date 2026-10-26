@@ -127,7 +127,8 @@ class DispatchCollectionTests(unittest.TestCase):
     def test_special_return_to_central_preserves_financial_fields(self):
         did=self.r.transfer(purpose='return_to_central');before=self.t.parcel_state(3)
         r=self.commit('transfer',did,self.payload(self.manifest('transfer',did)),self.admin);self.assertEqual(r.status_code,200,r.json)
-        after=self.t.parcel_state(3);self.assertEqual(after['status'],'Vers Hub Central')
+        # The return departure keeps the delivery status and only sets the return state.
+        after=self.t.parcel_state(3);self.assertEqual(after['status'],'Refusé');self.assertEqual(after['return_state'],'envoye')
         self.assertEqual(after['amount'],before['amount']);self.assertEqual(after['invoice_id'],before['invoice_id'])
 
     def test_duplicate_ids_confirmation_and_stale_parcel(self):

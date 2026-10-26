@@ -146,9 +146,14 @@ class ReceptionCollectionTests(unittest.TestCase):
 
     def test_interhub_returns_keep_special_status_rules(self):
         did=self.transfer(purpose='return_to_central');self.dispatch(did)
-        self.assertEqual(self.t.parcel_state(3)['status'],'Vers Hub Central')
+        # Departure to Central keeps the delivery status and sets the return state.
+        self.assertEqual(self.t.parcel_state(3)['status'],'Refusé')
+        self.assertEqual(self.t.parcel_state(3)['return_state'],'envoye')
         r=self.commit('transfer',did,self.body(self.manifest('transfer',did,self.central)),self.central)
-        self.assertEqual(r.status_code,200,r.json);self.assertEqual(self.t.parcel_state(3)['status'],'Retourné')
+        self.assertEqual(r.status_code,200,r.json)
+        # Central receipt keeps the delivery status and marks the return received.
+        self.assertEqual(self.t.parcel_state(3)['status'],'Refusé')
+        self.assertEqual(self.t.parcel_state(3)['return_state'],'recu_entrepot')
 
     def test_fusion_commits_all_child_palettes(self):
         a=self.palette('partner',(3,));b=self.palette('partner',(4,))
