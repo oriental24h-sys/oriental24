@@ -471,7 +471,7 @@ const menu = [
     "GESTION",
     [
       ["invoices", "wallet", "Facturation", ["admin", "client", "livreur"]],
-      ["driver-finance", "wallet", "Caisse livreurs", ["admin", "livreur"]],
+      ["driver-finance", "wallet", "Caisse & commissions livreurs", ["agent", "livreur"]],
       ["drivers", "users", "Livreurs", ["admin"]],
       ["hub-drivers", "users", "Livreurs de mon Hub", ["agent"]],
       ["clients", "user", "Clients", ["admin"]],
@@ -577,7 +577,7 @@ function shell() {
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => !(u.role==='agent'&&x[0]==='hub-driver-statements') && !(u.role==='admin'&&x[0]==='hub-invoices') && !adminHubSectionRemoved(x[0], u) && !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['hub-manager-analytics','parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => !(u.role==='agent'&&x[0]==='hub-driver-statements') && !(u.role==='admin'&&x[0]==='hub-invoices') && !adminHubSectionRemoved(x[0], u) && !driverFinanceSectionRemoved(x[0], u) && !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (u.role!=='agent'||['hub-manager-analytics','parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','driver-finance','alerts','tickets','notifications','announcements','profile','security'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
           ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${workspacePageTitle(key,t)}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
@@ -589,10 +589,14 @@ function shell() {
 function adminHubSectionRemoved(section, u = S?.user) {
   return ['admin','agent','hub_manager'].includes(u?.role) && ['security','support-team'].includes(section);
 }
+function driverFinanceSectionRemoved(section, u = S?.user) {
+  return u?.role === 'admin' && section === 'driver-finance';
+}
 async function navigate(v) {
   if (!S) return;
   if(S.user.role==='admin'&&v==='hub-invoices'){billingPane='hubs';v='invoices'}
   if (adminHubSectionRemoved(v)) v = ['agent','hub_manager'].includes(S.user.role) ? 'partner-palettes' : 'dashboard';
+  if (driverFinanceSectionRemoved(v)) v = 'dashboard';
   if (clientSectionRemoved(v)) v = 'dashboard';
   // Responsable de hub : navigation limitée aux tâches et vues explicitement sûres.
   if (S.user.role==='agent'&&!['hub-manager-analytics','parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security'].includes(v)) v='partner-palettes';
@@ -616,6 +620,7 @@ function footer() {
 }
 async function renderView(background = false) {
   if (adminHubSectionRemoved(view)) return navigate(view);
+  if (driverFinanceSectionRemoved(view)) return navigate('dashboard');
   if (clientSectionRemoved(view)) return navigate('dashboard');
   const pageTitle = workspacePageTitle(view, titles[view] || "Mon espace");
   document.title = `${window.o24Translate ? window.o24Translate(pageTitle) : pageTitle} — ORIENTAL24`;
@@ -1102,6 +1107,17 @@ function bindClientTracking(){
  $('#f-client_id')?.addEventListener('change',update);update();
 }
 function newParcel() {
+  if (typeof opsOffline !== "undefined" && opsOffline) return newParcelRegular();
+  modal(
+    "Mode de création de la CMD",
+    `<div class="full form-hint">Choisissez si la commande utilise des produits suivis dans le stock, ou si vous créez un colis classique sans déduction de stock.</div><div class="form-actions" style="justify-content:stretch;gap:12px"><button type="button" class="btn primary" onclick="newParcelFromStock()">${icon("box")}Commande depuis le stock</button><button type="button" class="btn" onclick="newParcelRegular()">${icon("plus")}CMD classique</button></div><div class="full form-hint">Depuis le stock : les unités sont réservées immédiatement, puis déduites du stock physique après contrôle et préparation par l’administration. Une CMD classique ne touche pas au stock.</div>`,
+  );
+}
+function newParcelFromStock() {
+  closeModal();
+  newFulfillment();
+}
+function newParcelRegular() {
   const cities = S.cities.filter((c) => c.delivery);
   modal(
     "Nouveau colis",
@@ -1266,7 +1282,7 @@ function settingsView() {
     heading(
       "Paramètres",
       "Votre réseau évolue. Vos réglages aussi.",
-      `<button class="btn" onclick="editDriverInvoiceProfile()">${icon("file")}Coordonnées des factures</button><button class="btn" onclick="openDriverFinance('rates')">${icon("wallet")}Commissions livreurs</button>` +
+      `<button class="btn" onclick="editDriverInvoiceProfile()">${icon("file")}Coordonnées des factures</button>` +
         (settingsTab === "cities"
           ? `<button class="btn primary" onclick="cityForm()">${icon("plus")}Ajouter une ville</button>`
           : ""),
