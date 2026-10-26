@@ -37,7 +37,7 @@ def register_reception_collection(app, s):
                 private=u['role']=='agent' and (not l.get('received_at') or l.get('current_hub_id')!=u.get('agent_hub_id'))
                 rows.append(dict(id=l['id'],tracking=l['tracking'],received_at=l.get('received_at'),excluded=excluded,
                     blocked=blocked,recipient='' if private else l.get('recipient',''),city='' if private else l.get('city','')))
-            return jsonify(id=did,reference=doc['reference'],status=doc['status'],snapshot=snapshot,lines=rows,
+            return jsonify(id=did,reference=doc['reference'],status=doc['status'],palette_purpose=doc.get('palette_purpose'),snapshot=snapshot,lines=rows,
                 route=doc.get('route') or ' → '.join(filter(None,[doc.get('source_name') or doc.get('client_name'),doc.get('destination_name')])),
                 available=doc.get('status') in ('En transit','Partiellement reçu','Départ partiel','Partiellement remis'),
                 confirmation='Je confirme la remise physique au vendeur de tous les colis scannés.' if kind=='return' else 'Je confirme la réception physique de tous les colis scannés.')
@@ -64,7 +64,7 @@ def register_reception_collection(app, s):
             if not set(ids).issubset({l['id'] for l in pending}):raise Error('Un colis est extérieur au bon, déjà réceptionné ou exclu.',409)
             selected=[l for l in pending if l['id'] in set(ids)]
             if doc.get('departure_scan_required') and any(not l.get('departure_scanned_at') for l in selected):raise Error('Des colis n’ont pas encore été scannés au départ. Actualisez après leur départ.',409)
-            adapter['apply'](c,doc,selected,u)
-            result=dict(ok=True,id=did,received=len(selected))
+            extra=adapter['apply'](c,doc,selected,u) or {}
+            result=dict(ok=True,id=did,received=len(selected),**extra)
             c.execute('INSERT INTO reception_collection_keys VALUES(?,?,?,?)',(u['id'],key,fp,json.dumps(result)))
             return jsonify(result)

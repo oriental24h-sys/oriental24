@@ -416,7 +416,10 @@ def register_operations(app, services):
             for pid in dict.fromkeys(ids):
                 p = parcel(c, pid, u)
                 extras = c.execute('SELECT ci.name city,u.name client,u.company company FROM cities ci JOIN users u ON u.id=? WHERE ci.id=?', (p['client_id'], p['city_id'])).fetchone()
-                result.append({**p, **dict(extras), **codes_for(p['tracking'])})
+                stock_lines=[]
+                if p.get('stock_order_id'):
+                    stock_lines=[dict(r) for r in c.execute('SELECT sku,name,quantity FROM fulfillment_lines WHERE order_id=? ORDER BY id',(p['stock_order_id'],))]
+                result.append({**p, **dict(extras), 'stock_lines':stock_lines, **codes_for(p['tracking'])})
         return jsonify(result)
 
     @app.post('/api/scan')

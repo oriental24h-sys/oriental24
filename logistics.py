@@ -1106,7 +1106,7 @@ def register_logistics(app, services):
             return jsonify(ok=True,reconciled=len(selected),count=after['count'],
                 departure_scanned=after['departure_scanned'],status=next_status,revision=doc['revision']+1)
 
-    def collection_receive_line(c,doc,tracking,u):
+    def collection_receive_line(c,doc,tracking,u,stock_events=None):
         did=doc['id']
         tracking=text({'tracking':tracking},'tracking',maxlen=80).upper()
         line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking),None)
@@ -1162,15 +1162,20 @@ def register_logistics(app, services):
             c.execute("UPDATE parcels SET status=?,next_attempt_at=NULL,reason_code=NULL,updated_at=? WHERE id=?",(received_status,received_at,p['id']))
         if complete:c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,))
         central_return=doc.get('palette_purpose')=='return_to_central'
+        stock_movement=None
         if central_return:
             c.execute("UPDATE parcels SET status='Retourné',next_attempt_at=NULL,reason_code=NULL WHERE id=?",(p['id'],))
+            stock_receive=services.get('stock_return_palette_receive')
+            if stock_receive:stock_movement=stock_receive(c,p['id'],u,doc['destination_hub_id'])
+            if stock_events is not None and stock_movement and stock_movement.get('restocked'):
+                stock_events.append(tracking)
         sync_central_receipts(c,parcel_id=p['id'])
         event_status='Retourné' if central_return else p['status'] if doc['kind']=='return' or special_return else received_status
         event_note=doc['reference']+(' · retour réceptionné physiquement au Hub Central · statut Retourné confirmé' if central_return else ' · réception physique déclarée'+(' · état de retour conservé' if special_return else ''))
         event(c,p['id'],event_status,event_note,u)
-        audit(c,did,u,'Colis reçu',{'tracking':tracking,'parcel_id':p['id'],'palette_purpose':doc.get('palette_purpose','standard'),'financial_status_preserved':bool(special_return and not central_return),'previous_status':p['status'],'new_status':event_status})
+        audit(c,did,u,'Colis reçu',{'tracking':tracking,'parcel_id':p['id'],'palette_purpose':doc.get('palette_purpose','standard'),'financial_status_preserved':bool(special_return and not central_return),'previous_status':p['status'],'new_status':event_status,'stock_restocked':bool(stock_movement and stock_movement.get('restocked'))})
 
-        return jsonify(ok=True,already_received=False,parcel_status=event_status)
+        return jsonify(ok=True,already_received=False,parcel_status=event_status,stock_restocked=bool(stock_movement and stock_movement.get('restocked')))
 
     @app.post(P+'/documents/<int:did>/<action>')
     @auth('admin','agent')
@@ -1601,9 +1606,11 @@ def register_logistics(app, services):
         return doc,doc['lines']
 
     def collection_apply(c,doc,ls,u):
+        stock_restocked=[]
         for line in ls:
             fresh=document_data(c,allowed_doc(c,doc['id'],u))
-            collection_receive_line(c,fresh,line['tracking'],u)
+            collection_receive_line(c,fresh,line['tracking'],u,stock_restocked)
+        return {'stock_restocked':stock_restocked}
 
     services.setdefault('reception_adapters',{})['transfer']={'load':collection_load,'apply':collection_apply}
 

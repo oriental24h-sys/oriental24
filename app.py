@@ -261,10 +261,12 @@ def parcel(c,pid,u,follow_drivers=False):
     cond,args=scope(u,c=c,follow_drivers=follow_drivers)
     p=c.execute(f'''SELECT p.*,(SELECT name FROM ops_hubs WHERE id=p.current_hub_id) current_hub_name,su.name city_support_name,su.phone city_support_phone,su.active city_support_active,
         i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,
+        fo.id stock_order_id,fo.status stock_order_status,EXISTS(SELECT 1 FROM fulfillment_orders fo2 WHERE fo2.parcel_id=p.id) stock_return_required,
         EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,
         EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,
         EXISTS(SELECT 1 FROM driver_statement_lines dl WHERE dl.parcel_id=p.id AND dl.active=1) financial_locked
         FROM parcels p LEFT JOIN users su ON su.id=p.support_id LEFT JOIN invoices i ON i.id=p.invoice_id
+        LEFT JOIN fulfillment_orders fo ON fo.parcel_id=p.id
         WHERE p.id=? AND {cond}''',[pid]+args).fetchone()
     if not p: raise APIError('Colis introuvable.',404)
     return hub_status_capability(company_order_flags(c,annotate_parcel_transit(c,[dict(p)]),u)[0],u)
@@ -278,6 +280,7 @@ def list_parcels(c,u):
     COALESCE(sc.name,su.name) city_support_name,COALESCE(sc.phone,su.phone) city_support_phone,
     COALESCE(sc.active,su.active) city_support_active,
     i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,
+    fo.id stock_order_id,fo.status stock_order_status,EXISTS(SELECT 1 FROM fulfillment_orders fo2 WHERE fo2.parcel_id=p.id) stock_return_required,
     EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,
     EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,
     EXISTS(SELECT 1 FROM driver_statement_lines dl WHERE dl.parcel_id=p.id AND dl.active=1) financial_locked,
@@ -296,7 +299,7 @@ def list_parcels(c,u):
     FROM parcels p JOIN cities ci ON ci.id=p.city_id JOIN users cl ON cl.id=p.client_id
     LEFT JOIN users dr ON dr.id=p.driver_id LEFT JOIN users su ON su.id=p.support_id
     LEFT JOIN parcel_support ps ON ps.parcel_id=p.id LEFT JOIN support_contacts sc ON sc.id=ps.contact_id
-    LEFT JOIN invoices i ON i.id=p.invoice_id
+    LEFT JOIN invoices i ON i.id=p.invoice_id LEFT JOIN fulfillment_orders fo ON fo.parcel_id=p.id
     WHERE {cond} ORDER BY COALESCE(julianday(p.status_updated_at),julianday(p.created_at),0) DESC,p.id DESC''',args)]
     return [hub_status_capability(p,u) for p in company_order_flags(c,annotate_parcel_transit(c,rows),u)]
 
@@ -374,6 +377,9 @@ def bootstrap():
             settings={r['key']:r['value'] for r in c.execute('SELECT * FROM settings')}
         else:
             settings={r['key']:r['value'] for r in c.execute('SELECT key,value FROM settings WHERE key IN (%s)'%','.join('?'*len(safe_setting_keys)),safe_setting_keys)}
+            if u['role']=='agent':
+                central_setting=c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
+                if central_setting:settings['central_hub_id']=central_setting['value']
         if u['role']=='admin':
             hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')]
         elif u['role']=='agent' and u.get('agent_hub_id'):
