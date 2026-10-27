@@ -725,7 +725,7 @@ def save_support_cities(c,support_id,ids):
     for city_id in ids:c.execute('INSERT INTO support_cities(city_id,support_id,assigned_at) VALUES(?,?,?)',(city_id,support_id,now()))
 
 def validate_hub_manager_slot(c,hub_id,exclude_user_id=None):
-    sql="SELECT id,name FROM users WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager')"
+    sql="SELECT id,name FROM users WHERE agent_hub_id=? AND active=1 AND role='hub_manager'"
     args=[hub_id]
     if exclude_user_id is not None:
         sql+=' AND id!=?';args.append(exclude_user_id)
@@ -818,7 +818,7 @@ def edit_user(uid):
             if v['driver_archived'] and d.get('active'):raise APIError('Désarchivez le livreur depuis sa fiche.',409)
             c.execute('UPDATE users SET driver_blocked=?,driver_revision=driver_revision+1 WHERE id=?',(int(not bool(d.get('active'))),uid))
         hub_id=v['agent_hub_id']
-        if v['role'] in ('hub_manager','hub_manager'):
+        if v['role']=='hub_manager':
             hub_id=d.get('agent_hub_id',hub_id)
             hub_row=c.execute('SELECT active FROM ops_hubs WHERE id=?',(hub_id,)).fetchone() if type(hub_id) is int else None
             if not hub_row or (bool(d.get('active')) and not hub_row['active']):raise APIError('Choisissez un Hub actif pour ce responsable.')
