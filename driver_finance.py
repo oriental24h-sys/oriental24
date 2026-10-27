@@ -181,9 +181,17 @@ def register_driver_finance(app, services):
             from hub_access import driver_financial_hub_sql
             sql+=' AND '+driver_financial_hub_sql()+'=?'
             args.append(user()['agent_hub_id'])
-        # Keep the same parcel closing timestamp as Hub billing and daily reconciliation.
-        if period_from: sql += " AND substr(COALESCE(NULLIF(p.status_updated_at,''),p.updated_at),1,10)>=?"; args.append(period_from)
-        if period_to: sql += " AND substr(COALESCE(NULLIF(p.status_updated_at,''),p.updated_at),1,10)<=?"; args.append(period_to)
+        # Periods are Morocco business dates; stored timestamps follow the server-local naive format used by app.now().
+        tz = ZoneInfo('Africa/Casablanca')
+        if period_from:
+            local_start = datetime.combine(datetime.strptime(period_from, '%Y-%m-%d').date(), datetime.min.time(), tzinfo=tz).astimezone().replace(tzinfo=None).isoformat(timespec='seconds')
+            sql += " AND COALESCE(NULLIF(p.status_updated_at,''),p.updated_at)>=?"
+            args.append(local_start)
+        if period_to:
+            end_date = datetime.strptime(period_to, '%Y-%m-%d').date() + timedelta(days=1)
+            local_end = datetime.combine(end_date, datetime.min.time(), tzinfo=tz).astimezone().replace(tzinfo=None).isoformat(timespec='seconds')
+            sql += " AND COALESCE(NULLIF(p.status_updated_at,''),p.updated_at)<?"
+            args.append(local_end)
         rows = c.execute(sql+' ORDER BY p.id LIMIT 501', args).fetchall()
         if not rows: raise Error('Aucun colis clôturé non rapproché pour ce livreur et cette période.')
         if len(rows) > 500: raise Error('Plus de 500 colis : réduisez la période pour établir plusieurs relevés.')
