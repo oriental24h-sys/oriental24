@@ -185,6 +185,7 @@ def register_connected_ops(app, s):
     @app.get('/api/pick-sessions/<int:sid>')
     @auth('admin', 'hub_manager')
     def pick_session_get(sid):
+        u = user()
         with conn() as c:
             sess = c.execute('SELECT * FROM pick_sessions WHERE id=?', (sid,)).fetchone()
             if not sess: raise Error('Session introuvable.', 404)
