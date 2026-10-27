@@ -23,7 +23,7 @@
   function hhmm(d) { d = d ? new Date(d) : new Date(); if (isNaN(d)) d = new Date(); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
   function iso(ts) { var d = new Date(ts), z = pad; return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()) + 'T' + z(d.getHours()) + ':' + z(d.getMinutes()) + ':' + z(d.getSeconds()); }
   function me() { return (typeof S !== 'undefined' && S && S.user) ? S.user : (typeof localUser !== 'undefined' ? localUser : null); }
-  function canLog() { var u = me(); return !!u && ['admin', 'livreur', 'agent'].indexOf(u.role) !== -1; }
+  function canLog() { var u = me(); return !!u && ['admin', 'livreur', 'hub_manager'].indexOf(u.role) !== -1; }
   function toastMsg(t, bad) { if (typeof toast === 'function') { try { toast(t, !!bad); return; } catch (e) { } } (bad ? console.warn : console.log)(t); }
   function parcelOf(id) {
     try {
@@ -313,7 +313,7 @@
     if (typeof localDemo === 'undefined' || !localDemo || !localDemo.parcels) throw new Error('Démo indisponible.');
     var p = (localDemo.parcels.filter(function (x) { return x.id === id; })[0]) || null;
     if (!p) throw new Error('Colis introuvable.');
-    if (!u || ['admin', 'livreur', 'agent'].indexOf(u.role) === -1) throw new Error('Accès non autorisé.');
+    if (!u || ['admin', 'livreur', 'hub_manager'].indexOf(u.role) === -1) throw new Error('Accès non autorisé.');
     var kind = String(d.kind || '').toLowerCase();
     if (kind !== 'appel' && kind !== 'whatsapp') throw new Error('Type de contact invalide : « appel » ou « whatsapp » attendu.');
     var dur = (d.duration_s === null || d.duration_s === undefined || d.duration_s === '') ? null : Math.round(Number(d.duration_s));
