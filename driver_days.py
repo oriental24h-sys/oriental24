@@ -1,7 +1,7 @@
 """v1.5.3 « Fin de journée » (Khatm caisse nhar) : instantané journalier par livreur —
 livré du jour, COD, commissions (barème à la ville), attendu caisse, remise Admin, écart,
 clôture/réouverture tracées. Module branché dans app.py comme driver_finance."""
-import json
+import json, re
 from datetime import datetime, date as _date, time as _time, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
@@ -106,7 +106,7 @@ def register_driver_days(app, services):
     def valid_day(raw):
         d = (raw or '').strip() if isinstance(raw, str) else ''
         try:
-            if not __import__('re').fullmatch(r'\d{4}-\d{2}-\d{2}', d):
+            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', d):
                 raise ValueError()
             day = _date.fromisoformat(d)
         except (TypeError, ValueError):
