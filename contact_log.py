@@ -103,7 +103,7 @@ def register_contact_log(app, services):
         return phone
 
     @app.post('/api/parcels/<int:pid>/contact-log')
-    @auth('admin', 'livreur', 'agent')
+    @auth('admin', 'livreur', 'hub_manager')
     def contact_log_add(pid):
         d = request.get_json(silent=True) or {}
         u = user()
@@ -137,7 +137,7 @@ def register_contact_log(app, services):
                        row=row_json(row, pid))
 
     @app.patch('/api/parcels/<int:pid>/contact-log/<int:cid>')
-    @auth('admin', 'livreur', 'agent')
+    @auth('admin', 'livreur', 'hub_manager')
     def contact_log_edit(pid, cid):
         """Correction après coup (durée et/ou résultat) : la chronologie suit immédiatement."""
         d = request.get_json(silent=True) or {}
@@ -173,7 +173,7 @@ def register_contact_log(app, services):
                        duration_label=(fmt_dur(fresh['duration_s']) if fresh['duration_s'] is not None else ''))
 
     @app.delete('/api/parcels/<int:pid>/contact-log/<int:cid>')
-    @auth('admin', 'livreur', 'agent')
+    @auth('admin', 'livreur', 'hub_manager')
     def contact_log_delete(pid, cid):
         u = user()
         with conn() as c:
@@ -190,7 +190,7 @@ def register_contact_log(app, services):
         return jsonify(ok=True, deleted=cid)
 
     @app.get('/api/parcels/<int:pid>/contact-log')
-    @auth('admin', 'livreur', 'agent')
+    @auth('admin', 'livreur', 'hub_manager')
     def contact_log_list(pid):
         u = user()
         with conn() as c:
