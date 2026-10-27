@@ -144,7 +144,7 @@ def register_fulfillment(app, services):
                 if not city:raise Error('Cette ville n’est plus ouverte. Annulez la réservation pour libérer le stock.',409)
                 tracking=tracking_for(c,o['client_id'],sh.get('tracking'),Error,ignore_order=oid);t=now()
                 fee,ret=services['tariff_fees_for'](c,o['client_id'],dict(city)) if services.get('tariff_fees_for') else (city['fee'],city['return_fee'])
-                pid=c.execute("INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,status,product,note,created_at,updated_at,current_hub_id) VALUES(?,?,?,?,?,?,?,?,?,'Au hub',?,?,?,?,?)",(tracking,o['client_id'],sh['recipient'],sh['phone'],sh['address'],city['id'],sh['amount'],fee,ret,'; '.join(l['sku']+' × '+str(l['quantity']) for l in o['lines']),sh['note'],t,t,hub['id'])).lastrowid
+                pid=c.execute("INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,status,product,note,created_at,updated_at,current_hub_id) VALUES(?,?,?,?,?,?,?,?,?,'Ramassé',?,?,?,?,?)",(tracking,o['client_id'],sh['recipient'],sh['phone'],sh['address'],city['id'],sh['amount'],fee,ret,'; '.join(l['sku']+' × '+str(l['quantity']) for l in o['lines']),sh['note'],t,t,hub['id'])).lastrowid
                 for l in o['lines']:
                     p=c.execute('SELECT * FROM products WHERE id=? AND client_id=?',(l['product_id'],o['client_id'])).fetchone()
                     if not p or p['quantity']<reserved(c,p['id']):raise Error('Stock physique incohérent avec les réservations. Contrôle requis.',409)
@@ -153,7 +153,7 @@ def register_fulfillment(app, services):
                     c.execute('INSERT INTO movements(product_id,actor_id,delta,note,created_at,fulfillment_order_id) VALUES(?,?,?,?,?,?)',
                               (l['product_id'],u['id'],-l['quantity'],f"CMD stock créée · PREP-{oid:05d} · {l['sku']}",t,oid))
                 c.execute("UPDATE fulfillment_orders SET status='Préparé',parcel_id=?,dispatch_hub_id=?,stock_deducted_at=?,processed_at=?,processed_by=? WHERE id=?",(pid,hub['id'],t,t,u['id'],oid))
-                event(c,pid,'Au hub','Préparation physique validée · stock déduit · PREP-'+str(oid),u)
+                event(c,pid,'Ramassé','Préparation physique validée · stock déduit · PREP-'+str(oid),u)
             elif action=='restock':
                 raise Error('La remise en stock se fait automatiquement au scan de réception de la palette retour au Hub Central.',409)
             else:raise Error('Action inconnue.',404)
