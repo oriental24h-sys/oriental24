@@ -60,16 +60,30 @@ def register_driver_days(app, services):
         expected = max(0, cod - commission) if mode == 'net' else cod
         close = c.execute('SELECT * FROM driver_day_closes WHERE driver_id=? AND day=?', (did, day)).fetchone()
         dr = c.execute('SELECT name FROM users WHERE id=?', (did,)).fetchone()
+        closed = bool(close and close['status'] == 'Clôturé')
+        # Une journée clôturée doit afficher son instantané comptable, pas les colis modifiés après clôture.
+        if closed:
+            livres_count = close['livres']
+            cod = close['cod_cents']
+            commission = close['commission_cents']
+            expected = close['expected_cents']
+            mode = close['mode']
+            returned_count = close['retournes'] if 'retournes' in close.keys() else sum(1 for p in rows if p['status'] == 'Retourné')
+            refused_count = close['refuses'] if 'refuses' in close.keys() else sum(1 for p in rows if p['status'] == 'Refusé')
+        else:
+            livres_count = len(livres)
+            returned_count = sum(1 for p in rows if p['status'] == 'Retourné')
+            refused_count = sum(1 for p in rows if p['status'] == 'Refusé')
         return {
             'driver_id': did, 'driver': dr['name'] if dr else ('#' + str(did)), 'day': day,
-            'livres': len(livres), 'retournes': sum(1 for p in rows if p['status'] == 'Retourné'),
-            'refuses': sum(1 for p in rows if p['status'] == 'Refusé'),
+            'livres': livres_count, 'retournes': returned_count,
+            'refuses': refused_count,
             'cod_cents': cod, 'commission_cents': commission, 'expected_cents': expected,
             'mode': mode, 'barème': bool(terms),
             'close': dict(close) if close else None,
-            'closed': bool(close and close['status'] == 'Clôturé'),
-            'received_cents': close['received_cents'] if close and close['status'] == 'Clôturé' else None,
-            'variance_cents': (expected - close['received_cents']) if close and close['status'] == 'Clôturé' else None,
+            'closed': closed,
+            'received_cents': close['received_cents'] if closed else None,
+            'variance_cents': (close['expected_cents'] - close['received_cents']) if closed else None,
         }
 
     def valid_day(raw):
