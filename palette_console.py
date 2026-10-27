@@ -33,7 +33,7 @@ def register_palette_console(app,s):
         if not isinstance(v,str) or len(v.strip())>limit or (required and not v.strip()):raise Error('Champ invalide : '+k)
         return v.strip()
     def access(u):
-        if u['role'] not in ('admin','agent'):raise Error('Console réservée à Admin et aux agents de réception.',403)
+        if u['role'] not in ('admin','hub_manager'):raise Error('Console réservée à Admin et aux agents de réception.',403)
     def doc(c,did,ku,u):
         kk=KINDS[ku]
         tbl='partner_palette_meta' if ku=='partner' else 'return_palette_meta'
@@ -41,7 +41,7 @@ def register_palette_console(app,s):
         r=c.execute('SELECT d.*,'+cols+' FROM ops_documents d JOIN '+tbl+' m ON m.document_id=d.id WHERE d.id=? AND d.kind=?',(did,kk)).fetchone()
         if not r:raise Error('Palette introuvable.',404)
         r=dict(r)
-        if u['role']=='agent' and r['destination_hub_id']!=u['agent_hub_id']:raise Error('Palette hors de votre hub.',404)
+        if u['role']=='hub_manager' and r['destination_hub_id']!=u['agent_hub_id']:raise Error('Palette hors de votre hub.',404)
         return r
     def lines(c,did):
         return [dict(r) for r in c.execute('SELECT l.*,p.phone,p.status current_status,p.current_hub_id,p.address,p.product,p.amount FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=? ORDER BY l.id',(did,))]
@@ -75,7 +75,7 @@ def register_palette_console(app,s):
 
     # ------------------------------------------------------------------- liste
     @app.get('/api/palette-console')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_list():
         u=user();access(u)
         tab=text(request.args,'tab',20) or 'default'
@@ -97,7 +97,7 @@ def register_palette_console(app,s):
                 tbl='partner_palette_meta' if ku=='partner' else 'return_palette_meta'
                 cols=('m.partner_reference AS track_ref,m.transport,0 AS lots') if ku=='partner' else ('m.tracking_code AS track_ref,m.transport,m.lots')
                 where=['d.kind=?'];args=[KINDS[ku]]
-                if u['role']=='agent':where.append('d.destination_hub_id=?');args.append(u['agent_hub_id'])
+                if u['role']=='hub_manager':where.append('d.destination_hub_id=?');args.append(u['agent_hub_id'])
                 elif hub_id.isdigit() and 1<=int(hub_id)<=10**9:where.append('d.destination_hub_id=?');args.append(int(hub_id))
                 if dfrom:where.append('substr(d.created_at,1,10)>=?');args.append(dfrom)
                 if dto:where.append('substr(d.created_at,1,10)<=?');args.append(dto)
@@ -135,7 +135,7 @@ def register_palette_console(app,s):
 
     # ------------------------------------------------------------------ détail
     @app.get('/api/palette-console/<kind>/<int:did>')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_detail(kind,did):
         u=user();access(u)
         if kind not in KINDS:raise Error('Type de palette inconnu.',404)
@@ -165,7 +165,7 @@ def register_palette_console(app,s):
                 'remaining':len(ls)-recv-miss,'attachments':attachments,'activities':acts})
 
     @app.get('/api/palette-console/<kind>/<int:did>/colis-csv')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_colis_csv(kind,did):
         u=user();access(u)
         if kind not in KINDS:raise Error('Type de palette inconnu.',404)
@@ -180,7 +180,7 @@ def register_palette_console(app,s):
 
     # --------------------------------------------------- réception par lot (scan)
     @app.post('/api/palette-console/partner/<int:did>/receive-bulk')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_receive(did):
         u=user();access(u);d=body()
         if d.get('confirmed') is not True:raise Error('Confirmez avoir physiquement réceptionné les colis cochés.')
@@ -215,7 +215,7 @@ def register_palette_console(app,s):
 
     # ------------------------------------------- ligne « poubelle » : non réceptionné
     @app.post('/api/palette-console/partner/<int:did>/miss')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_miss(did):
         u=user();access(u);d=body()
         code=tracking_text(d.get('tracking'),Error)
@@ -243,7 +243,7 @@ def register_palette_console(app,s):
 
     # -------------------------------------- réception tardive d’un colis retrouvé
     @app.post('/api/palette-console/partner/<int:did>/receive-recovered')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_receive_recovered(did):
         u=user();access(u);d=body()
         if d.get('confirmed') is not True:raise Error('Confirmez avoir physiquement retrouvé et réceptionné ce colis au hub.')
@@ -266,7 +266,7 @@ def register_palette_console(app,s):
 
     # ------------------------------------------------------------------ clôture
     @app.post('/api/palette-console/<kind>/<int:did>/close')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_close(kind,did):
         u=user();access(u)
         if kind not in KINDS:raise Error('Type de palette inconnu.',404)
@@ -293,7 +293,7 @@ def register_palette_console(app,s):
 
     # ------------------------------------------------- envoi de retour (une étape)
     @app.post('/api/palette-console/return-send')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_return_send():
         u=user();access(u);d=body()
         if d.get('confirmed') is not True:raise Error('Confirmez l’envoi physique des colis au vendeur.')
@@ -312,7 +312,7 @@ def register_palette_console(app,s):
             if not cl:raise Error('Vendeur actif requis.')
             h=c.execute('SELECT * FROM ops_hubs WHERE id=? AND active=1',(hid,)).fetchone()
             if not h:raise Error('Choisissez un hub de départ actif.',409)
-            if u['role']=='agent' and u['agent_hub_id']!=h['id']:raise Error('Vous ne pouvez expédier des retours que depuis votre hub.',403)
+            if u['role']=='hub_manager' and u['agent_hub_id']!=h['id']:raise Error('Vous ne pouvez expédier des retours que depuis votre hub.',403)
             cl=dict(cl)
             seen=set();ps=[]
             for t in trks:
@@ -338,7 +338,7 @@ def register_palette_console(app,s):
 
     # --------------------------------------------------------- pièces jointes 📎
     @app.post('/api/palette-console/<kind>/<int:did>/attach')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_attach(kind,did):
         u=user();access(u)
         if kind not in KINDS:raise Error('Type de palette inconnu.',404)
@@ -356,16 +356,16 @@ def register_palette_console(app,s):
             return jsonify(ok=True,id=aid)
 
     @app.get('/api/palette-console/attach/<int:aid>')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_attach_get(aid):
         u=user();access(u)
         with conn() as c:
             r=c.execute('SELECT a.*,d.destination_hub_id FROM palette_attachments a JOIN ops_documents d ON d.id=a.document_id WHERE a.id=?',(aid,)).fetchone()
-            if not r or(u['role']=='agent' and r['destination_hub_id']!=u['agent_hub_id']):raise Error('Pièce jointe introuvable.',404)
+            if not r or(u['role']=='hub_manager' and r['destination_hub_id']!=u['agent_hub_id']):raise Error('Pièce jointe introuvable.',404)
             return Response(r['content'],mimetype=r['mime'],headers={'Cache-Control':'private, max-age=3600'})
 
     @app.get('/api/palette-console/<kind>/<int:did>/summary-csv')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def console_summary_csv(kind,did):
         u=user();access(u)
         if kind not in KINDS:raise Error('Type de palette inconnu.',404)
