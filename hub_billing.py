@@ -239,7 +239,7 @@ def register_hub_billing(app, s):
         ensure_schema(c)
 
     def manager(c, u):
-        if u['role'] == 'agent':
+        if u['role'] == 'hub_manager':
             h = c.execute('SELECT id,name FROM ops_hubs WHERE id=? AND active=1', (u.get('agent_hub_id'),)).fetchone()
             if not h:
                 raise Error('Hub actif requis.',403)
@@ -256,7 +256,7 @@ def register_hub_billing(app, s):
         return dict(invoice=statement_summary(row,receipt),receipt={k:receipt[k] for k in ('id','statement_id','amount_cents','method','reference','paid_on','created_by','actor_name','created_at')} if receipt else None, lines=[dict(r) for r in c.execute('SELECT * FROM hub_billing_lines WHERE statement_id=? ORDER BY id',(sid,))])
 
     @app.get('/api/hub-billing')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def hub_billing_list():
         u = user()
         with conn() as c:
@@ -275,7 +275,7 @@ def register_hub_billing(app, s):
             return jsonify(result)
 
     @app.get('/api/hub-billing/<int:sid>')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def hub_billing_detail(sid):
         with conn() as c:
             return jsonify(detail(c,sid,user()))
@@ -319,7 +319,7 @@ def register_hub_billing(app, s):
             return jsonify(ok=True,already_recorded=False,invoice=detail(c,sid,u)['invoice'])
 
     @app.get('/api/hub-billing/<int:sid>/csv')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def hub_billing_csv(sid):
         with conn() as c:
             d = detail(c,sid,user())
@@ -333,7 +333,7 @@ def register_hub_billing(app, s):
         return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename="{d["invoice"]["reference"]}.csv"'})
 
     @app.get('/api/hub-billing/<int:sid>/pdf')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def hub_billing_pdf(sid):
         from billing_pdf import invoice_pdf
         with conn() as c:
