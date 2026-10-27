@@ -119,7 +119,7 @@ function parcelTreatmentDueDay(p) {
   return legacy ? validDay(`${legacy[3]}-${legacy[2].padStart(2, "0")}-${legacy[1].padStart(2, "0")}`) : "";
 }
 function isParcelTreatedToday(p) {
-  if (["admin", "agent", "hub_manager"].includes(S?.user?.role)) {
+  if (["admin", "hub_manager", "hub_manager"].includes(S?.user?.role)) {
     // Physical reception is pending work, regardless of when it was recorded.
     if (p?.status === "Réceptionné") return false;
     const due = parcelTreatmentDueDay(p);
@@ -413,7 +413,7 @@ function renderLogin(register = false) {
   history.replaceState(null, "", "/login");
   document.title = "Connexion — ORIENTAL24";
   $("#root").innerHTML =
-    `<div class="login-page"><aside class="login-brand-panel"><a href="/" aria-label="ORIENTAL24"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div><div class="eyebrow" style="color:#e89a61">La proximité fait la différence</div><h1>Votre activité avance.<br><span>Nous livrons la suite.</span></h1><p>Un espace unique pour vos colis, vos équipes et vos encaissements. Bienvenue chez vous.</p><div class="login-illustration"><img src="/static/van.png" alt="Livraison ORIENTAL24"></div></div><small>ORIENTAL24 · Livraison à domicile · ${new Date().getFullYear()}</small></aside><main class="login-form-side"><div class="login-form"><a href="/" class="back-link">${icon("back")}Retour au site</a><div class="eyebrow">Votre espace ORIENTAL24</div><h2>${register ? "Bienvenue dans le réseau." : "Heureux de vous retrouver."}</h2><p>${register ? "Créez votre compte client et préparez vos premières expéditions." : "Connectez-vous pour suivre votre activité."}</p><form id="login-form"><div class="form-error" role="alert"></div>${register ? input("name", "Nom complet") + select("client_type", "Type de client", clientTypeOptions) + input("company", "Boutique / Société") + input("phone", "Téléphone", "", "tel") : ""}${input("email", "Adresse e-mail", "", "email", true, 'autocomplete="username"')}${input("password", "Mot de passe", "", "password", true, `minlength="${register ? 10 : 1}" autocomplete="${register ? "new-password" : "current-password"}"`)}<button class="btn primary" type="submit">${register ? "Créer mon compte" : "Se connecter"} ${icon("arrow")}</button></form><div class="login-register">${register ? "Déjà partenaire ?" : "Pas encore de compte ?"} <a onclick="RUNTIME.registration?renderLogin(${!register}):toast('Inscription publique fermée. Contactez l’administration.',true)">${register ? "Se connecter" : "Devenir client"}</a></div>${!register && RUNTIME.google ? `<a class="btn" href="/google/login">Se connecter avec Google</a>` : ""}${!register && RUNTIME.demo ? `<div class="demo-accounts"><p>EXPLORER LA VERSION DE DÉMONSTRATION</p><div class="demo-buttons"><button class="btn" onclick="demoLogin('admin')">${icon("shield")}Admin</button><button class="btn" onclick="demoLogin('client')">${icon("box")}Client</button><button class="btn" onclick="demoLogin('livreur')">${icon("truck")}Livreur</button><button class="btn" onclick="demoLogin('agent')">${icon("bell")}Responsable de hub</button></div>${window.opsOffline && opsOffline ? `<p style="margin-top:16px">CRÉER UN COMPTE DE TEST — CONNEXION IMMÉDIATE</p><div class="demo-buttons" style="flex-wrap:wrap"><button class="btn" onclick="demoCreate('vendeur')">${icon("box")}Nouveau client</button><button class="btn" onclick="demoCreate('societe')">${icon("layers")}Nouvelle société</button><button class="btn" onclick="demoCreate('livreur')">${icon("truck")}Nouveau livreur</button><button class="btn" onclick="demoCreate('agent')">${icon("bell")}Nouvel agent</button></div><p class="form-hint" style="margin-top:8px">Mot de passe de tous les comptes créés ici : <b>Oriental24!Demo</b> — ils persistent dans cette démo (même après rechargement).</p><div id="demo-created"></div>` : ""}</div>` : ""}<div class="login-note">${RUNTIME.demo?"Données fictives · Ne saisissez pas de données sensibles dans cette démo.":RUNTIME.registration?"Compte client · Vérification d’e-mail non activée.":"Inscription publique fermée. Demandez votre compte à l’administration."}</div></div></main></div>`;
+    `<div class="login-page"><aside class="login-brand-panel"><a href="/" aria-label="ORIENTAL24"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div><div class="eyebrow" style="color:#e89a61">La proximité fait la différence</div><h1>Votre activité avance.<br><span>Nous livrons la suite.</span></h1><p>Un espace unique pour vos colis, vos équipes et vos encaissements. Bienvenue chez vous.</p><div class="login-illustration"><img src="/static/van.png" alt="Livraison ORIENTAL24"></div></div><small>ORIENTAL24 · Livraison à domicile · ${new Date().getFullYear()}</small></aside><main class="login-form-side"><div class="login-form"><a href="/" class="back-link">${icon("back")}Retour au site</a><div class="eyebrow">Votre espace ORIENTAL24</div><h2>${register ? "Bienvenue dans le réseau." : "Heureux de vous retrouver."}</h2><p>${register ? "Créez votre compte client et préparez vos premières expéditions." : "Connectez-vous pour suivre votre activité."}</p><form id="login-form"><div class="form-error" role="alert"></div>${register ? input("name", "Nom complet") + select("client_type", "Type de client", clientTypeOptions) + input("company", "Boutique / Société") + input("phone", "Téléphone", "", "tel") : ""}${input("email", "Adresse e-mail", "", "email", true, 'autocomplete="username"')}${input("password", "Mot de passe", "", "password", true, `minlength="${register ? 10 : 1}" autocomplete="${register ? "new-password" : "current-password"}"`)}<button class="btn primary" type="submit">${register ? "Créer mon compte" : "Se connecter"} ${icon("arrow")}</button></form><div class="login-register">${register ? "Déjà partenaire ?" : "Pas encore de compte ?"} <a onclick="RUNTIME.registration?renderLogin(${!register}):toast('Inscription publique fermée. Contactez l’administration.',true)">${register ? "Se connecter" : "Devenir client"}</a></div>${!register && RUNTIME.google ? `<a class="btn" href="/google/login">Se connecter avec Google</a>` : ""}${!register && RUNTIME.demo ? `<div class="demo-accounts"><p>EXPLORER LA VERSION DE DÉMONSTRATION</p><div class="demo-buttons"><button class="btn" onclick="demoLogin('admin')">${icon("shield")}Admin</button><button class="btn" onclick="demoLogin('client')">${icon("box")}Client</button><button class="btn" onclick="demoLogin('livreur')">${icon("truck")}Livreur</button><button class="btn" onclick="demoLogin('hub_manager')">${icon("bell")}Responsable de hub</button></div>${window.opsOffline && opsOffline ? `<p style="margin-top:16px">CRÉER UN COMPTE DE TEST — CONNEXION IMMÉDIATE</p><div class="demo-buttons" style="flex-wrap:wrap"><button class="btn" onclick="demoCreate('vendeur')">${icon("box")}Nouveau client</button><button class="btn" onclick="demoCreate('societe')">${icon("layers")}Nouvelle société</button><button class="btn" onclick="demoCreate('livreur')">${icon("truck")}Nouveau livreur</button><button class="btn" onclick="demoCreate('hub_manager')">${icon("bell")}Nouvel agent</button></div><p class="form-hint" style="margin-top:8px">Mot de passe de tous les comptes créés ici : <b>Oriental24!Demo</b> — ils persistent dans cette démo (même après rechargement).</p><div id="demo-created"></div>` : ""}</div>` : ""}<div class="login-note">${RUNTIME.demo?"Données fictives · Ne saisissez pas de données sensibles dans cette démo.":RUNTIME.registration?"Compte client · Vérification d’e-mail non activée.":"Inscription publique fermée. Demandez votre compte à l’administration."}</div></div></main></div>`;
   bindForm(async (d) => {
     await api(register ? "/register" : "/login", "POST", d);
     await enterApp();
@@ -458,7 +458,7 @@ async function demoCreate(kind) {
     await api("/login", "POST", { email: "admin@oriental24.ma", password: "Oriental24!Demo" });
     const n = Date.now().toString(36), mail = `test.${kind}.${n}@demo.oriental24.ma`;
     let agent_hub_id;
-    if (kind === "agent") {
+    if (kind === "hub_manager") {
       const boot = await api("/bootstrap", "GET");
       const hub = (boot.hubs || []).find((h) => h.active);
       agent_hub_id = hub ? hub.id : (await api("/logistics/hubs", "POST", { name: "Hub de test " + n, city_id: 1, address: "Adresse de test (compte agent)" })).id;
@@ -466,8 +466,8 @@ async function demoCreate(kind) {
     const [icn, short, base] = kinds[kind];
     const d = kind === "livreur"
       ? { name: base + " " + n, email: mail, password: "Oriental24!Demo", phone: "0600000000", role: "livreur" }
-      : kind === "agent"
-      ? { name: base + " " + n, email: mail, password: "Oriental24!Demo", phone: "0600000000", role: "agent", agent_hub_id }
+      : kind === "hub_manager"
+      ? { name: base + " " + n, email: mail, password: "Oriental24!Demo", phone: "0600000000", role: "hub_manager", agent_hub_id }
       : { name: base + " " + n, company: base + " " + n, email: mail, password: "Oriental24!Demo", phone: "0600000000", role: "client", client_type: kind === "societe" ? "societe_livraison" : "vendeur" };
     await api("/users", "POST", d);
     const label = `${short} · ${n.slice(-4)}`;
@@ -483,7 +483,7 @@ async function enterApp() {
   const googleResult=new URLSearchParams(location.search).get('google');
   await refresh();
   history.replaceState(null, "", "/app");
-  view = S?.user?.role === "agent" ? "partner-palettes" : S?.user?.role === "support" ? "support-orders" : "dashboard";
+  view = S?.user?.role === "hub_manager" ? "partner-palettes" : S?.user?.role === "support" ? "support-orders" : "dashboard";
   if(googleResult&&S.user.role==='client')view='profile';
   shell();
   await renderView();
@@ -495,7 +495,7 @@ const menu = [
     [
       ["dashboard", "grid", "Tableau de bord"],
       ["analytics", "chart", "Statistiques", ["admin"]],
-      ["tour", "pin", "Tour de contrôle", ["admin", "agent"]],
+      ["tour", "pin", "Tour de contrôle", ["admin", "hub_manager"]],
     ],
   ],
   [
@@ -504,8 +504,8 @@ const menu = [
             ["driver-app", "smartphone", "Mon app", ["livreur"]],
 ["parcels", "box", "Colis"],
       ["pickups", "truck", "Ramassages", ["admin", "client"]],
-      ["ramassage-reception", "scan", "Réception ramassage", ["admin", "agent"]],
-      ["ramassage-collected", "box", "Les CMD ramassées", ["admin", "agent"]],
+      ["ramassage-reception", "scan", "Réception ramassage", ["admin", "hub_manager"]],
+      ["ramassage-collected", "box", "Les CMD ramassées", ["admin", "hub_manager"]],
       ["pallets", "layers", "Palettes", ["admin"]],
       ["stock", "layers", "Stock & produits", ["admin", "client"]],
       ["print", "print", "Impression"],
@@ -515,9 +515,9 @@ const menu = [
     "GESTION",
     [
       ["invoices", "wallet", "Facturation", ["admin", "client", "livreur"]],
-      ["driver-finance", "wallet", "Caisse & commissions livreurs", ["agent", "livreur"]],
+      ["driver-finance", "wallet", "Caisse & commissions livreurs", ["hub_manager", "livreur"]],
       ["drivers", "users", "Livreurs", ["admin"]],
-      ["hub-drivers", "users", "Livreurs de mon Hub", ["agent"]],
+      ["hub-drivers", "users", "Livreurs de mon Hub", ["hub_manager"]],
       ["clients", "user", "Clients", ["admin"]],
       ["supports", "headset", "Supports", ["admin"]],
       ["support-orders", "headset", "Suivre les commandes", ["support"]],
@@ -573,13 +573,13 @@ function clientSectionRemoved(key, user = S?.user) {
 function canAccessFulfillment(user = S?.user) {
   if (!user) return false;
   if (['admin', 'client'].includes(user.role)) return true;
-  if (!['agent', 'hub_manager'].includes(user.role)) return false;
+  if (!['hub_manager', 'hub_manager'].includes(user.role)) return false;
   const hubId = Number(user.agent_hub_id), centralId = Number(S?.settings?.central_hub_id);
   return hubId > 0 && hubId === centralId
     && (S?.hubs || []).some(h => Number(h.id) === hubId && Number(h.active) === 1);
 }
 function workspacePageTitle(key, fallback) {
-  if(key==='hub-invoices')return S?.user?.role==='agent'?'Factures':'Factures des Hubs';
+  if(key==='hub-invoices')return S?.user?.role==='hub_manager'?'Factures':'Factures des Hubs';
   if (key === 'partner-palettes' && S?.user?.role === 'client') return 'Mes palettes';
   if (key === 'return-palettes' && S?.user?.role === 'client') return 'Mes retours';
   return fallback || titles[key] || key;
@@ -629,7 +629,7 @@ function shell() {
   $("#root").innerHTML =
     `<aside class="sidebar"><a class="brand" href="/"><span class="brandbox"><img class="brandmark" src="/static/brandmark.png" alt=""><span class="brandtext" dir="ltr">ORIENTAL24</span></span></a><div class="workspace-label">${roleName(u.role).toUpperCase()}</div><nav class="nav-scroll">${menu
       .map(([section, items]) => {
-        const vis = items.filter((x) => !(u.role==='agent'&&x[0]==='hub-driver-statements') && !(u.role==='admin'&&x[0]==='hub-invoices') && !adminHubSectionRemoved(x[0], u) && !driverFinanceSectionRemoved(x[0], u) && !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (x[0]!=='fulfillment'||canAccessFulfillment(u)) && (u.role!=='agent'||['hub-manager-analytics','parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','driver-finance','alerts','tickets','notifications','announcements','profile','security','fulfillment'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
+        const vis = items.filter((x) => !(u.role==='hub_manager'&&x[0]==='hub-driver-statements') && !(u.role==='admin'&&x[0]==='hub-invoices') && !adminHubSectionRemoved(x[0], u) && !driverFinanceSectionRemoved(x[0], u) && !clientSectionRemoved(x[0], u) && x[0]!=='pallets' && (!x[3] || x[3].includes(u.role)) && (x[0]!=='partner-palettes'||ppAccess(u)) && (x[0]!=='fulfillment'||canAccessFulfillment(u)) && (u.role!=='hub_manager'||['hub-manager-analytics','parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','driver-finance','alerts','tickets','notifications','announcements','profile','security','fulfillment'].includes(x[0])) && (u.role!=='support'||['support-orders','profile'].includes(x[0])));
         return vis.length
           ? `<div class="nav-section">${section}</div>${vis.map(([key, i, t]) => `<button class="nav-item ${key === view ? "active" : ""}" data-nav="${key}" onclick="navigate('${key}')">${icon(i)}<span>${workspacePageTitle(key,t)}</span>${key === "parcels" ? `<span class="nav-count">${S.parcels.length}</span>` : ""}</button>`).join("")}`
           : "";
@@ -639,7 +639,7 @@ function shell() {
       )}</nav><div class="sidebar-bottom"><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${workspacePageTitle(view)}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':globalSearchMarkup()}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<div class="top-profile-wrap"><button type="button" class="top-profile" id="user-menu-btn" aria-haspopup="true" aria-expanded="false" onclick="toggleUserMenu(event)"><span class="avatar orange">${profileAvatarContent(u)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button><div class="user-popover" id="user-popover" role="menu" hidden><button type="button" role="menuitem" onclick="userMenuGo('profile')"><span class="user-pop-ico" aria-hidden="true">${icon("user")}</span><span>Profil</span></button><button type="button" role="menuitem" class="danger" onclick="userMenuGo('logout')"><span class="user-pop-ico" aria-hidden="true">${icon("logout")}</span><span>Déconnexion</span></button></div></div></div></header><main class="content" id="content"></main></div>`;
 }
 function adminHubSectionRemoved(section, u = S?.user) {
-  return ['admin','agent','hub_manager'].includes(u?.role) && ['security','support-team'].includes(section);
+  return ['admin','hub_manager','hub_manager'].includes(u?.role) && ['security','support-team'].includes(section);
 }
 function driverFinanceSectionRemoved(section, u = S?.user) {
   return u?.role === 'admin' && section === 'driver-finance';
@@ -647,12 +647,12 @@ function driverFinanceSectionRemoved(section, u = S?.user) {
 async function navigate(v) {
   if (!S) return;
   if(S.user.role==='admin'&&v==='hub-invoices'){billingPane='hubs';v='invoices'}
-  if (adminHubSectionRemoved(v)) v = ['agent','hub_manager'].includes(S.user.role) ? 'partner-palettes' : 'dashboard';
+  if (adminHubSectionRemoved(v)) v = ['hub_manager','hub_manager'].includes(S.user.role) ? 'partner-palettes' : 'dashboard';
   if (driverFinanceSectionRemoved(v)) v = 'dashboard';
   if (clientSectionRemoved(v)) v = 'dashboard';
-  if (v === 'fulfillment' && !canAccessFulfillment()) v = S.user.role === 'agent' ? 'partner-palettes' : 'dashboard';
+  if (v === 'fulfillment' && !canAccessFulfillment()) v = S.user.role === 'hub_manager' ? 'partner-palettes' : 'dashboard';
   // Responsable de hub : navigation limitée aux tâches et vues explicitement sûres.
-  if (S.user.role==='agent'&&!['hub-manager-analytics','parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security','fulfillment'].includes(v)) v='partner-palettes';
+  if (S.user.role==='hub_manager'&&!['hub-manager-analytics','parcels','documents','ramassage-reception','ramassage-collected','tour','hub-dashboard','hub-drivers','hub-invoices','hub-driver-statements','hub-cod','palette-hub','partner-palettes','return-palettes','alerts','tickets','profile','notifications','announcements','security','fulfillment'].includes(v)) v='partner-palettes';
   if (S.user.role==='support'&&!['support-orders','profile'].includes(v)) v='support-orders';
   if (S.user.role === "livreur" && ["parcels","dashboard","print"].includes(v)) { try { const owner=S.user.id,fresh=await api("/bootstrap"); if(S?.user?.id!==owner||fresh.user.id!==owner)return; S=fresh; } catch(e) {toast(e.message,true);return;} }
   view = v;
@@ -740,7 +740,7 @@ async function renderView(background = false) {
         html = await ramassageReceptionView();
         break;
       case "partner-palettes":
-        if (['admin','agent'].includes(S.user.role)) html = await partnerAdminWorkspace();
+        if (['admin','hub_manager'].includes(S.user.role)) html = await partnerAdminWorkspace();
         else html = partnerPalettesView(await api("/partner-palettes?"+ppQuery()));
         break;
       case "return-palettes":
@@ -1104,7 +1104,7 @@ function parcelTable(rows, selectable = true) {
     );
   const isAdmin = S.user.role === "admin";
   const isClient = S.user.role === "client";
-  const isHubManager = S.user.role === "agent";
+  const isHubManager = S.user.role === "hub_manager";
   return `${S.user.role === "livreur" && view !== "print" ? driverCards(rows) : ""}<div class="table-wrap ${S.user.role === "livreur" && view !== "print" ? "driver-desktop-table" : ""}"><table><thead><tr>${selectable ? '<th style="width:30px"><input type="checkbox" style="width:13px" aria-label="Sélectionner tous" onchange="document.querySelectorAll(\'.parcel-select\').forEach(x=>x.checked=this.checked)"></th>' : ""}<th>Référence</th><th>Destinataire</th><th>Destination</th><th>Montant COD</th><th>Statut</th><th>${isClient ? "Livreur" : "Client / Boutique"}</th>${isAdmin ? "<th>Livreur / Agence</th>" : isHubManager ? "<th>Livreur local</th>" : ""}<th></th></tr></thead><tbody>${rows.map((p) => {
     const driverCell = parcelAgencyCell(p);
     const managerDriverIsLocal=(S.users||[]).some(u=>Number(u.id)===Number(p.driver_id)&&u.role==='livreur'&&Number(u.driver_hub_id)===Number(S.user.agent_hub_id));
@@ -1115,8 +1115,8 @@ function parcelTable(rows, selectable = true) {
   }).join("")}</tbody></table></div>`;
 }
 function parcelsView() {
-  const hubManager = S.user.role === "agent";
-  const create = !["livreur", "agent"].includes(S.user.role);
+  const hubManager = S.user.role === "hub_manager";
+  const create = !["livreur", "hub_manager"].includes(S.user.role);
   const title = hubManager ? "Suivi des colis de mon Hub" : create ? "Gestion des colis" : "Mes colis";
   const subtitle = hubManager
     ? "Seuls les colis physiquement reçus dans votre Hub sont affichés. Cliquez sur la situation pour la modifier ; Livré, Retourné et les colis verrouillés ne sont pas modifiables."
