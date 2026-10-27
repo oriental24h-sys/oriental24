@@ -17,13 +17,19 @@ def register_driver_days(app, services):
         c.executescript('''
         CREATE TABLE IF NOT EXISTS driver_day_closes(
             id INTEGER PRIMARY KEY, driver_id INTEGER NOT NULL REFERENCES users(id), day TEXT NOT NULL,
-            livres INTEGER NOT NULL, cod_cents INTEGER NOT NULL, commission_cents INTEGER NOT NULL,
+            livres INTEGER NOT NULL, retournes INTEGER NOT NULL DEFAULT 0, refuses INTEGER NOT NULL DEFAULT 0,
+            cod_cents INTEGER NOT NULL, commission_cents INTEGER NOT NULL,
             expected_cents INTEGER NOT NULL, received_cents INTEGER NOT NULL, variance_cents INTEGER NOT NULL,
             mode TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('Clôturé','Rouvert')),
             reference TEXT, note TEXT,
             closed_by INTEGER NOT NULL REFERENCES users(id), closed_by_name TEXT NOT NULL, closed_at TEXT NOT NULL,
             reopened_by INTEGER REFERENCES users(id), reopen_note TEXT, reopened_at TEXT,
             UNIQUE(driver_id, day));''')
+        close_columns = {r['name'] for r in c.execute('PRAGMA table_info(driver_day_closes)')}
+        if 'retournes' not in close_columns:
+            c.execute('ALTER TABLE driver_day_closes ADD COLUMN retournes INTEGER NOT NULL DEFAULT 0')
+        if 'refuses' not in close_columns:
+            c.execute('ALTER TABLE driver_day_closes ADD COLUMN refuses INTEGER NOT NULL DEFAULT 0')
 
     def cents(v):
         try:
@@ -148,14 +154,14 @@ def register_driver_days(app, services):
                 raise Error('Journée déjà clôturée pour ce livreur.', 409)
             cur = calc(c, did, day)
             variance = cur['expected_cents'] - received
-            common = (cur['livres'], cur['cod_cents'], cur['commission_cents'], cur['expected_cents'], received, variance, cur['mode'])
+            common = (cur['livres'], cur['retournes'], cur['refuses'], cur['cod_cents'], cur['commission_cents'], cur['expected_cents'], received, variance, cur['mode'])
             if old:
-                c.execute('''UPDATE driver_day_closes SET livres=?,cod_cents=?,commission_cents=?,expected_cents=?,received_cents=?,variance_cents=?,mode=?,
+                c.execute('''UPDATE driver_day_closes SET livres=?,retournes=?,refuses=?,cod_cents=?,commission_cents=?,expected_cents=?,received_cents=?,variance_cents=?,mode=?,
                              status='Clôturé',reference=?,note=?,closed_by=?,closed_by_name=?,closed_at=?,reopened_by=NULL,reopen_note=NULL,reopened_at=NULL
                              WHERE driver_id=? AND day=?''', common + (reference or None, note or None, u['id'], u['name'], now(), did, day))
             else:
-                c.execute('''INSERT INTO driver_day_closes(livres,cod_cents,commission_cents,expected_cents,received_cents,variance_cents,mode,status,reference,note,closed_by,closed_by_name,closed_at,driver_id,day)
-                             VALUES(?,?,?,?,?,?,?,'Clôturé',?,?,?,?,?,?,?)''',
+                c.execute('''INSERT INTO driver_day_closes(livres,retournes,refuses,cod_cents,commission_cents,expected_cents,received_cents,variance_cents,mode,status,reference,note,closed_by,closed_by_name,closed_at,driver_id,day)
+                             VALUES(?,?,?,?,?,?,?,?,?,'Clôturé',?,?,?,?,?,?,?)''',
                           common + (reference or None, note or None, u['id'], u['name'], now(), did, day))
             audit(c, did, u, 'Journée clôturée', {'day': day, 'expected_cents': cur['expected_cents'], 'received_cents': received, 'variance_cents': variance})
             return jsonify(calc(c, did, day))
