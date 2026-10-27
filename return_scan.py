@@ -42,20 +42,20 @@ def register_return_scan(app, s):
         return DEFAULT_WEEK_DAYS
 
     def staff(u):
-        if u['role'] not in ('admin', 'agent'):
+        if u['role'] not in ('admin', 'hub_manager'):
             raise Error('Préparation et envoi des retours réservés à Admin et aux agents de réception.', 403)
 
     def clean_hub(c, hid, u):
         if isinstance(hid, bool) or not re.fullmatch(r'[1-9][0-9]{0,9}', str(hid)):
-            if u['role'] == 'agent':
+            if u['role'] == 'hub_manager':
                 raise Error('Hub introuvable.', 404)
             raise Error('Hub de départ invalide.')
         h = c.execute('SELECT h.*,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1', (hid,)).fetchone()
         if not h:
-            if u['role'] == 'agent':
+            if u['role'] == 'hub_manager':
                 raise Error('Hub introuvable.', 404)
             raise Error('Choisissez un hub de départ actif.', 409)
-        if u['role'] == 'agent' and u['agent_hub_id'] != h['id']:
+        if u['role'] == 'hub_manager' and u['agent_hub_id'] != h['id']:
             raise Error('Hub introuvable.', 404)
         return dict(h)
 
@@ -107,7 +107,7 @@ def register_return_scan(app, s):
         return parcel_by_manifest_at_hub(c, code, hub_id)
 
     @app.get('/api/return-palettes/scan-lookup')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def return_scan_lookup():
         u = user()
         staff(u)
@@ -141,7 +141,7 @@ def register_return_scan(app, s):
         return fp, None
 
     @app.post('/api/return-palettes/scan-send')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def return_scan_send():
         """Crée la palette retour avec les colis scannés ET l'expédie — un seul geste."""
         u = user()
@@ -206,7 +206,7 @@ def register_return_scan(app, s):
         return jsonify(result)
 
     @app.post('/api/return-palettes/<int:did>/refuse')
-    @auth('admin', 'agent', 'client')
+    @auth('admin', 'hub_manager', 'client')
     def return_palette_refuse(did):
         """Palette retour refusée (par le vendeur ou l'agence) : les colis redeviennent disponibles."""
         u = user()
@@ -222,7 +222,7 @@ def register_return_scan(app, s):
             doc = c.execute('SELECT * FROM ops_documents WHERE id=? AND kind=?', (did, KIND)).fetchone()
             if not doc:
                 raise Error('Palette retour introuvable.', 404)
-            if u['role'] == 'agent' and doc['destination_hub_id'] != u['agent_hub_id']:
+            if u['role'] == 'hub_manager' and doc['destination_hub_id'] != u['agent_hub_id']:
                 raise Error('Palette retour introuvable.', 404)
             if u['role'] == 'client' and doc['client_id'] != u['id']:
                 raise Error('Palette retour introuvable.', 404)
