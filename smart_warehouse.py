@@ -98,7 +98,7 @@ def register_smart_warehouse(app, s):
 
     # ---------- API : entrepôts & emplacements ----------
     @app.get('/api/warehouses')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def warehouses_list():
         with conn() as c:
             rows = [dict(r) for r in c.execute('SELECT w.*,ci.name city FROM warehouses w LEFT JOIN cities ci ON ci.id=w.city_id ORDER BY w.id')]
@@ -126,7 +126,7 @@ def register_smart_warehouse(app, s):
         return jsonify(ok=True, id=wid)
 
     @app.get('/api/warehouses/<int:wid>/slots')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def slots_list(wid):
         with conn() as c:
             rows = [dict(r) for r in c.execute('''SELECT ws.*,p.tracking busy_tracking FROM warehouse_slots ws
@@ -137,7 +137,7 @@ def register_smart_warehouse(app, s):
 
     # ---------- API : stockage / picking / sortie ----------
     @app.post('/api/parcels/<int:pid>/store')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def parcel_store(pid):
         u = user()
         with conn() as c:
@@ -158,7 +158,7 @@ def register_smart_warehouse(app, s):
         return jsonify(ok=True, slot=lbl, warehouse=wh['name'])
 
     @app.post('/api/parcels/<int:pid>/pick')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def parcel_pick(pid):
         u = user()
         with conn() as c:
@@ -173,7 +173,7 @@ def register_smart_warehouse(app, s):
         return jsonify(ok=True)
 
     @app.post('/api/parcels/<int:pid>/ship-out')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def parcel_ship_out(pid):
         u = user()
         with conn() as c:
@@ -188,7 +188,7 @@ def register_smart_warehouse(app, s):
         return jsonify(ok=True)
 
     @app.get('/api/parcels/<int:pid>/storage')
-    @auth('admin', 'agent', 'livreur')
+    @auth('admin', 'hub_manager', 'livreur')
     def parcel_storage_get(pid):
         u = user()
         with conn() as c:
@@ -207,7 +207,7 @@ def register_smart_warehouse(app, s):
 
     # ---------- API : robots de tri ----------
     @app.get('/api/bots')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def bots_list():
         with conn() as c:
             rows = [dict(r) for r in c.execute('SELECT * FROM warehouse_bots ORDER BY id')]
@@ -243,7 +243,7 @@ def register_smart_warehouse(app, s):
         return jsonify(ok=True)
 
     @app.post('/api/bots/<int:bid>/charge')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def bots_charge(bid):
         with conn() as c:
             b = c.execute('SELECT * FROM warehouse_bots WHERE id=?', (bid,)).fetchone()
@@ -252,7 +252,7 @@ def register_smart_warehouse(app, s):
         return jsonify(ok=True)
 
     @app.post('/api/warehouse/missions/<int:mid>/finish')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def mission_finish(mid):
         with conn() as c:
             m = c.execute('SELECT * FROM bot_missions WHERE id=?', (mid,)).fetchone()
@@ -271,7 +271,7 @@ def register_smart_warehouse(app, s):
 
     # ---------- API : contrôle qualité réception (« vision ») ----------
     @app.post('/api/parcels/<int:pid>/reception-check')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def reception_check(pid):
         d = request.get_json(silent=True) or {}; u = user()
         cond = str(d.get('condition') or '')
@@ -291,7 +291,7 @@ def register_smart_warehouse(app, s):
         return jsonify(ok=True, id=rid, score=score)
 
     @app.get('/api/warehouse/receptions')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def receptions_list():
         with conn() as c:
             rows = [dict(r) for r in c.execute('''SELECT rc.*,p.tracking,u.name actor FROM reception_checks rc
@@ -326,7 +326,7 @@ def register_smart_warehouse(app, s):
 
     # ---------- API : KPI entrepôt ----------
     @app.get('/api/warehouse/kpis')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def warehouse_kpis():
         with conn() as c:
             tot = c.execute('SELECT COUNT(*) n FROM warehouse_slots').fetchone()['n']
