@@ -195,7 +195,7 @@ def register_logistics(app, services):
         if len(password)<10:raise Error('10 caractères minimum pour le mot de passe du responsable.')
         if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):raise Error('Adresse e-mail invalide pour le responsable.')
         if c.execute('SELECT 1 FROM users WHERE lower(email)=lower(?)',(email,)).fetchone():raise Error('Cette adresse e-mail est déjà utilisée.',409)
-        existing=c.execute("SELECT id,name FROM users WHERE agent_hub_id=? AND role IN ('hub_manager','hub_manager') AND active=1 ORDER BY id LIMIT 1",(hub_id,)).fetchone()
+        existing=c.execute("SELECT id,name FROM users WHERE agent_hub_id=? AND role='hub_manager' AND active=1 ORDER BY id LIMIT 1",(hub_id,)).fetchone()
         if existing:raise Error('Ce Hub possède déjà un responsable actif ('+existing['name']+').',409)
         uid=c.execute('''INSERT INTO users(name,email,password,role,company,phone,active,agent_hub_id,created_at)
                          VALUES(?,?,?,'hub_manager','ORIENTAL24',?,1,?,?)''',
@@ -339,7 +339,7 @@ def register_logistics(app, services):
                 h['primary_city_id']=None
                 if u['role']=='admin':
                     managers=[dict(r) for r in c.execute('''SELECT id,name,email,phone,active FROM users
-                        WHERE agent_hub_id=? AND role IN ('hub_manager','hub_manager') ORDER BY active DESC,id''',(h['id'],))]
+                        WHERE agent_hub_id=? AND role='hub_manager' ORDER BY active DESC,id''',(h['id'],))]
                     active_managers=[m for m in managers if m['active']]
                     h['manager']=active_managers[0] if active_managers else (managers[0] if managers else None)
                     h['active_manager_count']=len(active_managers)
@@ -412,7 +412,7 @@ def register_logistics(app, services):
                     # A saved map pin may belong to its former address; require fresh placement after relocation.
                     c.execute('UPDATE ops_hubs SET lat=NULL,lng=NULL WHERE id=?',(hid,))
                 if previous and not previous['active'] and bool(d.get('active')):
-                    manager_count=c.execute("SELECT count(*) FROM users WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','hub_manager')",(hid,)).fetchone()[0]
+                    manager_count=c.execute("SELECT count(*) FROM users WHERE agent_hub_id=? AND active=1 AND role='hub_manager'",(hid,)).fetchone()[0]
                     if manager_count!=1:raise Error('Un Hub ne peut être réactivé qu’avec exactement un responsable actif.',409)
                 c.execute('UPDATE ops_hubs SET name=?,city_id=?,address=?,active=? WHERE id=?',(name,cid,address,int(bool(d.get('active'))),hid))
             else:
@@ -463,9 +463,9 @@ def register_logistics(app, services):
         with conn() as c:
             c.execute('BEGIN IMMEDIATE');hub(c,hid,False)
             previous=[dict(r) for r in c.execute("""SELECT id,name,email FROM users
-                WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','hub_manager') ORDER BY id""",(hid,)).fetchall()]
+                WHERE agent_hub_id=? AND active=1 AND role='hub_manager' ORDER BY id""",(hid,)).fetchall()]
             if not previous:raise Error('Aucun responsable actif à remplacer. Utilisez l’ajout de responsable.',409)
-            c.execute("UPDATE users SET active=0 WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','hub_manager')",(hid,))
+            c.execute("UPDATE users SET active=0 WHERE agent_hub_id=? AND active=1 AND role='hub_manager'",(hid,))
             revoke=services.get('security_revoke_user')
             for manager in previous:
                 if revoke:revoke(c,manager['id'],'Compte remplacé comme responsable de Hub',actor['id'])
