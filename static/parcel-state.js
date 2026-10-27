@@ -2,7 +2,7 @@
 function parcelStateEditable(p){return !['client','support','agent'].includes(S.user.role)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked&&!(S.user.role==='livreur'&&['Livré','Retourné'].includes(p.status))}
 function clientInterestedEligible(p){return S?.user?.role==='client'&&p.status!=='Intéressé'&&!['Livré','Retourné','Refusé','Annulé'].includes(p.status)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked&&!['Réglée','Soldé','Paid'].includes(p.invoice_status)}
 function hubParcelStatusEditable(p){return S?.user?.role==='agent'&&p.hub_status_editable===true&&p.status!=='Livré'&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked}
-function parcelStatusEditable(p){return S?.user?.role==='agent'?hubParcelStatusEditable(p):S?.user?.role==='client'?clientInterestedEligible(p):parcelStateEditable(p)}
+function parcelStatusEditable(p){if(S?.user?.role==='livreur')return p.status!=='Livré'&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked;return S?.user?.role==='agent'?hubParcelStatusEditable(p):S?.user?.role==='client'?clientInterestedEligible(p):parcelStateEditable(p)}
 function parcelNoteControl(p){if(S.user.role==='livreur'&&parcelStateEditable(p))return `<button class="parcel-note-button" onclick="openDriverFollowup(${p.id})">Motif / note ${icon('edit')}</button>`;const label=p.reason_label||p.reason_code||'Aucun motif';return parcelStateEditable(p)?`<button class="parcel-note-button ${p.reason_code?'has-reason':''}" aria-label="Note de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelReason(${p.id},this)"><span>Note${p.reason_code?' · '+esc(label):''}</span>${icon('down')}</button>`:`<span class="parcel-note-readonly">${esc(label)}</span>`}
 function parcelStatusControl(p){if(S?.user?.role==='client')return clientInterestedEligible(p)?`<button class="parcel-status-button client-interested-button" title="Marquer comme intéressé" aria-label="Marquer ${esc(p.tracking)} comme intéressé" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">Marquer intéressé${icon('down')}</button>`:'';return parcelStatusEditable(p)?`<button class="parcel-status-button" aria-label="État de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">${esc(p.status)}${icon('down')}</button>`:''}
 function parcelStateControls(p){return `<div class="parcel-state-controls">${tag(p.status)}${parcelStatusControl(p)}${parcelNoteControl(p)}</div>`}
@@ -44,7 +44,7 @@ function parcelStatusChoices(p){
  if(S.user.role==='client')return clientInterestedEligible(p)?['Intéressé']:[];
  if(['admin','agent'].includes(S.user.role))return S.user.role==='agent'&&!hubParcelStatusEditable(p)?[]:S.statuses.filter(s=>s!=='Vers Hub Central');
  const next=S.status_policy.driver_transitions;
- return [p.status,...(next[p.status]||[])];
+ return [p.status,...(next[p.status]||[])].filter(s=>!['Réceptionné','Retourné'].includes(s));
 }
 function statusMenuError(state,error){if(activeReasonMenu!==state)return;state.busy=false;const el=state.node.querySelector('.reason-error');if(el){el.hidden=false;el.textContent=error.message}state.node.querySelectorAll('button[data-status],button[type=submit]').forEach(b=>b.disabled=b.dataset.status===state.parcel?.status)}
 async function openParcelState(id,anchor){
@@ -66,7 +66,7 @@ function renderStatusOptions(state){
 async function selectParcelStatus(state,status){
  if(state.busy||activeReasonMenu!==state||status===state.parcel.status)return;
  const p=state.parcel,terminal=['Livré','Retourné','Refusé'].includes(status),backward=S.user.role==='admin'&&((['Livré','Retourné'].includes(p.status))||(S.status_policy.rank[status]<S.status_policy.rank[p.status]));
- state.attempt=!opsOffline&&S.user.role==='livreur'&&([...S.status_policy.attempt_sources,'Refusé'].includes(p.status))&&S.status_policy.attempt_outcomes.includes(status);
+ state.attempt=!opsOffline&&S.user.role==='livreur'&&p.status!=='Livré'&&S.status_policy.attempt_outcomes.includes(status);
  if(S.user.role!=='agent'&&status!=='Programmé'&&!terminal&&!backward&&!state.attempt&&!['Transit','Réceptionné','Reçu par le livreur'].includes(status))return submitParcelStatus(state,status,{});
  state.busy=true;
  try{

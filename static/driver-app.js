@@ -307,16 +307,14 @@
   window.daSetTreatment = (value) => { state.treatment = value; closeModal(); render(); };
   /* v1.4.26 : feuille « Changer le statut » — liste métier du livreur demandée (dates pour Reporté/Programmé,
      motif pour Refusé/Annulé, « Pas de réponse » = Reporté + motif standard), le tout sur l'endpoint existant ;
-     les cibles impossibles pour un livreur depuis l'état actuel restent visibles mais grisées. */
+     les actions réservées au Hub sont absentes; aucun ordre imposé, Livré est définitif. */
   const DA_STATUS_OPTS = [
     { key: 'reporte', label: 'Reporté', status: 'Reporté', date: true, icon: 'clock', sub: 'nouvelle date' },
     { key: 'programme', label: 'Programmé', status: 'Programmé', date: true, reason: 'appointment', icon: 'calendar', sub: 'rendez-vous + date' },
-    { key: 'receptionne', label: 'Réceptionné', status: 'Réceptionné', icon: 'box' },
     { key: 'recu', label: 'Reçu par le livreur', status: 'Reçu par le livreur', icon: 'user' },
     { key: 'livre', label: 'Livré', status: 'Livré', cod: true, icon: 'check' },
     { key: 'refuse', label: 'Refusé', status: 'Refusé', motif: 'required', danger: true, icon: 'close', sub: 'motif requis' },
     { key: 'tournee', label: 'En livraison', status: 'En livraison', icon: 'truck' },
-    { key: 'retourne', label: 'Retourné', status: 'Retourné', icon: 'return' },
     { key: 'annule', label: 'Annulé', status: 'Annulé', motif: 'required', danger: true, icon: 'alert', sub: 'motif requis' },
     { key: 'noresponse', label: 'Pas de réponse', status: 'Reporté', prefill: 'Pas de réponse du destinataire', icon: 'phone', sub: '→ Reporté' },
   ];
@@ -325,7 +323,8 @@
     if (!p) return;
     const trans = (S.status_policy && S.status_policy.driver_transitions) || {};
     const allowed = new Set(trans[p.status] || []);
-    const locked = p.financial_locked || p.invoice_id || p.operations_locked;
+    const delivered = p.status === 'Livré';
+    const locked = delivered || p.financial_locked || p.invoice_id || p.operations_locked;
     const rows = DA_STATUS_OPTS.map((o) => {
       const cur = o.label === p.status;
       const ok = !cur && !locked && allowed.has(o.status);
@@ -335,11 +334,13 @@
         ${cur ? '<b class="da-actuel">actuel</b>' : `<b>${icon('chevron')}</b>`}
       </button>`;
     }).join('');
-    const hint = locked
+    const hint = delivered
+      ? 'Commande Livré : le livreur ne peut plus modifier son état.'
+      : locked
       ? 'Ce colis est figé (relevé livreur, facture ou opérations) : aucune modification de statut.'
       : !allowed.size
         ? `Colis clôturé : aucune action possible depuis « ${p.status} ». Contactez l’administration.`
-        : 'Seules les actions possibles pour un livreur depuis cet état sont actives.';
+        : 'Choisissez librement un état autorisé, sans ordre imposé. Après Livré, l’état est définitif.';
     modal('Changer le statut', `
       <div class="full form-hint" style="margin-bottom:8px">${esc(p.tracking)} · État actuel : <b>${esc(p.status)}</b></div>
       <div class="da-sheet">${rows}</div>
@@ -348,7 +349,8 @@
   window.daApplyStatus = (id, key) => {
     const p = S.parcels.find((x) => x.id === id);
     const o = DA_STATUS_OPTS.find((x) => x.key === key);
-    if (!p || !o) return;
+    if (!p || !o || p.status === 'Livré' || p.financial_locked || p.invoice_id || p.operations_locked) return;
+    if (!(S.status_policy?.driver_transitions?.[p.status] || []).includes(o.status)) return;
     const frDay = (v) => v ? new Intl.DateTimeFormat(daLocale()).format(new Date(v + 'T12:00:00')) : '';
     modal('Confirmer : ' + o.label, form(
       `<input type="hidden" name="status" value="${esc(o.status)}">${o.reason ? `<input type="hidden" name="reason_code" value="${o.reason}">` : ''}
@@ -364,7 +366,10 @@
       if (d.otp) payload.otp = String(d.otp).replace(/\D/g, '');
       if (d.reason_code) payload.reason_code = d.reason_code;
       if (o.key === 'programme') payload.next_attempt_at = d.next_at + 'T12:00';
-      if (o.key === 'reporte') payload.note = 'Reporté au ' + frDay(d.next_at) + (d.note ? ' · ' + d.note : '');
+      if (o.key === 'reporte') {
+        payload.next_attempt_at = d.next_at;
+        payload.note = 'Reporté au ' + frDay(d.next_at) + (d.note ? ' · ' + d.note : '');
+      }
       try {
         await api409(
           (f) => api('/parcels/' + id, 'PATCH', { ...payload, revision: f ? f.ops_revision : payload.revision }),

@@ -92,7 +92,40 @@ const localDayKey = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
+function parcelTreatmentDueDay(p) {
+  if (!["Reporté", "Programmé"].includes(p?.status)) return "";
+  const validDay = (day) => {
+    const d = new Date(day + "T12:00:00Z");
+    return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === day ? day : "";
+  };
+  const scheduled = String(p.next_attempt_at || "");
+  if (scheduled) {
+    const day = scheduled.match(/^(\d{4}-\d{2}-\d{2})(?:T|$)/)?.[1];
+    if (!day || !validDay(day)) return "";
+    // Zoned appointment timestamps use the Moroccan business day, not the browser's timezone.
+    if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(scheduled)) {
+      const d = new Date(scheduled);
+      return Number.isFinite(d.getTime()) ? window.o24CasablancaDay(d) : "";
+    }
+    return day;
+  }
+  // Older courier reports stored their selected date only in this explicit note prefix.
+  // Read it without rewriting history; an actual structured appointment always wins.
+  if (p.status !== "Reporté") return "";
+  const note = String(p.note || "").normalize('NFKC').replace(/[\u200e\u200f\u061c]/g, "")
+    .replace(/[٠-٩]/g, c => String(c.charCodeAt(0) - 0x660))
+    .replace(/[۰-۹]/g, c => String(c.charCodeAt(0) - 0x6f0));
+  const legacy = note.match(/^Reporté au\s+(\d{1,2})\/(\d{1,2})\/(\d{4})(?=\s|$|·)/i);
+  return legacy ? validDay(`${legacy[3]}-${legacy[2].padStart(2, "0")}-${legacy[1].padStart(2, "0")}`) : "";
+}
 function isParcelTreatedToday(p) {
+  if (["admin", "agent", "hub_manager"].includes(S?.user?.role)) {
+    // Physical reception is pending work, regardless of when it was recorded.
+    if (p?.status === "Réceptionné") return false;
+    const due = parcelTreatmentDueDay(p);
+    // Due today (or overdue) is still work to do while the deferred state remains.
+    if (due && due <= window.o24CasablancaDay()) return false;
+  }
   return ["Livré", "Refusé", "Annulé"].includes(p?.status) ||
     String(p?.status_updated_at || "").slice(0, 10) === localDayKey();
 }
@@ -138,7 +171,7 @@ function parcelPolicyBadges(p, compact = false) {
   const badges = [];
   if (notAllowed) badges.push(`<span class="tag bad parcel-policy-tag" title="Le destinataire ne doit pas ouvrir le colis avant le paiement.">${compact ? "Ne pas ouvrir" : "Non autorisé à ouvrir"}</span>`);
   if (exchange) badges.push(`<span class="tag blue parcel-policy-tag" title="Commande avec échange">${compact ? "Échange" : "Échange prévu"}</span>`);
-  if (p.stock_return_required) badges.push(`<span class="tag stock parcel-policy-tag" title="CMD depuis le stock : déduction à la création au Hub Central; retour réintégré au scan de réception d’une palette Retour vers Hub Central.">Stock</span>`);
+  if (p.stock_return_required) badges.push(`<span class="tag stock parcel-policy-tag" data-no-translate title="CMD depuis le stock : déduction à la création au Hub Central; retour réintégré au scan de réception d’une palette Retour vers Hub Central.">Stock</span>`);
   return badges.length ? `<div class="parcel-policy-badges">${badges.join("")}</div>` : "";
 }
 // Return tracking is a state separate from the delivery status: it only appears
@@ -1172,7 +1205,7 @@ function changeStatus(id) {
   const p = S.parcels.find((p) => p.id === id);
   const transitions = S.status_policy.driver_transitions;
   const options =
-    S.user.role === "admin" ? S.statuses.filter(s=>s!=="Vers Hub Central") : transitions[p.status] || [];
+    S.user.role === "admin" ? S.statuses.filter(s=>s!=="Vers Hub Central") : (transitions[p.status] || []).filter(s=>S.user.role!=="livreur"||!["Réceptionné","Retourné"].includes(s));
   if (!options.length) {
     toast("Ce colis est clôturé. Contactez l’administration.", true);
     return;
