@@ -119,7 +119,7 @@ function parcelTreatmentDueDay(p) {
   return legacy ? validDay(`${legacy[3]}-${legacy[2].padStart(2, "0")}-${legacy[1].padStart(2, "0")}`) : "";
 }
 function isParcelTreatedToday(p) {
-  if (["admin", "hub_manager", "hub_manager"].includes(S?.user?.role)) {
+  if (["admin", "hub_manager"].includes(S?.user?.role)) {
     // Physical reception is pending work, regardless of when it was recorded.
     if (p?.status === "Réceptionné") return false;
     const due = parcelTreatmentDueDay(p);
@@ -572,7 +572,7 @@ function clientSectionRemoved(key, user = S?.user) {
 function canAccessFulfillment(user = S?.user) {
   if (!user) return false;
   if (['admin', 'client'].includes(user.role)) return true;
-  if (!['hub_manager', 'hub_manager'].includes(user.role)) return false;
+  if (!['hub_manager'].includes(user.role)) return false;
   const hubId = Number(user.agent_hub_id), centralId = Number(S?.settings?.central_hub_id);
   return hubId > 0 && hubId === centralId
     && (S?.hubs || []).some(h => Number(h.id) === hubId && Number(h.active) === 1);
@@ -638,7 +638,7 @@ function shell() {
       )}</nav><div class="sidebar-bottom"><div class="sidebar-foot"><span>ORIENTAL24 · v1.8.1</span><span>${RUNTIME.demo?"VERSION DÉMO":"MODE SANS DÉMO"}</span></div></div></aside><div class="layout"><header class="topbar"><div class="flex"><button class="icon-btn mobile-menu" onclick="$('.sidebar').classList.toggle('open')" aria-label="Ouvrir le menu">${icon("menu")}</button><div class="breadcrumb">Espace ${u.role === "admin" ? "administrateur" : roleName(u.role)}${icon("chevron")}<strong id="breadcrumb-title">${workspacePageTitle(view)}</strong></div></div><div class="top-actions"><button class="icon-btn global-refresh-button" onclick="reloadView()" aria-label="Actualiser" title="Actualiser toutes les données" ${refreshBusy?'disabled':''}>${icon("refresh")}</button>${u.role==='support'?'':globalSearchMarkup()}${window.o24HelpButton()}${window.o24LanguageButton()}${u.role==='support'?'':`<button class="icon-btn notification" onclick="opsOffline?showAnnouncement():navigate('notifications')" aria-label="Notifications">${icon("bell")}</button>`}<div class="top-profile-wrap"><button type="button" class="top-profile" id="user-menu-btn" aria-haspopup="true" aria-expanded="false" onclick="toggleUserMenu(event)"><span class="avatar orange">${profileAvatarContent(u)}</span><span class="profile-text"><b>${esc(u.name)}</b><small>${roleName(u.role)}</small></span>${icon("down")}</button><div class="user-popover" id="user-popover" role="menu" hidden><button type="button" role="menuitem" onclick="userMenuGo('profile')"><span class="user-pop-ico" aria-hidden="true">${icon("user")}</span><span>Profil</span></button><button type="button" role="menuitem" class="danger" onclick="userMenuGo('logout')"><span class="user-pop-ico" aria-hidden="true">${icon("logout")}</span><span>Déconnexion</span></button></div></div></div></header><main class="content" id="content"></main></div>`;
 }
 function adminHubSectionRemoved(section, u = S?.user) {
-  return ['admin','hub_manager','hub_manager'].includes(u?.role) && ['security','support-team'].includes(section);
+  return ['admin','hub_manager'].includes(u?.role) && ['security','support-team'].includes(section);
 }
 function driverFinanceSectionRemoved(section, u = S?.user) {
   return u?.role === 'admin' && section === 'driver-finance';
