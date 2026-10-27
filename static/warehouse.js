@@ -144,7 +144,7 @@ function whInjectRow(id){
   const div=document.createElement('div');
   div.className='wh-row flex';
   div.style.cssText='gap:6px;flex-wrap:wrap;margin-top:6px;width:100%';
-  div.innerHTML=`${['admin','agent'].includes(role)?`<button class="btn sm" type="button" onclick="whStorage(${id})">📦 Entrepôt</button>
+  div.innerHTML=`${['admin','hub_manager'].includes(role)?`<button class="btn sm" type="button" onclick="whStorage(${id})">📦 Entrepôt</button>
    <button class="btn sm" type="button" onclick="whReception(${id})">👁️ Réception</button>`:''}
    ${role==='admin'?`<button class="btn sm" type="button" onclick="whDrone(${id})">🚁 Livraison drone</button>
    <button class="btn sm" type="button" onclick="warehousePanel()">🤖 Entrepôt &amp; robotique</button>`:''}`;
