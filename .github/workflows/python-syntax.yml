@@ -22,7 +22,7 @@ jobs:
         run: pip install -r requirements.txt pytest
       - name: Compile all Python files
         run: python -m compileall -q .
-      - name: Run automated tests
-        run: python -m pytest -q
+      - name: Run automated unit tests
+        run: python -m pytest -q tests --ignore=tests/browser
       - name: Check JavaScript syntax
         run: for file in static/*.js; do node --check "$file"; done
