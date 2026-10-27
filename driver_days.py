@@ -50,7 +50,8 @@ def register_driver_days(app, services):
     def calc(c, did, day):
         """Live : livrés du jour, COD brut, commissions (barème à la ville), attendu caisse, dernier état de clôture."""
         rows = c.execute("""SELECT id,city_id,status,amount FROM parcels WHERE driver_id=?
-                            AND status IN ('Livré','Retourné','Refusé') AND substr(updated_at,1,10)=?""", (did, day)).fetchall()
+                            AND status IN ('Livré','Retourné','Refusé')
+                            AND substr(COALESCE(NULLIF(status_updated_at,''),updated_at),1,10)=?""", (did, day)).fetchall()
         livres = [p for p in rows if p['status'] == 'Livré']
         cod = sum(cents(p['amount']) for p in livres)
         commission = sum(rate_for(c, did, p['city_id'], p['status']) for p in rows)
