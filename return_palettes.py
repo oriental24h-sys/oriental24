@@ -255,7 +255,7 @@ def register_return_palettes(app,s):
                     reason=text(d,'reason',600,True);c.execute("UPDATE ops_documents SET status='Annulé',cancel_reason=?,revision=revision+1 WHERE id=?",(reason,did));c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,));audit(c,did,u,'Palette retour annulée avant envoi',{'reason':reason})
                     return result(c,u,d,fp,get(c,did,u))
                 if u['role']=='hub_manager':
-                    # tinydl l'agent kd'ha l'envoi depuis son hub (déjà garanti par get())
+                    # Le responsable du hub effectue l'envoi depuis son hub (déjà garanti par get()).
                     pass
                 c.execute("UPDATE ops_documents SET status='En transit',dispatched_at=?,revision=revision+1 WHERE id=?",(at,did));audit(c,did,u,'Retour expédié au vendeur',{'count':len(ls),'transport':doc['transport'],'tracking_code':doc['tracking_code'],'lots':doc['lots']})
                 for l in ls:event(c,l['parcel_id'],l['initial_status'],doc['reference']+' · retour expédié au vendeur, remise encore attendue',u)
