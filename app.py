@@ -192,11 +192,9 @@ def user():
             result.update(own_company_profile(c,result['id']))
             pref=c.execute('SELECT language FROM client_profile_extras WHERE user_id=?',(result['id'],)).fetchone()
             result['profile_language']=pref['language'] if pref else ''
-        # Persist hub_manager while retaining the old internal alias for legacy module checks.
-        # New route scopes still need to be migrated to explicit Hub Manager policies.
-        if result['role'] in ('agent','hub_manager'):
-            result['role_display']='Responsable de hub'
-            result['role']='agent'
+        # Hub managers keep their canonical role throughout the application.
+        if result['role'] == 'hub_manager':
+            result['role_display'] = 'Responsable de hub'
         if result['role']=='support':
             result['city_ids']=[r['city_id'] for r in c.execute('SELECT city_id FROM support_cities WHERE support_id=? ORDER BY city_id',(u['id'],))]
         return result
@@ -206,7 +204,7 @@ def auth(*roles):
         def wrapped(*a,**kw):
             u=user()
             if roles and u['role'] not in roles: raise APIError('Accès non autorisé.',403)
-            if u.get('role_display')=='Responsable de hub':
+            if u['role']=='hub_manager'
                 if not hub_manager_route_allowed(request.method,request.path):
                     raise APIError('Accès refusé : cette route n’est pas encore validée pour le Hub.',403)
                 if hub_manager_requires_active_hub(request.path):
@@ -249,7 +247,7 @@ def team_member_ids(c,lead_id):
     return driver_team_member_ids(c,lead_id)
 def scope(u,alias='p',c=None,follow_drivers=False,include_sent=False):
     if u['role']=='support': return f'{alias}.support_id=?',[u['id']]
-    if u['role']=='agent': return (hub_read_parcel_scope if include_sent else hub_tracking_parcel_scope if follow_drivers else hub_parcel_scope)(c,alias,u.get('agent_hub_id')) if c is not None else ('1=0',[])
+    if u['role']=='hub_manager': return (hub_read_parcel_scope if include_sent else hub_tracking_parcel_scope if follow_drivers else hub_parcel_scope)(c,alias,u.get('agent_hub_id')) if c is not None else ('1=0',[])
     if u['role']=='client': return f'{alias}.client_id=? AND NOT EXISTS(SELECT 1 FROM company_deleted_orders cd WHERE cd.parcel_id={alias}.id)',[u['id']]
     if u['role']=='livreur':
         # Un compte sans Hub reste en revue Admin : aucune tâche colis avant rattachement explicite.
@@ -261,7 +259,7 @@ def scope(u,alias='p',c=None,follow_drivers=False,include_sent=False):
     return '1=1',[]
 
 def hub_status_capabilities(c,rows,u):
-    if u['role']!='agent' or not rows:return rows
+    if u['role']!='hub_manager' or not rows:return rows
     # Tracking rights do not grant status-editing rights after an inter-Hub send.
     condition,args=hub_tracking_parcel_scope(c,'p',u.get('agent_hub_id'))
     editable=set()
@@ -378,7 +376,7 @@ def bootstrap():
     with conn() as c:
         if u['role']=='admin':
             users=[dict(r) for r in c.execute("SELECT id,name,email,role,company,phone,active,client_type,agent_hub_id,driver_hub_id,team_lead_id FROM users ORDER BY id")]
-        elif u['role']=='agent' and type(u.get('agent_hub_id')) is int:
+        elif u['role']=='hub_manager' and type(u.get('agent_hub_id')) is int:
             users=[dict(r) for r in c.execute("SELECT id,name,email,role,company,phone,active,driver_hub_id,team_lead_id FROM users WHERE role='livreur' AND driver_hub_id=? AND EXISTS(SELECT 1 FROM ops_hubs h WHERE h.id=users.driver_hub_id AND h.active=1) ORDER BY name",(u['agent_hub_id'],))]
         elif u['role']=='livreur' and type(u.get('driver_hub_id')) is int and u['driver_hub_id']>0:
             users=[dict(r) for r in c.execute("SELECT id,name,email,role,phone,active,driver_hub_id,team_lead_id FROM users WHERE team_lead_id=? AND role='livreur' AND active=1 AND driver_hub_id=? AND EXISTS(SELECT 1 FROM ops_hubs h WHERE h.id=users.driver_hub_id AND h.active=1) ORDER BY name",(u['id'],u['driver_hub_id']))]
@@ -389,7 +387,7 @@ def bootstrap():
         cities=[dict(r) for r in c.execute('SELECT * FROM cities ORDER BY name')]
         if u['role']=='support':
             assigned=set(u.get('city_ids',[]));cities=[city for city in cities if city['id'] in assigned]
-        elif u['role']=='agent':
+        elif u['role']=='hub_manager':
             active_hub=c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone()
             if active_hub:
                 assigned={r['id'] for r in c.execute('SELECT id FROM cities WHERE hub_id=?',(u.get('agent_hub_id'),))}
@@ -401,12 +399,12 @@ def bootstrap():
             settings={r['key']:r['value'] for r in c.execute('SELECT * FROM settings')}
         else:
             settings={r['key']:r['value'] for r in c.execute('SELECT key,value FROM settings WHERE key IN (%s)'%','.join('?'*len(safe_setting_keys)),safe_setting_keys)}
-            if u['role']=='agent':
+            if u['role']=='hub_manager':
                 central_setting=c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
                 if central_setting:settings['central_hub_id']=central_setting['value']
         if u['role']=='admin':
             hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')]
-        elif u['role']=='agent' and u.get('agent_hub_id'):
+        elif u['role']=='hub_manager' and u.get('agent_hub_id'):
             hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1',(u['agent_hub_id'],))]
         elif u['role']=='client':
             hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 ORDER BY h.name')]
@@ -451,17 +449,17 @@ def create_parcel():
         city_support=dict(assigned) if assigned and assigned['id'] else None
     return jsonify(ok=True,tracking=track,city_support=city_support)
 @app.patch('/api/parcels/<int:pid>')
-@auth('admin','livreur','client','agent')
+@auth('admin','livreur','client','hub_manager')
 def update_parcel(pid):
     d=request.get_json() or {};u=user()
     if u['role']=='livreur' and isinstance(d,dict) and d.get('status') in DRIVER_HUB_ONLY_STATUSES:
         raise APIError('Cette opération est réservée au Hub ou à l’administration.',403)
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
-        p=parcel(c,pid,u,follow_drivers=u['role']=='agent')
+        p=parcel(c,pid,u,follow_drivers=u['role']=='hub_manager')
         if isinstance(d,dict) and d.get('status')=='Vers Hub Central':
             raise APIError('Cet état de transit est géré automatiquement (obsolète) ; il ne peut pas être fixé manuellement.',409)
-        if u['role']=='agent':
+        if u['role']=='hub_manager':
             # Scoped to physical stock or a courier handoff recorded by this Hub.
             # Status-only permission: no generic parcel or assignment editing rights.
             allowed={'status','revision','note','reason_code','next_attempt_at','otp'}
@@ -522,7 +520,7 @@ def update_parcel(pid):
             if s=='Livré' and p.get('otp_required'):c.execute('UPDATE parcels SET otp_verified_at=? WHERE id=?',(now(),pid))
             c.execute('UPDATE parcels SET status=?,note=?,updated_at=? WHERE id=?',(s,note or p['note'],now(),pid))
             event(c,pid,s,note or 'Statut mis à jour',u)
-            if u['role']=='agent':
+            if u['role']=='hub_manager':
                 append_audit_log(c,actor_id=u['id'],actor_name=u['name'],action='hub_parcel_status_changed',
                     entity_type='parcel',entity_id=pid,old_value={'status':p['status']},new_value={'status':s},
                     metadata={'hub_id':u['agent_hub_id'],'note':note},created_at=now())
@@ -727,7 +725,7 @@ def save_support_cities(c,support_id,ids):
     for city_id in ids:c.execute('INSERT INTO support_cities(city_id,support_id,assigned_at) VALUES(?,?,?)',(city_id,support_id,now()))
 
 def validate_hub_manager_slot(c,hub_id,exclude_user_id=None):
-    sql="SELECT id,name FROM users WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','agent')"
+    sql="SELECT id,name FROM users WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager')"
     args=[hub_id]
     if exclude_user_id is not None:
         sql+=' AND id!=?';args.append(exclude_user_id)
@@ -774,7 +772,6 @@ def validate_driver_team_hub(c,driver_id,hub_id,lead_id=None):
 @auth('admin')
 def add_user():
     d=request.get_json() or {}; role=d.get('role');actor=user()
-    if role=='agent':role='hub_manager'  # compatibility for an old admin screen during rollout
     if role not in ['client','livreur','hub_manager','support']:raise APIError('Rôle invalide.')
     generated=d.get('generate_password') is True
     pw=generate_temporary_password() if generated else text(d,'password',maxlen=128)
@@ -821,7 +818,7 @@ def edit_user(uid):
             if v['driver_archived'] and d.get('active'):raise APIError('Désarchivez le livreur depuis sa fiche.',409)
             c.execute('UPDATE users SET driver_blocked=?,driver_revision=driver_revision+1 WHERE id=?',(int(not bool(d.get('active'))),uid))
         hub_id=v['agent_hub_id']
-        if v['role'] in ('agent','hub_manager'):
+        if v['role'] in ('hub_manager','hub_manager'):
             hub_id=d.get('agent_hub_id',hub_id)
             hub_row=c.execute('SELECT active FROM ops_hubs WHERE id=?',(hub_id,)).fetchone() if type(hub_id) is int else None
             if not hub_row or (bool(d.get('active')) and not hub_row['active']):raise APIError('Choisissez un Hub actif pour ce responsable.')
@@ -1161,7 +1158,7 @@ if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':
             hid=c.execute("INSERT INTO ops_hubs(name,city_id,address,active,created_at) VALUES(?,?,?,1,?)",('Hub Oujda · démo',city['id'],'Zone logistique — données fictives',t)).lastrowid
         home_city=c.execute('SELECT city_id FROM ops_hubs WHERE id=?',(hid,)).fetchone()['city_id']
         c.execute('UPDATE cities SET hub_id=? WHERE id=? AND hub_id IS NULL',(hid,home_city))
-        if not c.execute("SELECT 1 FROM users WHERE lower(email)=lower(?)",('agent@oriental24.ma',)).fetchone() and not c.execute("SELECT 1 FROM users WHERE agent_hub_id=? AND role IN ('hub_manager','agent') AND active=1",(hid,)).fetchone():
+        if not c.execute("SELECT 1 FROM users WHERE lower(email)=lower(?)",('agent@oriental24.ma',)).fetchone() and not c.execute("SELECT 1 FROM users WHERE agent_hub_id=? AND role IN ('hub_manager','hub_manager') AND active=1",(hid,)).fetchone():
             c.execute('INSERT INTO users(name,email,password,role,company,phone,active,client_type,agent_hub_id,created_at) VALUES(?,?,?,?,?,?,1,?,?,?)',('Nadia Réception','agent@oriental24.ma',generate_password_hash('Oriental24!Demo'),'hub_manager','ORIENTAL24','0600000000','vendeur',hid,t))
 
 
