@@ -22,7 +22,7 @@ def register_fusion_reception(app,s):
         if not isinstance(d,dict):raise Error('Objet JSON requis.')
         return d
     def access(u):
-        if u['role'] not in ('admin','agent'):raise Error('Fusion des réceptions réservée à Admin et aux agents de réception.',403)
+        if u['role'] not in ('admin','hub_manager'):raise Error('Fusion des réceptions réservée à Admin et aux agents de réception.',403)
     def palettes(c,u,ids):
         if not isinstance(ids,list) or not 2<=len(ids)<=30 or any(type(i) is not int or i<=0 for i in ids) or len(ids)!=len(set(ids)):
             raise Error('Sélectionnez 2 à 30 palettes distinctes en attente de réception.')
@@ -30,7 +30,7 @@ def register_fusion_reception(app,s):
         for pid in ids:
             r=c.execute('SELECT d.*,m.partner_reference,m.transport FROM ops_documents d JOIN partner_palette_meta m ON m.document_id=d.id WHERE d.id=? AND d.kind=?',(pid,KIND)).fetchone()
             if not r:raise Error('Palette introuvable.',404)
-            if u['role']=='agent' and r['destination_hub_id']!=u['agent_hub_id']:
+            if u['role']=='hub_manager' and r['destination_hub_id']!=u['agent_hub_id']:
                 raise Error('Palette introuvable.',404)
             if r['status'] not in ('En transit','Partiellement reçu'):raise Error(r['reference']+' : déjà réceptionnée ou non expédiée — fusion impossible.',409)
             rows.append(dict(r))
@@ -45,19 +45,19 @@ def register_fusion_reception(app,s):
         ids=[r['palette_id'] for r in c.execute('SELECT palette_id FROM fusion_batch_palettes WHERE batch_id=?',(bid,))]
         pl=[dict(j) for j in c.execute('SELECT id,reference,client_id,client_name,status FROM ops_documents WHERE id IN (%s)' % (','.join('?'*len(ids))),ids)]
         ls=lines(c,ids)
-        if u['role']=='agent':
+        if u['role']=='hub_manager':
             h=c.execute('SELECT hub_destination_id FROM fusion_batches WHERE id=?',(bid,)).fetchone()
             if h and h['hub_destination_id']!=u['agent_hub_id']:raise Error('Aucun pack de fusion.',404)
         received=sum(bool(l['received_at']) for l in ls);missing=sum(bool(l['missing_at']) for l in ls)
         return {'id':bid,'reference':f'FUS-{bid:05d}','palettes':pl,'lines':ls,'count':len(ls),'received':received,'missing':missing,'remaining':len(ls)-received-missing,'closed':bool(b['closed_at'])}
     def view_payload(c,bid,u):
         value=payload(c,bid,u)
-        if u['role']=='agent':
+        if u['role']=='hub_manager':
             value['lines']=hub_received_lines(value['lines'],u.get('agent_hub_id'))
         return value
 
     @app.post('/api/partner-palettes/fusion')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def fusion_create():
         u=user();access(u);d=body()
         with conn() as c:
@@ -70,13 +70,13 @@ def register_fusion_reception(app,s):
             return jsonify(view_payload(c,bid,u))
 
     @app.get('/api/partner-palettes/fusion/<int:bid>')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def fusion_get(bid):
         u=user();access(u)
         with conn() as c:return jsonify(view_payload(c,bid,u))
 
     @app.post('/api/partner-palettes/fusion/<int:bid>/scan')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def fusion_scan(bid):
         u=user();access(u);d=body()
         trk=str(d.get('tracking','')).strip()
@@ -86,7 +86,7 @@ def register_fusion_reception(app,s):
             b=c.execute('SELECT * FROM fusion_batches WHERE id=?',(bid,)).fetchone()
             if not b:raise Error('Aucun pack de fusion.',404)
             if b['closed_at']:raise Error('Pack déjà clôturé.',409)
-            if u['role']=='agent' and b['hub_destination_id']!=u['agent_hub_id']:raise Error('Aucun pack de fusion.',404)
+            if u['role']=='hub_manager' and b['hub_destination_id']!=u['agent_hub_id']:raise Error('Aucun pack de fusion.',404)
             ids=[r['palette_id'] for r in c.execute('SELECT palette_id FROM fusion_batch_palettes WHERE batch_id=?',(bid,))]
             ls=lines(c,ids)
             l=next((x for x in ls if x['tracking']==trk),None)
@@ -107,14 +107,14 @@ def register_fusion_reception(app,s):
             return jsonify(view_payload(c,bid,u))
 
     @app.post('/api/partner-palettes/fusion/<int:bid>/close')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def fusion_close(bid):
         u=user();access(u);d=body()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
             b=c.execute('SELECT * FROM fusion_batches WHERE id=?',(bid,)).fetchone()
             if not b:raise Error('Aucun pack de fusion.',404)
-            if u['role']=='agent' and b['hub_destination_id']!=u['agent_hub_id']:raise Error('Aucun pack de fusion.',404)
+            if u['role']=='hub_manager' and b['hub_destination_id']!=u['agent_hub_id']:raise Error('Aucun pack de fusion.',404)
             ids=[r['palette_id'] for r in c.execute('SELECT palette_id FROM fusion_batch_palettes WHERE batch_id=?',(bid,))]
             paly=payload(c,bid,u)
             if paly['closed']:
