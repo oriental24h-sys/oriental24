@@ -261,7 +261,7 @@ def register_connected_ops(app, s):
                     FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id
                     WHERE p.driver_id=? AND p.status NOT IN ('Livré','Retourné','Annulé')
                     AND (?='admin' OR p.current_hub_id=? OR (?='livreur' AND p.current_hub_id IS NULL))
-                    ORDER BY p.id''', (did,u['role'],u.get('agent_hub_id'),u['role']))]
+                    ORDER BY p.id''', (did,u['role'],u.get('agent_hub_id') if u['role']=='hub_manager' else u.get('driver_hub_id'),u['role']))]
         if not rows: raise Error('Aucun colis ouvert pour ce livreur dans le périmètre autorisé.')
         geos = [GEO.get(r['city'] or '') for r in rows]
         order = order_route(geos) if len(rows) > 1 else list(range(len(rows)))
