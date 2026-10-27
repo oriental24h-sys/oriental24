@@ -76,7 +76,7 @@ class HubPaletteFlowTests(unittest.TestCase):
             row = db.execute('SELECT * FROM parcels WHERE id=?', (parcel_id,)).fetchone()
             if not row:
                 raise APIError('Colis introuvable.', 404)
-            if actor['role'] == 'agent' and row['current_hub_id'] != actor.get('agent_hub_id'):
+            if actor['role'] == 'hub_manager' and row['current_hub_id'] != actor.get('agent_hub_id'):
                 raise APIError('Colis introuvable dans votre Hub.', 404)
             return dict(row)
 
@@ -137,9 +137,9 @@ class HubPaletteFlowTests(unittest.TestCase):
                     (1,'Central City','Oriental',90),(2,'Secondary A','Oriental',10),(3,'Secondary B','Oriental',20);
                 INSERT INTO users(id,name,email,password,role,company,phone,active,agent_hub_id,driver_hub_id,driver_revision)
                     VALUES(1,'Admin','admin@example.test','x','admin','ORIENTAL24','0600000000',1,NULL,NULL,1),
-                          (910,'Manager A','manager-a@example.test','x','agent','ORIENTAL24','0600000010',1,10,NULL,1),
-                          (990,'Manager Central','manager-c@example.test','x','agent','ORIENTAL24','0600000090',1,90,NULL,1),
-                          (920,'Manager B','manager-b@example.test','x','agent','ORIENTAL24','0600000020',1,20,NULL,1),
+                          (910,'Manager A','manager-a@example.test','x','hub_manager','ORIENTAL24','0600000010',1,10,NULL,1),
+                          (990,'Manager Central','manager-c@example.test','x','hub_manager','ORIENTAL24','0600000090',1,90,NULL,1),
+                          (920,'Manager B','manager-b@example.test','x','hub_manager','ORIENTAL24','0600000020',1,20,NULL,1),
                           (101,'Courier A','courier-a@example.test','x','livreur','ORIENTAL24','0600000101',1,NULL,10,1),
                           (202,'Courier B','courier-b@example.test','x','livreur','ORIENTAL24','0600000202',1,NULL,20,1);
                 INSERT INTO parcels(id,tracking,recipient,status,amount,driver_id,client_id,city_id,note,created_at,updated_at,invoice_id,current_hub_id,origin_hub_id)
@@ -174,7 +174,7 @@ class HubPaletteFlowTests(unittest.TestCase):
 
     @staticmethod
     def headers(role, hub_id=None, actor_id=1):
-        result = {'X-Role': role, 'X-Actor': str(actor_id), 'X-Name': 'Test actor'}
+        result = {'X-Role': 'hub_manager' if role == 'agent' else role, 'X-Actor': str(actor_id), 'X-Name': 'Test actor'}
         if hub_id is not None:
             result['X-Hub'] = str(hub_id)
         return result
