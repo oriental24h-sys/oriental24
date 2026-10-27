@@ -1,4 +1,4 @@
-"""v1.6.7 — Console « Palettes » du hub, miroir de l'ancien écran de réception (admin/agent).
+"""v1.6.7 — Console « Palettes » du hub, miroir de l'ancien écran de réception (admin/hub_manager).
 Tabs Default (palettes société -> hub), Retours (palettes retour hub -> vendeur), A recevoir
 (ce qui attend encore une réponse, avec relance automatique après 7 jours sans réponse du vendeur).
 Réception = scan des colis cochés ; clôture = les non scannés passent « non réceptionnés » et
