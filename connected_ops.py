@@ -64,7 +64,7 @@ def register_connected_ops(app, s):
 
     # ---------- API : captation dimensionnelle ----------
     @app.post('/api/parcels/<int:pid>/dimensions')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def dimensions_set(pid):
         d = request.get_json(silent=True) or {}; u = user()
         wants_dims = any(k in d for k in ('dim_l', 'dim_w', 'dim_h'))
@@ -100,7 +100,7 @@ def register_connected_ops(app, s):
         return jsonify(**out)
 
     @app.get('/api/parcels/<int:pid>/dimensions')
-    @auth('admin', 'agent', 'livreur')
+    @auth('admin', 'hub_manager', 'livreur')
     def dimensions_get(pid):
         u = user()
         with conn() as c:
@@ -110,7 +110,7 @@ def register_connected_ops(app, s):
 
     # ---------- API : RFID ----------
     @app.post('/api/rfid/scan')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def rfid_scan():
         d = request.get_json(silent=True) or {}; u = user()
         portal = str(d.get('portal') or 'Portail principal')[:60]
@@ -141,7 +141,7 @@ def register_connected_ops(app, s):
         return jsonify(ok=True, batch=batch, portal=portal, matched=matched, unmatched=unmatched)
 
     @app.get('/api/rfid/inventory')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def rfid_inventory():
         with conn() as c:
             expected = [dict(r) for r in c.execute('SELECT id,tracking,status,rfid_tag FROM parcels WHERE rfid_tag IS NOT NULL ORDER BY id')]
@@ -158,7 +158,7 @@ def register_connected_ops(app, s):
 
     # ---------- API : picking guidé (pick-by-voice) ----------
     @app.post('/api/pick-sessions')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def pick_session_create():
         d = request.get_json(silent=True) or {}; u = user()
         ids = d.get('parcel_ids') or []
@@ -183,7 +183,7 @@ def register_connected_ops(app, s):
         return jsonify(ok=True, id=sid, steps=len(steps), order=[x['slot'] for x in steps])
 
     @app.get('/api/pick-sessions/<int:sid>')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def pick_session_get(sid):
         with conn() as c:
             sess = c.execute('SELECT * FROM pick_sessions WHERE id=?', (sid,)).fetchone()
@@ -197,7 +197,7 @@ def register_connected_ops(app, s):
                        next_step=nxt)
 
     @app.post('/api/pick-sessions/<int:sid>/steps/<int:step_id>/confirm')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def pick_step_confirm(sid, step_id):
         u = user()
         with conn() as c:
@@ -215,7 +215,7 @@ def register_connected_ops(app, s):
         return jsonify(ok=True, done=done, total=total)
 
     @app.get('/api/pick-sessions')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def pick_sessions_list():
         with conn() as c:
             rows = [dict(r) for r in c.execute('SELECT * FROM pick_sessions ORDER BY id DESC LIMIT 15')]
@@ -223,7 +223,7 @@ def register_connected_ops(app, s):
 
     # ---------- API : plan de chargement ----------
     @app.get('/api/load-plan')
-    @auth('admin', 'agent', 'livreur')
+    @auth('admin', 'hub_manager', 'livreur')
     def load_plan():
         u = user()
         did = request.args.get('driver_id', type=int) or (u['id'] if u['role'] == 'livreur' else None)
@@ -259,7 +259,7 @@ def register_connected_ops(app, s):
 
     # ---------- API : chantier vocal (commandes préparées) ----------
     @app.get('/api/voice-commands')
-    @auth('admin', 'agent', 'livreur')
+    @auth('admin', 'hub_manager', 'livreur')
     def voice_commands():
         return jsonify(commands=[
             {'key': 'suivant', 'say': 'colis suivant', 'label': 'Colis suivant'},
