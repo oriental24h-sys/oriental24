@@ -104,8 +104,10 @@ def register_driver_days(app, services):
         }
 
     def valid_day(raw):
-        d = (raw or '').strip()
+        d = (raw or '').strip() if isinstance(raw, str) else ''
         try:
+            if not __import__('re').fullmatch(r'\d{4}-\d{2}-\d{2}', d):
+                raise ValueError()
             day = _date.fromisoformat(d)
         except (TypeError, ValueError):
             raise Error('Jour invalide (AAAA-MM-JJ).')
