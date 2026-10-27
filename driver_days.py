@@ -2,7 +2,12 @@
 livré du jour, COD, commissions (barème à la ville), attendu caisse, remise Admin, écart,
 clôture/réouverture tracées. Module branché dans app.py comme driver_finance."""
 import json
+from datetime import datetime, date as _date
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from zoneinfo import ZoneInfo
 from flask import request, jsonify
+
+MOROCCO_TZ = ZoneInfo("Africa/Casablanca")
 
 
 def register_driver_days(app, services):
@@ -22,8 +27,13 @@ def register_driver_days(app, services):
 
     def cents(v):
         try:
-            return int(round(v * 100))
-        except (TypeError, ValueError):
+            if isinstance(v, bool) or v is None:
+                return 0
+            amount = Decimal(str(v))
+            if not amount.is_finite():
+                return 0
+            return int((amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        except (InvalidOperation, TypeError, ValueError, OverflowError):
             return 0
 
     def audit(c, did, u, action, details):
@@ -64,11 +74,10 @@ def register_driver_days(app, services):
     def valid_day(raw):
         d = (raw or '').strip()
         try:
-            from datetime import date as _date
             day = _date.fromisoformat(d)
-        except Exception:
+        except (TypeError, ValueError):
             raise Error('Jour invalide (AAAA-MM-JJ).')
-        if day > _date.today():
+        if day > datetime.now(MOROCCO_TZ).date():
             raise Error('Impossible de clôturer ou consulter un jour futur.')
         return day.isoformat()
 
@@ -102,9 +111,14 @@ def register_driver_days(app, services):
         day = valid_day(d.get('day'))
         amount = d.get('received_mad')
         try:
-            received = int(round(float(amount) * 100))
-        except (TypeError, ValueError):
-            raise Error('Montant de la remise invalide (MAD).')
+            if isinstance(amount, bool) or amount is None:
+                raise ValueError()
+            received_decimal = Decimal(str(amount).strip().replace(',', '.'))
+            if not received_decimal.is_finite() or received_decimal != received_decimal.quantize(Decimal('.01')):
+                raise ValueError()
+            received = int((received_decimal * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+        except (InvalidOperation, TypeError, ValueError, OverflowError):
+            raise Error('Montant de la remise invalide : utilisez MAD avec deux décimales maximum.')
         if received < 0 or received > 10000000:
             raise Error('Montant de la remise invalide (0 à 100 000 MAD).')
         reference = text(d, 'reference', False, 90)
