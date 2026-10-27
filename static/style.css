@@ -263,6 +263,10 @@ svg.ico {
   background: #fff3e5;
   color: #d28e36;
 }
+.tag.stock {
+  background: #fff0e0;
+  color: #c65300;
+}
 .tag.bad {
   background: #fdefef;
   color: #db7373;
