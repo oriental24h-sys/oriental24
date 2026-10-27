@@ -116,14 +116,11 @@ def register_connected_ops(app, s):
         portal = str(d.get('portal') or 'Portail principal')[:60]
         batch = _sec.token_hex(4).upper()
         tags = d.get('tags')
+        if not isinstance(tags, list) or not tags or len(tags) > 500:
+            raise Error('Lectures RFID réelles requises : envoyez une liste de tags lue par le lecteur (1 à 500).')
+        if any(not isinstance(t, str) or not t.strip() or len(t.strip()) > 64 for t in tags):
+            raise Error('Un ou plusieurs tags RFID sont invalides.')
         with conn() as c:
-            if not tags:
-                n = min(20, max(1, int(d.get('count') or 5)))
-                rows = c.execute('SELECT id,rfid_tag FROM parcels ORDER BY id DESC LIMIT 40').fetchall()
-                picks = rows[:n] if rows else []
-                tags = []
-                for r in picks:
-                    tags.append(ensure_rfid(c, r['id']))
             matched, unmatched = [], []
             for t in tags:
                 t = str(t).strip().upper()
@@ -161,12 +158,15 @@ def register_connected_ops(app, s):
     @auth('admin', 'hub_manager')
     def pick_session_create():
         d = request.get_json(silent=True) or {}; u = user()
-        ids = d.get('parcel_ids') or []
-        if not ids: raise Error('Liste de colis obligatoire (parcel_ids).')
+        ids = d.get('parcel_ids')
+        if not isinstance(ids, list) or not ids or len(ids) > 500:
+            raise Error('Liste de colis obligatoire (1 à 500 colis).')
+        if any(type(pid) is not int or pid <= 0 for pid in ids) or len(ids) != len(set(ids)):
+            raise Error('Les identifiants doivent être des entiers positifs distincts.')
         with conn() as c:
             steps = []
             for pid in ids:
-                p = parcel(c, int(pid), u)
+                p = parcel(c, pid, u)
                 st = c.execute('SELECT ps.status,ws.aisle,ws.pos,ws.level FROM parcel_storage ps LEFT JOIN warehouse_slots ws ON ws.id=ps.slot_id WHERE ps.parcel_id=?', (p['id'],)).fetchone()
                 if not st or st['status'] != 'stock':
                     raise Error('Colis %s non en stock — picking impossible.' % p['tracking'])
@@ -189,6 +189,11 @@ def register_connected_ops(app, s):
             sess = c.execute('SELECT * FROM pick_sessions WHERE id=?', (sid,)).fetchone()
             if not sess: raise Error('Session introuvable.', 404)
             steps = [dict(r) for r in c.execute('SELECT * FROM pick_steps WHERE session_id=? ORDER BY seq', (sid,))]
+            if u['role'] != 'admin':
+                if not steps:
+                    raise Error('Session introuvable.', 404)
+                for step in steps:
+                    parcel(c, step['parcel_id'], u)
         nxt = next((st for st in steps if st['state'] == 'en_attente'), None)
         for st in steps:
             st['voice'] = ('Emplacement %s, colis %s. Confirmez la prise.' % (st['slot_label'], st['tracking'])) if st['state'] == 'en_attente' else ('Colis %s confirmé.' % st['tracking'])
@@ -203,6 +208,7 @@ def register_connected_ops(app, s):
         with conn() as c:
             st = c.execute('SELECT * FROM pick_steps WHERE id=? AND session_id=?', (step_id, sid)).fetchone()
             if not st: raise Error('Étape introuvable.', 404)
+            parcel(c, st['parcel_id'], u)
             if st['state'] == 'finie': raise Error('Étape déjà confirmée.', 409)
             c.execute("UPDATE pick_steps SET state='finie',confirmed_at=? WHERE id=?", (now(), step_id))
             done = c.execute("SELECT COUNT(*) n FROM pick_steps WHERE session_id=? AND state='finie'", (sid,)).fetchone()['n']
