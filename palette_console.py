@@ -7,6 +7,7 @@ palette naît déjà « En transit ». Aucun effet financier. Les images jointes
 stocknées en base comme les preuves de colis, jamais sur disque."""
 import base64,csv,hashlib,io,json,re,datetime
 from flask import request,jsonify,Response
+from partner_intake import partner_intake_status
 from client_types import tracking_text
 
 PKIND='partner_palette'
@@ -201,8 +202,9 @@ def register_palette_console(app,s):
                 picked.append(l)
             if not picked:raise Error('Aucun colis à réceptionner dans cette sélection.',404)
             for l in picked:
-                c.execute("UPDATE parcels SET status='Réceptionné',current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(doc_['destination_hub_id'],at,l['parcel_id']))
-                event(c,l['parcel_id'],'Réceptionné',doc_['reference']+' · réception physique ORIENTAL24 à '+doc_['destination_name'],u)
+                received_status=partner_intake_status(c,l['parcel_id'],doc_['destination_hub_id'])
+                c.execute("UPDATE parcels SET status=?,current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(received_status,doc_['destination_hub_id'],at,l['parcel_id']))
+                event(c,l['parcel_id'],received_status,doc_['reference']+' · réception physique ORIENTAL24 à '+doc_['destination_name'],u)
                 c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
                 done.append(l['tracking'])
             pend=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND received_at IS NULL AND missing_at IS NULL',(did,)).fetchone()[0]
@@ -385,9 +387,10 @@ def register_palette_console(app,s):
         changed=c.execute('''UPDATE ops_document_lines SET received_at=?,received_by=?,active=0,missing_at=NULL,missing_by=NULL
             WHERE id=? AND missing_at=? AND received_at IS NULL''',(at,u['id'],line['id'],expected)).rowcount
         if changed!=1:raise Error('La ligne a changé. Actualisez puis recommencez.',409)
-        c.execute("UPDATE parcels SET status='Réceptionné',current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",
-                  (doc_['destination_hub_id'],at,line['parcel_id']))
-        event(c,line['parcel_id'],'Réceptionné',doc_['reference']+' · réception tardive au hub '+doc_['destination_name']+' après déclaration non réceptionnée',u)
+        received_status=partner_intake_status(c,line['parcel_id'],doc_['destination_hub_id'])
+        c.execute("UPDATE parcels SET status=?,current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",
+                  (received_status,doc_['destination_hub_id'],at,line['parcel_id']))
+        event(c,line['parcel_id'],received_status,doc_['reference']+' · réception tardive au hub '+doc_['destination_name']+' après déclaration non réceptionnée',u)
         received=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND received_at IS NOT NULL',(did,)).fetchone()[0]
         pending=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND received_at IS NULL AND missing_at IS NULL',(did,)).fetchone()[0]
         missing=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND missing_at IS NOT NULL',(did,)).fetchone()[0]

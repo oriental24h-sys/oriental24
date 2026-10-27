@@ -1,5 +1,6 @@
 """Stock reservation -> Central Hub parcel creation -> return-palette receipt stock restoration."""
 from client_types import tracking_for
+from fulfillment_history import record_stock_initial_events
 import json,re,secrets,hashlib
 from datetime import datetime,timedelta
 from flask import jsonify,request
@@ -62,7 +63,7 @@ def register_fulfillment(app, services):
         if not isinstance(d,dict):raise Error('Objet JSON requis.')
         return d
     def scope_order(c,oid,u):
-        o=c.execute('SELECT o.*,u.company,u.name client,p.tracking,p.status parcel_status FROM fulfillment_orders o JOIN users u ON u.id=o.client_id LEFT JOIN parcels p ON p.id=o.parcel_id WHERE o.id=?',(oid,)).fetchone()
+        o=c.execute('SELECT o.*,u.company,u.name client,p.tracking,p.status parcel_status,ci.name city FROM fulfillment_orders o JOIN users u ON u.id=o.client_id LEFT JOIN parcels p ON p.id=o.parcel_id LEFT JOIN cities ci ON ci.id=json_extract(o.shipping,\'$.city_id\') WHERE o.id=?',(oid,)).fetchone()
         if not o or (u['role']=='client' and o['client_id']!=u['id']):raise Error('Préparation introuvable.',404)
         if u['role']=='agent':
             require_central_agent(c,u)
@@ -83,11 +84,14 @@ def register_fulfillment(app, services):
     @auth('admin','client')
     def fulfillment_reserve():
         d=data();u=user();key=text(d,'request_key',maxlen=80)
+        for flag in ('not_allowed_to_open','is_exchange'):
+            if flag in d and type(d[flag]) is not bool:raise Error('Les options d’ouverture et d’échange doivent être cochées ou décochées.')
         if not re.fullmatch('[A-Za-z0-9_-]{20,80}',key):raise Error('Clé de saisie invalide.')
         items=d.get('items')
         if not isinstance(items,list) or not 1<=len(items)<=30:raise Error('Ajoutez de 1 à 30 références produit.')
         shipping={k:text(d,k,maxlen=300) for k in ['recipient','phone','address']}
         shipping.update(amount=number(d,'amount'),city_id=number(d,'city_id',1,1000000000,True),note=text(d,'note',False,600))
+        shipping.update(open_allowed=int(not d.get('not_allowed_to_open',False)),is_exchange=int(d.get('is_exchange',False)))
         if not re.fullmatch(r'\+?[\d\s-]{9,18}',shipping['phone']):raise Error('Téléphone invalide.')
         cid=u['id'] if u['role']=='client' else number(d,'client_id',1,1000000000,True)
         hashed=hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest()
@@ -144,7 +148,7 @@ def register_fulfillment(app, services):
                 if not city:raise Error('Cette ville n’est plus ouverte. Annulez la réservation pour libérer le stock.',409)
                 tracking=tracking_for(c,o['client_id'],sh.get('tracking'),Error,ignore_order=oid);t=now()
                 fee,ret=services['tariff_fees_for'](c,o['client_id'],dict(city)) if services.get('tariff_fees_for') else (city['fee'],city['return_fee'])
-                pid=c.execute("INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,status,product,note,created_at,updated_at,current_hub_id) VALUES(?,?,?,?,?,?,?,?,?,'Ramassé',?,?,?,?,?)",(tracking,o['client_id'],sh['recipient'],sh['phone'],sh['address'],city['id'],sh['amount'],fee,ret,'; '.join(l['sku']+' × '+str(l['quantity']) for l in o['lines']),sh['note'],t,t,hub['id'])).lastrowid
+                pid=c.execute("INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,status,product,note,created_at,updated_at,current_hub_id,open_allowed,is_exchange) VALUES(?,?,?,?,?,?,?,?,?,'Ramassé',?,?,?,?,?,?,?)",(tracking,o['client_id'],sh['recipient'],sh['phone'],sh['address'],city['id'],sh['amount'],fee,ret,'; '.join(l['sku']+' × '+str(l['quantity']) for l in o['lines']),sh['note'],t,t,hub['id'],sh.get('open_allowed',1),sh.get('is_exchange',0))).lastrowid
                 for l in o['lines']:
                     p=c.execute('SELECT * FROM products WHERE id=? AND client_id=?',(l['product_id'],o['client_id'])).fetchone()
                     if not p or p['quantity']<reserved(c,p['id']):raise Error('Stock physique incohérent avec les réservations. Contrôle requis.',409)
@@ -153,6 +157,7 @@ def register_fulfillment(app, services):
                     c.execute('INSERT INTO movements(product_id,actor_id,delta,note,created_at,fulfillment_order_id) VALUES(?,?,?,?,?,?)',
                               (l['product_id'],u['id'],-l['quantity'],f"CMD stock créée · PREP-{oid:05d} · {l['sku']}",t,oid))
                 c.execute("UPDATE fulfillment_orders SET status='Préparé',parcel_id=?,dispatch_hub_id=?,stock_deducted_at=?,processed_at=?,processed_by=? WHERE id=?",(pid,hub['id'],t,t,u['id'],oid))
+                record_stock_initial_events(c,{**o,'parcel_id':pid,'processed_at':t,'processed_by':u['id']})
                 event(c,pid,'Ramassé','Préparation physique validée · stock déduit · PREP-'+str(oid),u)
             elif action=='restock':
                 raise Error('La remise en stock se fait automatiquement au scan de réception de la palette retour au Hub Central.',409)

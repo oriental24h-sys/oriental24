@@ -3,6 +3,7 @@ No parcel creation, tracking replacement, financial transaction or automatic rec
 """
 import csv,io,json,hashlib,re
 from flask import request,jsonify,Response
+from partner_intake import partner_intake_status
 from client_types import tracking_text
 from hub_access import hub_received_lines
 
@@ -370,8 +371,9 @@ def register_partner_palettes(app,s):
         at=now()
         for l in received:
             c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
-            c.execute("UPDATE parcels SET status='Réceptionné',current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(doc['destination_hub_id'],at,l['parcel_id']))
-            event(c,l['parcel_id'],'Réceptionné',doc['reference']+' · réception physique ORIENTAL24 à '+doc['destination_name'],u)
+            received_status=partner_intake_status(c,l['parcel_id'],doc['destination_hub_id'])
+            c.execute("UPDATE parcels SET status=?,current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(received_status,doc['destination_hub_id'],at,l['parcel_id']))
+            event(c,l['parcel_id'],received_status,doc['reference']+' · réception physique ORIENTAL24 à '+doc['destination_name'],u)
         complete=len(received)==len(pending)
         c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Reçu' if complete else 'Partiellement reçu',at if complete else None,did))
         audit(c,did,u,'Réception complète confirmée' if complete else 'Réception partielle confirmée',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'hub_id':doc['destination_hub_id']})

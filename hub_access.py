@@ -7,6 +7,10 @@ import re
 import sqlite3
 
 HUB_MANAGER_SCOPED_ROUTES = (
+    # Fulfillment endpoints enforce an active, explicitly configured Central Hub.
+    ('GET', r'/api/fulfillment/orders'),
+    ('GET', r'/api/fulfillment/orders/\d+'),
+    ('POST', r'/api/fulfillment/orders/\d+/ship'),
     ('GET', r'/api/hub-manager-analytics'),
     ('GET', r'/api/billing'), ('GET', r'/api/billing/export'),
     ('GET', r'/api/billing/livreur/\d+'),
@@ -97,6 +101,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
 )
 
 HUB_OPERATIONAL_PREFIXES = (
+    '/api/fulfillment/',
     '/api/hub-manager-analytics',
     '/api/hub-billing',
     '/api/billing',
@@ -185,6 +190,22 @@ def hub_document_lines_at_hub(lines, hub_id):
     return [line for line in lines if type(line.get('current_hub_id')) is int and line.get('current_hub_id')==hub_id]
 
 
+def hub_transfer_manifest_lines(lines, document, hub_id):
+    """A manifest is shipment history, not a query of current physical stock.
+
+    The source keeps its full manifest. The destination can read departed/received
+    lines, without acquiring custody or access to unsent source parcels.
+    """
+    if hub_manager_transfer_scope(document, hub_id, 'departure'):
+        return list(lines)
+    if not hub_manager_transfer_scope(document, hub_id, 'arrival'):
+        return []
+    legacy_departed = not document.get('departure_scan_required') and document.get('dispatched_at')
+    return [line for line in lines if not line.get('departure_reconciled_at')
+            and (line.get('departure_scanned_at') or line.get('received_at') or legacy_departed
+                 or line.get('current_hub_id') == hub_id)]
+
+
 def hub_manager_transfer_scope(document, hub_id, direction):
     """Check that a manager is scanning at the transfer's assigned source or destination Hub."""
     field={'departure':'source_hub_id','arrival':'destination_hub_id'}.get(direction)
@@ -251,6 +272,23 @@ def hub_tracking_parcel_scope(conn, alias, hub_id):
         AND EXISTS(SELECT 1 FROM ops_assignments a
             WHERE a.parcel_id={alias}.id AND a.new_driver_id={alias}.driver_id AND a.hub_id=?
               AND a.id=(SELECT max(latest.id) FROM ops_assignments latest WHERE latest.parcel_id={alias}.id))))""", [hub_id, hub_id]
+
+
+def hub_read_parcel_scope(conn, alias, hub_id):
+    """Read-only tracking includes parcels actually dispatched by this Hub.
+
+    Historical departure evidence remains valid after receipt or onward delivery.
+    Never use this scope for mutations, inventory, dispatch candidates or finance.
+    """
+    current, args = hub_tracking_parcel_scope(conn, alias, hub_id)
+    if not args:
+        return '1=0', []
+    return f"""({current} OR EXISTS(
+        SELECT 1 FROM ops_document_lines sent JOIN ops_documents doc ON doc.id=sent.document_id
+        WHERE sent.parcel_id={alias}.id AND doc.kind='transfer' AND doc.source_hub_id=?
+          AND doc.status!='Annulé' AND sent.departure_reconciled_at IS NULL
+          AND (sent.departure_scanned_at IS NOT NULL
+               OR (doc.departure_scan_required=0 AND doc.dispatched_at IS NOT NULL))))""", args + [hub_id]
 
 
 def parcel_by_tracking_at_hub(conn, tracking, hub_id):

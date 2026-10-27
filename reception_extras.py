@@ -4,6 +4,7 @@ Aucun colis, montant ou historique n'est supprimé : un écart déclaré reste v
 import base64, binascii, hashlib, io, json, re, warnings
 from PIL import Image, UnidentifiedImageError
 from flask import request, jsonify, send_file
+from partner_intake import partner_intake_status
 from werkzeug.utils import secure_filename
 from hub_schema import install_one_active_hub_manager_guards, migrate_driver_hub_id
 
@@ -246,8 +247,9 @@ def register_reception_extras(app, s):
                 audit(c, did, u, 'Colis déclaré manquant', {'tracking': tracking, 'incident_id': iid, 'note': note})
             elif kind == 'damaged':
                 c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?', (at, u['id'], line['id']))
-                c.execute("UPDATE parcels SET status='Réceptionné',current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?", (doc['destination_hub_id'], at, parcel_id))
-                s['event'](c, parcel_id, 'Réceptionné', doc['reference'] + ' · réceptionné ENDOMMAGÉ à ' + doc['destination_name'] + ' — incident #' + str(iid) + ', affectation suspendue', u)
+                received_status = partner_intake_status(c, parcel_id, doc['destination_hub_id'])
+                c.execute("UPDATE parcels SET status=?,current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?", (received_status, doc['destination_hub_id'], at, parcel_id))
+                s['event'](c, parcel_id, received_status, doc['reference'] + ' · réceptionné ENDOMMAGÉ à ' + doc['destination_name'] + ' — incident #' + str(iid) + ', affectation suspendue', u)
                 status, remaining = recompute(c, doc, at)
                 audit(c, did, u, 'Colis reçu endommagé', {'tracking': tracking, 'incident_id': iid, 'note': note})
             else:
@@ -338,7 +340,8 @@ def register_reception_extras(app, s):
                     return jsonify(ok=True, changed=False)
                 c.execute("UPDATE pp_incidents SET resolution=?,resolution_note=?,resolved_by=?,resolved_at=?,status='Traité' WHERE id=?", (action, note, u['id'], now(), iid))
                 if action == 'release':
-                    s['event'](c, r['parcel_id'], 'Réceptionné', 'Incident endommagé traité : colis débloqué pour affectation — ' + note, u)
+                    current_status = c.execute('SELECT status FROM parcels WHERE id=?', (r['parcel_id'],)).fetchone()['status']
+                    s['event'](c, r['parcel_id'], current_status, 'Incident endommagé traité : colis débloqué pour affectation — ' + note, u)
             else:
                 if action != 'close':
                     raise Error('Action invalide pour ce type d’écart.')
@@ -385,7 +388,7 @@ def register_reception_extras(app, s):
                                    items=[dict(document_id=r['id'], reference=r['reference'], company=r['client_name'], hub=r['destination_name'], age_hours=r['age']) for r in rows]))
             unassigned = hours(c, 'alert_unassigned_hours')
             if True:
-                cond = "p.status='Réceptionné' AND p.driver_id IS NULL" + (' AND p.current_hub_id=?' if scoped_hub else '')
+                cond = "(p.status='Réceptionné' OR (p.status='Ramassé' AND p.current_hub_id IS NOT NULL)) AND p.driver_id IS NULL" + (' AND p.current_hub_id=?' if scoped_hub else '')
                 rows = c.execute("""SELECT p.id,p.tracking,cl.company,cl.name client,h.name hub,
                     round((julianday('now','localtime')-julianday(p.updated_at))*24) age
                     FROM parcels p JOIN users cl ON cl.id=p.client_id LEFT JOIN ops_hubs h ON h.id=p.current_hub_id

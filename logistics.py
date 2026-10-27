@@ -15,7 +15,7 @@ from audit_guard import install_ops_audit_guards, install_departure_reconciliati
 from hub_schema import migrate_city_hub_id, assign_cities_to_hub
 from hub_cod import resolve_cod_hub
 from hub_analytics import install_hub_analytics_schema, hub_operational_metrics, hub_daily_metrics
-from hub_access import resolve_routing_hub, central_hub_transfer_allowed, parcel_physically_at_hub, driver_dispatch_allowed, hub_document_lines_at_hub, hub_manager_transfer_scope, ops_manifest_counts, manifest_status_from_counts
+from hub_access import resolve_routing_hub, central_hub_transfer_allowed, parcel_physically_at_hub, driver_dispatch_allowed, hub_transfer_manifest_lines, hub_manager_transfer_scope, ops_manifest_counts, manifest_status_from_counts
 
 P='/api/logistics'
 REASONS=[('absent','Destinataire absent'),('unreachable','Destinataire injoignable'),('address','Adresse à corriger'),('appointment','Rendez-vous demandé'),('refused','Refus du destinataire'),('return','Retour demandé')]
@@ -63,6 +63,7 @@ def register_logistics(app, services):
         CREATE TABLE IF NOT EXISTS ops_documents(id INTEGER PRIMARY KEY,reference TEXT UNIQUE,kind TEXT NOT NULL,client_id INTEGER REFERENCES users(id),driver_id INTEGER REFERENCES users(id),source_hub_id INTEGER REFERENCES ops_hubs(id),destination_hub_id INTEGER REFERENCES ops_hubs(id),client_name TEXT,driver_name TEXT,source_name TEXT,destination_name TEXT,status TEXT NOT NULL DEFAULT 'Préparé',revision INTEGER NOT NULL DEFAULT 1,note TEXT NOT NULL,created_by INTEGER NOT NULL,created_at TEXT NOT NULL,dispatched_at TEXT,completed_at TEXT,cancel_reason TEXT,departure_scan_required INTEGER NOT NULL DEFAULT 0,palette_purpose TEXT NOT NULL DEFAULT 'standard',transport TEXT NOT NULL DEFAULT '',tracking_code TEXT NOT NULL DEFAULT '',lots INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS ops_document_lines(id INTEGER PRIMARY KEY,document_id INTEGER NOT NULL REFERENCES ops_documents(id),parcel_id INTEGER NOT NULL REFERENCES parcels(id),tracking TEXT NOT NULL,recipient TEXT NOT NULL,city TEXT NOT NULL,initial_status TEXT NOT NULL,departure_scanned_at TEXT,departure_scanned_by INTEGER REFERENCES users(id),departure_reconciled_at TEXT,departure_reconciled_by INTEGER REFERENCES users(id),departure_reconciliation_reason TEXT,received_at TEXT,received_by INTEGER,active INTEGER NOT NULL DEFAULT 1,return_status TEXT);
         CREATE UNIQUE INDEX IF NOT EXISTS ops_one_active_document ON ops_document_lines(parcel_id) WHERE active=1;
+        CREATE INDEX IF NOT EXISTS ops_parcel_document_history ON ops_document_lines(parcel_id,document_id);
         CREATE TABLE IF NOT EXISTS ops_audit(id INTEGER PRIMARY KEY,document_id INTEGER REFERENCES ops_documents(id),actor_id INTEGER NOT NULL,action TEXT NOT NULL,details TEXT NOT NULL,created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS ops_notifications(id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),parcel_id INTEGER REFERENCES parcels(id),title TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL,read_at TEXT);
         CREATE INDEX IF NOT EXISTS ops_notice_user ON ops_notifications(user_id,id);
@@ -284,7 +285,7 @@ def register_logistics(app, services):
     def scoped_document_data(c,d,u):
         data=document_data(c,d)
         if u['role']=='agent':
-            data['lines']=hub_document_lines_at_hub(data['lines'],u.get('agent_hub_id'))
+            data['lines']=hub_transfer_manifest_lines(data['lines'],d,u.get('agent_hub_id'))
             for line in data['lines']:
                 line.pop('departure_reconciliation_reason',None)
                 line.pop('departure_reconciled_by',None)

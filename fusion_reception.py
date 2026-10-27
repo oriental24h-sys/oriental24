@@ -5,6 +5,7 @@ non-received (missing_at) and the sending company is notified.
 """
 import json,re
 from flask import request,jsonify
+from partner_intake import partner_intake_status
 from hub_access import hub_received_lines
 
 KIND='partner_palette'
@@ -96,12 +97,13 @@ def register_fusion_reception(app,s):
             if l['missing_at']:raise Error('Ce colis est déjà déclaré non réceptionné.',409)
             at=now()
             c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
-            c.execute("UPDATE parcels SET status='Réceptionné',current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(b['hub_destination_id'],at,l['parcel_id']))
+            received_status=partner_intake_status(c,l['parcel_id'],b['hub_destination_id'])
+            c.execute("UPDATE parcels SET status=?,current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(received_status,b['hub_destination_id'],at,l['parcel_id']))
             dline=c.execute('SELECT d.reference,d.status FROM ops_documents d WHERE d.id=?',(l['palette_id'],)).fetchone()
             c.execute('INSERT INTO ops_audit(document_id,actor_id,action,details,created_at) VALUES(?,?,?,?,?)',(l['palette_id'],u['id'],'Colis scanné reçu (fusion FUS-%05d)' % bid,json.dumps({'parcel_ids':[l['parcel_id']],'trackings':[trk],'batch_id':bid},ensure_ascii=False),at))
             pend=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND active=1 AND received_at IS NULL AND missing_at IS NULL',(l['palette_id'],)).fetchone()[0]
             c.execute('UPDATE ops_documents SET status=?,completed_at=CASE WHEN ?=0 THEN ? ELSE completed_at END,revision=revision+1 WHERE id=?',('Reçu' if pend==0 else 'Partiellement reçu',pend,at,l['palette_id']))
-            event(c,l['parcel_id'],'En transit',dline['reference']+' · reçu au pack de fusion FUS-%05d' % bid,u)
+            event(c,l['parcel_id'],received_status,dline['reference']+' · reçu au pack de fusion FUS-%05d' % bid,u)
             return jsonify(view_payload(c,bid,u))
 
     @app.post('/api/partner-palettes/fusion/<int:bid>/close')
