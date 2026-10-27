@@ -181,8 +181,9 @@ def register_driver_finance(app, services):
             from hub_access import driver_financial_hub_sql
             sql+=' AND '+driver_financial_hub_sql()+'=?'
             args.append(user()['agent_hub_id'])
-        if period_from: sql += ' AND substr(p.updated_at,1,10)>=?'; args.append(period_from)
-        if period_to: sql += ' AND substr(p.updated_at,1,10)<=?'; args.append(period_to)
+        # Keep the same parcel closing timestamp as Hub billing and daily reconciliation.
+        if period_from: sql += " AND substr(COALESCE(NULLIF(p.status_updated_at,''),p.updated_at),1,10)>=?"; args.append(period_from)
+        if period_to: sql += " AND substr(COALESCE(NULLIF(p.status_updated_at,''),p.updated_at),1,10)<=?"; args.append(period_to)
         rows = c.execute(sql+' ORDER BY p.id LIMIT 501', args).fetchall()
         if not rows: raise Error('Aucun colis clôturé non rapproché pour ce livreur et cette période.')
         if len(rows) > 500: raise Error('Plus de 500 colis : réduisez la période pour établir plusieurs relevés.')
@@ -194,7 +195,7 @@ def register_driver_finance(app, services):
             lines.append({'parcel_id':r['id'], 'tracking':r['tracking'], 'city':r['city'], 'status':r['status'],
                           'cod_cents':cents(r['amount'], 'COD') if r['status']=='Livré' else 0,
                           'commission_cents':rate[rate_key], 'rate_source':'Ville' if r['city_id'] in overrides else 'Défaut livreur',
-                          'closed_at':r['updated_at']})
+                          'closed_at':r['status_updated_at'] or r['updated_at']})
         cod, commission = sum(r['cod_cents'] for r in lines), sum(r['commission_cents'] for r in lines)
         retained = min(cod, commission) if terms['mode']=='net' else 0
         data = {'driver_id':dr['id'], 'hub_id':dr.get('driver_hub_id'),
