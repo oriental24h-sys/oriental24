@@ -1158,7 +1158,7 @@ if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':
             hid=c.execute("INSERT INTO ops_hubs(name,city_id,address,active,created_at) VALUES(?,?,?,1,?)",('Hub Oujda · démo',city['id'],'Zone logistique — données fictives',t)).lastrowid
         home_city=c.execute('SELECT city_id FROM ops_hubs WHERE id=?',(hid,)).fetchone()['city_id']
         c.execute('UPDATE cities SET hub_id=? WHERE id=? AND hub_id IS NULL',(hid,home_city))
-        if not c.execute("SELECT 1 FROM users WHERE lower(email)=lower(?)",('agent@oriental24.ma',)).fetchone() and not c.execute("SELECT 1 FROM users WHERE agent_hub_id=? AND role IN ('hub_manager','hub_manager') AND active=1",(hid,)).fetchone():
+        if not c.execute("SELECT 1 FROM users WHERE lower(email)=lower(?)",('agent@oriental24.ma',)).fetchone() and not c.execute("SELECT 1 FROM users WHERE agent_hub_id=? AND role='hub_manager' AND active=1",(hid,)).fetchone():
             c.execute('INSERT INTO users(name,email,password,role,company,phone,active,client_type,agent_hub_id,created_at) VALUES(?,?,?,?,?,?,1,?,?,?)',('Nadia Réception','agent@oriental24.ma',generate_password_hash('Oriental24!Demo'),'hub_manager','ORIENTAL24','0600000000','vendeur',hid,t))
 
 
