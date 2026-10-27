@@ -9,7 +9,7 @@ import os
 import re
 import threading
 from datetime import datetime, timedelta, date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 from flask import jsonify, request, Response
 from hub_access import driver_financial_hub_sql
@@ -159,7 +159,7 @@ def preview(c, cutoff, hub_id=None):
             missing_cities[(hid,p['city_id'])]=dict(hub_id=hid,hub_name=hubs[hid]['name'],city_id=p['city_id'],city=p['city'] or 'Ville inconnue')
             continue
         key = {'Livré': 'delivered_cents', 'Retourné': 'returned_cents', 'Refusé': 'refused_cents'}[p['status']]
-        cod = int((Decimal(str(p['amount'])) * 100).quantize(Decimal('1'))) if p['status'] == 'Livré' else 0
+        cod = int((Decimal(str(p['amount'])) * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if p['status'] == 'Livré' else 0
         if cod < 0:
             raise ValueError('COD négatif : vérifiez la commande '+p['tracking'])
         g = grouped.setdefault(hid, dict(hub_id=hid, hub_name=hubs[hid]['name'], mode=t['mode'],
