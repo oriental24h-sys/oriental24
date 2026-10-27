@@ -1,4 +1,4 @@
-import os, sqlite3, secrets, csv, io, re, base64
+import os, sqlite3, secrets, csv, io, re, base64, hashlib
 from datetime import datetime, timedelta
 from functools import wraps
 from contextlib import contextmanager
@@ -10,7 +10,7 @@ BASE = os.path.dirname(__file__)
 app = Flask(__name__)
 from runtime import configure
 DB = configure(app, BASE)
-from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, policy as status_policy
+from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, DRIVER_HUB_ONLY_STATUSES, policy as status_policy
 from billing import driver_paid_sql
 import client_types
 from company_order_edit import company_order_flags, register_company_order_edit
@@ -323,7 +323,14 @@ def list_parcels(c,u):
 @app.route('/')
 @app.route('/login')
 @app.route('/app')
-def index(): return render_template('index.html',runtime_config={'demo':app.config['DEMO_MODE'],'registration':app.config['PUBLIC_REGISTRATION'],'version':'1.12.0','google':__import__('google_profile').configuration()['configured']})
+def index():
+    # Content-based URLs prevent a previously cached UI bundle from hiding deployed fixes.
+    ui_versions={name:hashlib.sha256((Path(BASE)/'static'/name).read_bytes()).hexdigest()[:16]
+                 for name in ('app.js','style.css','partner-palettes.js','driver-app.js','parcel-state.js','logistics.js')}
+    response=app.make_response(render_template('index.html',ui_versions=ui_versions,
+        runtime_config={'demo':app.config['DEMO_MODE'],'registration':app.config['PUBLIC_REGISTRATION'],'version':'1.12.0','google':__import__('google_profile').configuration()['configured']}))
+    response.headers['Cache-Control']='no-store'
+    return response
 
 @app.route('/healthz')
 def healthz(): return {'status':'ok','version':'1.12.0','production':app.config['PRODUCTION_MODE']}
@@ -447,6 +454,8 @@ def create_parcel():
 @auth('admin','livreur','client','agent')
 def update_parcel(pid):
     d=request.get_json() or {};u=user()
+    if u['role']=='livreur' and isinstance(d,dict) and d.get('status') in DRIVER_HUB_ONLY_STATUSES:
+        raise APIError('Cette opération est réservée au Hub ou à l’administration.',403)
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         p=parcel(c,pid,u,follow_drivers=u['role']=='agent')

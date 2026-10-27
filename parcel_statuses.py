@@ -5,7 +5,7 @@ STATUSES = [CENTRAL_RETURN_TRANSIT,'Transit','Reporté','Programmé','Réception
 STATUS_HELP = {
  CENTRAL_RETURN_TRANSIT:'État de transit d’un retour (obsolète, conservé pour l’historique). Les retours ne modifient plus le statut de la commande ; leur état (envoyé / reçu en entrepôt) est suivi séparément.',
  'Transit':'Transport entre agences. Aucun encaissement ni livraison au destinataire.',
- 'Reporté':'Livraison différée sans rendez-vous fixé. L’ancien rendez-vous est retiré.',
+ 'Reporté':'Livraison différée, avec une date de report facultative. Sans date de report, l’ancien rendez-vous est retiré.',
  'Programmé':'Livraison avec un motif et un rendez-vous futur, heure du Maroc.',
  'Réceptionné':'Réception déclarée en agence, pas chez le destinataire. Aucun COD collecté.',
  'Reçu par le livreur':'Le livreur actuellement affecté déclare avoir pris le colis en charge. Ce n’est pas une livraison.',
@@ -16,20 +16,14 @@ STATUS_HELP = {
  'Confirmé':'Demande de ramassage validée par le client ; le colis attend son enlèvement puis sa réception scannée au Hub.',
  'Ramassé':'Ramassage déclaré.', 'Au hub':'Ancien état conservé : colis au hub.',
  'En livraison':'Tournée de livraison au destinataire.', 'Retourné':'Retour déclaré ; les règles financières existantes sont conservées.',
- 'Annulé':'Annulation déclarée avec motif (livreur ou admin). Aucun encaissement ; le colis n’entre dans aucun relevé tant qu’il reste annulé. Seul l’admin peut le reprendre.'}
-DRIVER_TRANSITIONS = {
- 'Créé':['Ramassé','Intéressé','Reporté','Programmé','Annulé'],
- 'Confirmé':['Ramassé','Intéressé','Reporté','Programmé','Annulé'],
- 'Ramassé':['Au hub','En livraison','Reçu par le livreur','Réceptionné','Intéressé','Reporté','Programmé','Annulé'],
- 'Au hub':['En livraison','Reçu par le livreur','Réceptionné','Intéressé','Reporté','Programmé','Annulé'],
- 'Transit':[],
- 'Réceptionné':['Reçu par le livreur','Annulé'],
- 'Reçu par le livreur':['En livraison','Réceptionné','Intéressé','Reporté','Programmé','Annulé'],
- 'En livraison':['Livré','Programmé','Refusé','Retourné','Reporté','Intéressé','Annulé'],
- 'Programmé':['En livraison','Livré','Refusé','Retourné','Reporté','Intéressé','Annulé'],
- 'Reporté':['Ramassé','Reçu par le livreur','En livraison','Programmé','Intéressé','Annulé'],
- 'Intéressé':['Ramassé','Reçu par le livreur','En livraison','Reporté','Programmé','Annulé'],
- 'Refusé':['Retourné'], 'Livré':[], 'Retourné':[], 'Annulé':[]}
+ 'Annulé':'Annulation déclarée avec motif (livreur ou admin). Aucun encaissement ; le colis n’entre dans aucun relevé tant qu’il reste annulé. Le livreur peut reprendre cette commande et choisir un autre état autorisé.'}
+DRIVER_HUB_ONLY_STATUSES = ('Réceptionné','Retourné')
+# Courier choices are independent of the previous state. Delivered alone is terminal.
+# Keep the existing courier vocabulary (not creation/confirmation/internal transit states).
+DRIVER_STATUS_TARGETS = ['Reporté','Programmé','Reçu par le livreur','Livré','Refusé',
+                         'Intéressé','Ramassé','Au hub','En livraison','Annulé']
+DRIVER_TRANSITIONS = {source:[] if source=='Livré' else [s for s in DRIVER_STATUS_TARGETS if s!=source]
+                      for source in STATUSES}
 ATTEMPT_SOURCES = ['En livraison','Programmé']
 ATTEMPT_OUTCOMES = ['Livré','Programmé','Refusé','Retourné','Reporté']
 # Contact/deferred states are deliberately not assigned a physical progress rank.

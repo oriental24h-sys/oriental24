@@ -10,7 +10,7 @@ from ramassage_tracking import sync_central_receipts
 from notification_retention import purge_read_notifications
 from client_profile_extras import notification_enabled
 from claims import prepare_claim
-from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES
+from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES, DRIVER_HUB_ONLY_STATUSES, DRIVER_TRANSITIONS
 from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
 from hub_schema import migrate_city_hub_id, assign_cities_to_hub
 from hub_cod import resolve_cod_hub
@@ -239,10 +239,22 @@ def register_logistics(app, services):
             if dt<=datetime.now(ZoneInfo('Africa/Casablanca')):raise ValueError()
             return dt.isoformat(timespec='minutes')
         except (ValueError,TypeError):raise Error('Choisissez un rendez-vous futur, heure du Maroc.')
+    def postponed(value):
+        # A report is a local calendar date, so today remains valid even after noon.
+        try:
+            if not isinstance(value,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?',value):raise ValueError()
+            dt=datetime.strptime(value,'%Y-%m-%dT%H:%M' if 'T' in value else '%Y-%m-%d').replace(tzinfo=ZoneInfo('Africa/Casablanca'))
+            if 'T' not in value:dt=dt.replace(hour=12)
+            if dt.date()<datetime.now(ZoneInfo('Africa/Casablanca')).date():raise ValueError()
+            return dt.isoformat(timespec='minutes')
+        except (ValueError,TypeError):raise Error('Choisissez une date de report valide, aujourd’hui ou après (heure du Maroc).')
     def revision(p,d):
         if type(d.get('revision')) is not int or d['revision']!=p['ops_revision']:raise Error('Le colis a changé. Rechargez sa fiche.',409)
     def change(c,p,d,u):
         # Called by the existing PATCH endpoint as well: no bypass of document or scheduling locks.
+        if u['role']=='livreur' and 'status' in d:
+            if p['status']=='Livré':raise Error('Commande Livré : état définitivement verrouillé pour le livreur.',409)
+            if d['status'] not in DRIVER_TRANSITIONS.get(p['status'],[]):raise Error('État non autorisé pour le livreur.',403)
         guard(c,p)
         if 'revision' in d:revision(p,d)
         if d.get('status') and d['status'] not in ['Livré','Refusé','Retourné']:
@@ -254,12 +266,17 @@ def register_logistics(app, services):
         if d.get('status')=='Programmé':
             if not reason:raise Error('Un motif est obligatoire pour programmer le colis.')
             next_at=planned(d.get('next_attempt_at'))
+        if d.get('status')=='Reporté' and d.get('next_attempt_at'):
+            next_at=postponed(d['next_attempt_at'])
         if d.get('status')=='Reçu par le livreur':
             did=d.get('driver_id',p['driver_id'])
             target=c.execute("SELECT driver_hub_id FROM users WHERE id=? AND role='livreur' AND active=1",(did,)).fetchone() if did else None
             if not target:raise Error('Affectez un livreur actif avant de déclarer la prise en charge.')
             if type(target['driver_hub_id']) is not int or target['driver_hub_id']<=0 or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(target['driver_hub_id'],)).fetchone():raise Error('Le livreur doit être rattaché à un Hub actif avant sa prise en charge.',409)
-            if (p['status']!='Reçu par le livreur' or did!=p['driver_id']) and not driver_dispatch_allowed(c,p.get('current_hub_id'),target['driver_hub_id']):
+            # A courier already carrying their assigned parcel may correct its state back
+            # to received without a second physical Hub intake. No reassignment/foreign Hub bypass.
+            courier_custody=(u['role']=='livreur' and did==p['driver_id']==u['id'] and p.get('current_hub_id') is None)
+            if not courier_custody and (p['status']!='Reçu par le livreur' or did!=p['driver_id']) and not driver_dispatch_allowed(c,p.get('current_hub_id'),target['driver_hub_id']):
                 raise Error('Le colis doit être physiquement enregistré au Hub du livreur avant sa prise en charge.',409)
         if 'driver_id' in d:
             did=integer(d['driver_id']) if d['driver_id'] else None
@@ -573,6 +590,8 @@ def register_logistics(app, services):
         d=body();u=user();key=text(d,'request_key',maxlen=80)
         if not re.fullmatch('[A-Za-z0-9_-]{20,80}',key):raise Error('Clé de saisie invalide.')
         outcome=d.get('outcome')
+        if u['role']=='livreur' and outcome in DRIVER_HUB_ONLY_STATUSES:
+            raise Error('Cette opération est réservée au Hub ou à l’administration.',403)
         if outcome not in ATTEMPT_OUTCOMES:raise Error('Résultat invalide.')
         note=text(d,'note',False,600);receiver=text(d,'receiver',False,100)
         hashed=hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest()
@@ -583,8 +602,13 @@ def register_logistics(app, services):
                 if prior['payload_hash']!=hashed or prior['parcel_id']!=pid or prior['actor_id']!=u['id']:raise Error('Clé déjà utilisée pour une autre saisie.',409)
                 return jsonify(ok=True,id=prior['id'],already_recorded=True)
             revision(p,d)
-            valid=p['status'] in ATTEMPT_SOURCES or (p['status']=='Refusé' and outcome=='Retourné')
-            if not valid:raise Error('Une tentative concerne un colis en livraison ou programmé ; un refus peut être retourné.',409)
+            if u['role']=='livreur':
+                if p['status']=='Livré':raise Error('Commande Livré : état définitivement verrouillé pour le livreur.',409)
+                valid=outcome in DRIVER_TRANSITIONS.get(p['status'],[])
+                if not valid:raise Error('État non autorisé pour le livreur.',403)
+            else:
+                valid=p['status'] in ATTEMPT_SOURCES or (p['status']=='Refusé' and outcome=='Retourné')
+                if not valid:raise Error('Une tentative concerne un colis en livraison ou programmé ; un refus peut être retourné.',409)
             if outcome!='Livré' and not d.get('reason_code'):raise Error('Choisissez le motif du résultat.')
             cents=None
             if outcome=='Livré':
