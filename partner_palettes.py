@@ -28,7 +28,7 @@ def register_partner_palettes(app,s):
         if not isinstance(v,str) or len(v.strip())>limit or (required and not v.strip()):raise Error('Champ invalide : '+k)
         return v.strip()
     def access(u):
-        if u['role']!='admin' and u['role']!='agent' and not(u['role']=='client' and u['client_type']=='societe_livraison'):raise Error('Palettes réservées aux sociétés de livraison, à Admin et aux agents de réception.',403)
+        if u['role']!='admin' and u['role']!='hub_manager' and not(u['role']=='client' and u['client_type']=='societe_livraison'):raise Error('Palettes réservées aux sociétés de livraison, à Admin et aux agents de réception.',403)
     def find_daily_draft(c,cid,day=None):
         day=day or now()[:10]
         r=c.execute("SELECT document_id FROM partner_palette_meta WHERE partner_reference=? ORDER BY document_id",(f"Palette du jour · {day}",)).fetchall()
@@ -41,7 +41,7 @@ def register_partner_palettes(app,s):
         ready.sort(key=lambda x: (0 if x['status'] in ('En transit','Partiellement reçu') else 1,-x['id']))
         return ready[0]['id'],dict(status=ready[0]['status'])
     def creator(u):
-        if u['role']=='agent':raise Error('La préparation des palettes reste à la société ou à Admin.',403)
+        if u['role']=='hub_manager':raise Error('La préparation des palettes reste à la société ou à Admin.',403)
     def company(c,cid,active=True,any_client=False):
         if isinstance(cid,bool) or not re.fullmatch(r'[1-9][0-9]{0,9}',str(cid)):raise Error('Société invalide.')
         r=c.execute("SELECT * FROM users WHERE id=? AND role='client'"+("" if any_client else " AND client_type='societe_livraison'")+(' AND active=1' if active else ''),(cid,)).fetchone()
@@ -54,7 +54,7 @@ def register_partner_palettes(app,s):
         return dict(r)
     def get(c,did,u,include_deleted=False):
         r=c.execute('SELECT d.*,m.partner_reference,m.transport,m.deleted_at FROM ops_documents d JOIN partner_palette_meta m ON m.document_id=d.id WHERE d.id=? AND d.kind=?',(did,KIND)).fetchone()
-        if not r or(u['role']=='client' and r['client_id']!=u['id']) or(u['role']=='agent' and (r['destination_hub_id']!=u.get('agent_hub_id') or r['status'] not in ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)'))):raise Error('Palette introuvable.',404)
+        if not r or(u['role']=='client' and r['client_id']!=u['id']) or(u['role']=='hub_manager' and (r['destination_hub_id']!=u.get('agent_hub_id') or r['status'] not in ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)'))):raise Error('Palette introuvable.',404)
         if r['deleted_at'] and not include_deleted:raise Error('Palette supprimée.',404)
         return dict(r)
     def lines(c,did):
@@ -65,10 +65,10 @@ def register_partner_palettes(app,s):
         with conn() as gc:
             gc.execute('BEGIN IMMEDIATE')
             row=gc.execute("SELECT destination_hub_id FROM ops_documents WHERE id=? AND kind=?",(did,KIND)).fetchone()
-            if u['role'] not in ('admin','agent'):
+            if u['role'] not in ('admin','hub_manager'):
                 if row:audit(gc,did,u,'Réception refusée',{'reason':'Rôle non autorisé à la réception physique','actor_role':u['role'],'actor_hub_id':u['agent_hub_id']})
                 block=('Réception physique réservée à Admin et aux agents de réception.',403)
-            elif u['role']=='agent' and row and row['destination_hub_id']!=u['agent_hub_id']:
+            elif u['role']=='hub_manager' and row and row['destination_hub_id']!=u['agent_hub_id']:
                 audit(gc,did,u,'Réception refusée',{'reason':'Agent rattaché à un autre hub','actor_hub_id':u['agent_hub_id'],'palette_hub_id':row['destination_hub_id']})
                 block=('Palette introuvable.',404)
             else:block=None
@@ -95,7 +95,7 @@ def register_partner_palettes(app,s):
             'audit':[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE a.document_id=? ORDER BY a.id DESC',(d['id'],))]}
     def manager_detail(c,doc,u):
         value=detail(c,doc)
-        if u['role']!='agent':return value
+        if u['role']!='hub_manager':return value
         value['lines']=hub_received_lines(value['lines'],u.get('agent_hub_id'))
         # Keep aggregate progress, not IDs/trackings for parcels that have not arrived physically.
         value['audit']=[{**row,'details':{}} for row in value['audit']]
@@ -128,18 +128,18 @@ def register_partner_palettes(app,s):
         return jsonify(r)
 
     @app.get('/api/partner-palettes/config')
-    @auth('admin','client','agent')
+    @auth('admin','client','hub_manager')
     def partner_config():
         u=user();access(u)
         with conn() as c:
-            if u['role']=='agent':
+            if u['role']=='hub_manager':
                 hubs=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 AND h.id=?',(u['agent_hub_id'],)).fetchall()
             else:
                 hubs=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 ORDER BY h.name').fetchall()
             return jsonify(hubs=[dict(r) for r in hubs],companies=[dict(r) for r in c.execute("SELECT id,name,company,client_type FROM users WHERE role='client' AND active=1 ORDER BY CASE WHEN client_type='societe_livraison' THEN 0 ELSE 1 END,company,name")] if u['role']=='admin' else [])
 
     @app.get('/api/partner-palettes/candidates')
-    @auth('admin','client','agent')
+    @auth('admin','client','hub_manager')
     def partner_candidates():
         u=user();access(u);creator(u)
         cid=u['id'] if u['role']=='client' else request.args.get('client_id')
@@ -152,21 +152,21 @@ def register_partner_palettes(app,s):
             return jsonify(rows=rows,client_id=cl['id'])
 
     @app.route('/api/partner-palettes',methods=['GET','POST'])
-    @auth('admin','client','agent')
+    @auth('admin','client','hub_manager')
     def partner_collection():
         u=user();access(u)
         with conn() as c:
             if request.method=='GET':
                 where=['d.kind=?','m.deleted_at IS NULL'];args=[KIND]
                 if u['role']=='client':where.append('d.client_id=?');args.append(u['id'])
-                if u['role']=='agent':
+                if u['role']=='hub_manager':
                     where.append('d.destination_hub_id=?');args.append(u['agent_hub_id'])
                     where.append("d.status IN ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)')")
                 state=request.args.get('state','');q=text(request.args,'q',120)
                 if state:
                     if state not in STATES:raise Error('État de palette invalide.')
                     where.append('d.status=?');args.append(state)
-                if q and u['role']=='agent':
+                if q and u['role']=='hub_manager':
                     # Hub managers may search palette identifiers, not parcel tracking strings
                     # for lines that have not been physically received at their Hub.
                     where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(m.partner_reference),lower(?))>0)");args.extend([q]*3)
@@ -182,7 +182,7 @@ def register_partner_palettes(app,s):
                 for row in c.execute('SELECT d.*,m.partner_reference,m.transport'+sql+' ORDER BY d.id DESC LIMIT ? OFFSET ?',args+[size,(page-1)*size]):
                     r=dict(row);counts=c.execute('SELECT count(*),sum(received_at IS NOT NULL),sum(missing_at IS NOT NULL) FROM ops_document_lines WHERE document_id=?',(r['id'],)).fetchone();r.update(count=counts[0],received=counts[1] or 0,missing=counts[2] or 0,remaining=counts[0]-(counts[1] or 0)-(counts[2] or 0))
                     r['tracking_matches']=[];r['tracking_match_count']=0
-                    if q and u['role']!='agent':
+                    if q and u['role']!='hub_manager':
                         found=[];seen_parcels=set()
                         for match in c.execute('''SELECT l.parcel_id,l.tracking snapshot_tracking,p.tracking current_tracking
                                                   FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id
@@ -194,7 +194,7 @@ def register_partner_palettes(app,s):
                             tracking=current if q.lower() in current.lower() else snapshot
                             found.append({'parcel_id':match['parcel_id'],'tracking':tracking or current or snapshot})
                         r['tracking_match_count']=len(found);r['tracking_matches']=found[:5]
-                    if u['role']=='agent':
+                    if u['role']=='hub_manager':
                         r['tracking_matches']=[];r['tracking_match_count']=0
                     rows.append(r)
                 return jsonify(rows=rows,total=total,page=page,size=size)
@@ -277,14 +277,14 @@ def register_partner_palettes(app,s):
             return jsonify({'ok':True,'id':did,**detail(c,doc),'reused':False,'added':len(ids),'forced_hub_id':hub_id if reuse else None})
 
     @app.get('/api/partner-palettes/<int:did>')
-    @auth('admin','client','agent')
+    @auth('admin','client','hub_manager')
     def partner_detail(did):
         u=user();access(u)
         with conn() as c:
             c.execute('BEGIN');return jsonify(manager_detail(c,get(c,did,u),u))
 
     @app.get('/api/partner-palettes/<int:did>/csv')
-    @auth('admin','client','agent')
+    @auth('admin','client','hub_manager')
     def partner_csv(did):
         u=user();access(u)
         with conn() as c:
@@ -296,13 +296,13 @@ def register_partner_palettes(app,s):
         return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename="ORIENTAL24-{d["reference"]}.csv"','Cache-Control':'private, no-store'})
 
     @app.post('/api/partner-palettes/<int:did>/<action>')
-    @auth('admin','client','agent','livreur')
+    @auth('admin','client','hub_manager','livreur')
     def partner_action(did,action):
         u=user()
         if action not in ['dispatch','cancel','add','delete','receive','receive-all']:raise Error('Action inconnue.',404)
         # Le blocage de réception est enregistré pour TOUT utilisateur (rôle, hub étranger) avant les autres gardes.
         if action.startswith('receive'):receive_guard(did,u)
-        if action=='receive-all' and u['role']=='agent':
+        if action=='receive-all' and u['role']=='hub_manager':
             # Keep a durable denial record, but never confirm a batch for a Hub Manager.
             with conn() as c:
                 c.execute('BEGIN IMMEDIATE');doc=get(c,did,u)
@@ -379,7 +379,7 @@ def register_partner_palettes(app,s):
         audit(c,did,u,'Réception complète confirmée' if complete else 'Réception partielle confirmée',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'hub_id':doc['destination_hub_id']})
 
     def collection_load(c,did,u):
-        if u['role'] not in ('admin','agent'):raise Error('Accès réservé.',403)
+        if u['role'] not in ('admin','hub_manager'):raise Error('Accès réservé.',403)
         doc=get(c,did,u);hub(c,doc['destination_hub_id'])
         return doc,lines(c,did)
 
