@@ -233,7 +233,7 @@ def register_smart_delivery(app, s):
 
     # ---------- API : points relais ----------
     @app.get('/api/pickup-points')
-    @auth('admin', 'agent', 'livreur')
+    @auth('admin', 'hub_manager', 'livreur')
     def points_list():
         with conn() as c:
             rows = [dict(r) for r in c.execute('SELECT pp.*,ci.name city FROM pickup_points pp LEFT JOIN cities ci ON ci.id=pp.city_id ORDER BY pp.name')]
@@ -280,17 +280,17 @@ def register_smart_delivery(app, s):
         return jsonify(ok=True)
 
     @app.get('/api/parcels/<int:pid>/locker')
-    @auth('admin', 'agent', 'livreur')
+    @auth('admin', 'hub_manager', 'livreur')
     def parcel_locker(pid):
         u = user()
         with conn() as c:
-            p = parcel(c, pid, u) if u['role'] != 'agent' else dict(c.execute('SELECT * FROM parcels WHERE id=?', (pid,)).fetchone() or {})
+            p = parcel(c, pid, u) if u['role'] != 'hub_manager' else dict(c.execute('SELECT * FROM parcels WHERE id=?', (pid,)).fetchone() or {})
             if not p: raise Error('Colis introuvable.', 404)
             rows = [dict(r) for r in c.execute('SELECT la.*,pp.name point_name FROM locker_assignments la JOIN pickup_points pp ON pp.id=la.point_id WHERE la.parcel_id=? ORDER BY la.id DESC', (pid,))]
         return jsonify(rows=rows)
 
     @app.post('/api/lockers/<int:lid>/pick')
-    @auth('admin', 'agent', 'livreur')
+    @auth('admin', 'hub_manager', 'livreur')
     def locker_pick(lid):
         d = request.get_json(silent=True) or {}; u = user()
         code = str(d.get('code') or '')
