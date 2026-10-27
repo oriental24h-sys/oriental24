@@ -100,7 +100,7 @@ def register_driver_finance(app, services):
         if not row or (active and not row['active']):
             raise Error('Choisissez un livreur actif.', 400)
         actor=user()
-        if actor['role']=='agent' and (row['driver_hub_id']!=actor.get('agent_hub_id') or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(actor.get('agent_hub_id'),)).fetchone()):
+        if actor['role']=='hub_manager' and (row['driver_hub_id']!=actor.get('agent_hub_id') or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(actor.get('agent_hub_id'),)).fetchone()):
             raise Error('Livreur introuvable.',404)
         return dict(row)
 
@@ -123,10 +123,10 @@ def register_driver_finance(app, services):
     def statement(c, sid, u):
         s = c.execute('SELECT * FROM driver_statements WHERE id=?', (sid,)).fetchone()
         check_scope(s, u)
-        if u['role']=='agent' and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone():raise Error('Hub actif requis.',403)
-        if u['role']=='agent' and s['hub_id']!=u.get('agent_hub_id'):
+        if u['role']=='hub_manager' and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone():raise Error('Hub actif requis.',403)
+        if u['role']=='hub_manager' and s['hub_id']!=u.get('agent_hub_id'):
             raise Error('Relevé introuvable.',404)
-        if u['role']=='agent':
+        if u['role']=='hub_manager':
             from hub_access import driver_financial_hub_sql
             foreign=c.execute(f'''SELECT 1 FROM driver_statement_lines l
                 LEFT JOIN parcels p ON p.id=l.parcel_id WHERE l.statement_id=?
@@ -177,7 +177,7 @@ def register_driver_finance(app, services):
             WHERE p.driver_id=? AND p.status IN ('Livré','Retourné','Refusé')
             AND NOT EXISTS(SELECT 1 FROM driver_statement_lines l WHERE l.parcel_id=p.id AND l.active=1)"""
         args = [dr['id']]
-        if user()['role']=='agent':
+        if user()['role']=='hub_manager':
             from hub_access import driver_financial_hub_sql
             sql+=' AND '+driver_financial_hub_sql()+'=?'
             args.append(user()['agent_hub_id'])
@@ -205,14 +205,14 @@ def register_driver_finance(app, services):
         return data
 
     @app.get(PREFIX+'/terms')
-    @auth('admin', 'livreur', 'agent')
+    @auth('admin', 'livreur', 'hub_manager')
     def get_terms():
         u = user()
         with conn() as c:
             sql = "SELECT id,name,email,phone,active FROM users WHERE role='livreur'"
             args = []
             if u['role']=='livreur': sql += ' AND id=?'; args.append(u['id'])
-            if u['role']=='agent':
+            if u['role']=='hub_manager':
                 sql += ' AND driver_hub_id=? AND EXISTS(SELECT 1 FROM ops_hubs h WHERE h.id=users.driver_hub_id AND h.active=1)'
                 args.append(u.get('agent_hub_id'))
             drivers = []
@@ -221,7 +221,7 @@ def register_driver_finance(app, services):
             return jsonify(drivers)
 
     @app.put(PREFIX+'/terms/<int:did>')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def save_terms(did):
         u = user(); d = payload(); mode = d.get('mode')
         if mode not in ('net','gross'): raise Error('Choisissez une méthode de règlement.')
@@ -255,7 +255,7 @@ def register_driver_finance(app, services):
         return jsonify(ok=True, revision=revision+1)
 
     @app.get(PREFIX+'/terms/<int:did>/history')
-    @auth('admin','livreur','agent')
+    @auth('admin','livreur','hub_manager')
     def terms_history(did):
         u = user()
         if u['role']=='livreur' and did!=u['id']: raise Error('Barème introuvable.',404)
@@ -279,7 +279,7 @@ def register_driver_finance(app, services):
             return jsonify(statements=statements,summary=summary,transactions=[dict(r) for r in txs])
 
     @app.post(PREFIX+'/preview')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def preview():
         d=payload(); u=user(); start,end=parse_period(d)
         with conn() as c:
@@ -291,7 +291,7 @@ def register_driver_finance(app, services):
             return jsonify(token=token,**snapshot)
 
     @app.post(PREFIX+'/preview/<token>/confirm')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def confirm(token):
         u=user()
         with conn() as c:
@@ -321,7 +321,7 @@ def register_driver_finance(app, services):
             return jsonify(ok=True,already_created=False,statement_id=sid)
 
     @app.get(PREFIX+'/statements/<int:sid>')
-    @auth('admin', 'livreur', 'agent')
+    @auth('admin', 'livreur', 'hub_manager')
     def get_statement(sid):
         with conn() as c:
             c.execute('BEGIN')
@@ -367,7 +367,7 @@ def register_driver_finance(app, services):
     services['add_driver_transaction']=add_transaction
 
     @app.post(PREFIX+'/statements/<int:sid>/transactions')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def record_transaction(sid):
         d=payload();u=user()
         with conn() as c:
