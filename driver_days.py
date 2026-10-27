@@ -2,12 +2,20 @@
 livré du jour, COD, commissions (barème à la ville), attendu caisse, remise Admin, écart,
 clôture/réouverture tracées. Module branché dans app.py comme driver_finance."""
 import json
-from datetime import datetime, date as _date
+from datetime import datetime, date as _date, time as _time, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 from flask import request, jsonify
 
 MOROCCO_TZ = ZoneInfo("Africa/Casablanca")
+
+
+def local_day_bounds(day):
+    """Convert a Morocco business day to the server-local naive timestamp format used by app.now()."""
+    start = datetime.combine(_date.fromisoformat(day), _time.min, tzinfo=MOROCCO_TZ)
+    end = datetime.combine(_date.fromisoformat(day) + timedelta(days=1), _time.min, tzinfo=MOROCCO_TZ)
+    return (start.astimezone().replace(tzinfo=None).isoformat(timespec='seconds'),
+            end.astimezone().replace(tzinfo=None).isoformat(timespec='seconds'))
 
 
 def register_driver_days(app, services):
@@ -55,9 +63,12 @@ def register_driver_days(app, services):
 
     def calc(c, did, day):
         """Live : livrés du jour, COD brut, commissions (barème à la ville), attendu caisse, dernier état de clôture."""
+        day_start, day_end = local_day_bounds(day)
         rows = c.execute("""SELECT id,city_id,status,amount FROM parcels WHERE driver_id=?
                             AND status IN ('Livré','Retourné','Refusé')
-                            AND substr(COALESCE(NULLIF(status_updated_at,''),updated_at),1,10)=?""", (did, day)).fetchall()
+                            AND COALESCE(NULLIF(status_updated_at,''),updated_at)>=?
+                            AND COALESCE(NULLIF(status_updated_at,''),updated_at)<?""",
+                         (did, day_start, day_end)).fetchall()
         livres = [p for p in rows if p['status'] == 'Livré']
         cod = sum(cents(p['amount']) for p in livres)
         commission = sum(rate_for(c, did, p['city_id'], p['status']) for p in rows)
