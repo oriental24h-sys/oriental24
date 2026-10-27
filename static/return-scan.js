@@ -284,8 +284,8 @@ function o24RpScanOfflineSend(d){
  if(!cl)throw Error('Vendeur actif requis.');
  const h=localDemo.ops_hubs.find(x=>x.id===Number(d.hub_id)&&x.active);
  if(!h)throw Error('Hub de départ actif requis.');
- if(localUser.role!=='admin'&&localUser.role!=='agent')throw Error('Préparation et envoi des retours réservés à Admin et aux agents de réception.');
- if(localUser.role==='agent'&&localUser.agent_hub_id!==h.id)throw Error('Vous ne pouvez expédier des retours que depuis votre hub.');
+ if(localUser.role!=='admin'&&localUser.role!=='hub_manager')throw Error('Préparation et envoi des retours réservés à Admin et aux agents de réception.');
+ if(localUser.role==='hub_manager'&&localUser.agent_hub_id!==h.id)throw Error('Vous ne pouvez expédier des retours que depuis votre hub.');
  const confirmed=d.confirmed||[],ps=[];
  for(const pid of d.parcel_ids){
   const p=localDemo.parcels.find(x=>x.id===pid&&x.client_id===cl.id);
@@ -361,8 +361,8 @@ function o24RpOfflineDetail(id){
  const doc=(localDemo.return_palettes||[]).find(x=>Number(x.id)===Number(id));
  if(!doc)throw Error('Palette retour introuvable.');
  if(localUser.role==='client'&&Number(doc.client_id)!==Number(localUser.id))throw Error('Palette retour introuvable.');
- if(localUser.role==='agent'&&Number(doc.destination_hub_id)!==Number(localUser.agent_hub_id))throw Error('Palette retour hors de votre hub.');
- if(!['admin','agent','client'].includes(localUser.role))throw Error('Accès réservé.');
+ if(localUser.role==='hub_manager'&&Number(doc.destination_hub_id)!==Number(localUser.agent_hub_id))throw Error('Palette retour hors de votre hub.');
+ if(!['admin','hub_manager','client'].includes(localUser.role))throw Error('Accès réservé.');
  const lines=(doc.lines||[]).map(l=>{const p=localDemo.parcels.find(x=>Number(x.id)===Number(l.parcel_id))||{};return {...l,current_status:p.status||l.initial_status,phone:p.phone||''}});
  const received=lines.filter(l=>l.received_at).length,missing=lines.filter(l=>l.missing_at&&!l.received_at).length;
  return {...doc,lines,count:lines.length,received,missing,remaining:lines.length-received-missing,audit:(doc.audit||[]).map(a=>({...a,details:a.details||{}}))};
@@ -397,8 +397,8 @@ function o24RpOfflineOpen(id){
 /* Vue « Palettes retour » hors serveur (démo) : expédition, suivi et confirmation vendeur. */
 function rpOfflineView(){
  localDemo.return_palettes=localDemo.return_palettes||[];
- const rows=localDemo.return_palettes.filter(d=>localUser.role==='admin'||(localUser.role==='client'&&Number(d.client_id)===Number(localUser.id))||(localUser.role==='agent'&&Number(d.destination_hub_id)===Number(localUser.agent_hub_id))).slice().reverse();
- const creator=['admin','agent'].includes(localUser.role),cl=localUser.role==='client';
+ const rows=localDemo.return_palettes.filter(d=>localUser.role==='admin'||(localUser.role==='client'&&Number(d.client_id)===Number(localUser.id))||(localUser.role==='hub_manager'&&Number(d.destination_hub_id)===Number(localUser.agent_hub_id))).slice().reverse();
+ const creator=['admin','hub_manager'].includes(localUser.role),cl=localUser.role==='client';
  const cta=creator?`<button class="btn primary" onclick="rpScanStart()">${icon('scan')}Envoyer retour au scan</button>`:'';
  const intro=cl?'Scannez chaque colis réellement reçu puis confirmez la remise. Le statut passe à Retourné au moment de cette confirmation.':'Expédiez les colis au vendeur ; le statut ne passe à Retourné qu’après confirmation de leur remise physique.';
  return heading('Palettes retour',intro,cta)
