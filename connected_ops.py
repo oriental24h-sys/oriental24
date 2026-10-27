@@ -223,8 +223,24 @@ def register_connected_ops(app, s):
     @app.get('/api/pick-sessions')
     @auth('admin', 'hub_manager')
     def pick_sessions_list():
+        u = user()
         with conn() as c:
-            rows = [dict(r) for r in c.execute('SELECT * FROM pick_sessions ORDER BY id DESC LIMIT 15')]
+            candidates = [dict(r) for r in c.execute('SELECT * FROM pick_sessions ORDER BY id DESC LIMIT 100')]
+            rows = []
+            for sess in candidates:
+                if u['role'] == 'admin':
+                    rows.append(sess)
+                    continue
+                first = c.execute('SELECT parcel_id FROM pick_steps WHERE session_id=? ORDER BY seq LIMIT 1',(sess['id'],)).fetchone()
+                if not first:
+                    continue
+                try:
+                    parcel(c, first['parcel_id'], u)
+                except Error:
+                    continue
+                rows.append(sess)
+                if len(rows) >= 15:
+                    break
         return jsonify(rows=rows)
 
     # ---------- API : plan de chargement ----------
@@ -235,10 +251,18 @@ def register_connected_ops(app, s):
         did = request.args.get('driver_id', type=int) or (u['id'] if u['role'] == 'livreur' else None)
         if not did: raise Error('driver_id obligatoire.')
         with conn() as c:
+            if u['role'] == 'hub_manager':
+                driver_row = c.execute("SELECT id FROM users WHERE id=? AND role='livreur' AND active=1 AND driver_hub_id=?",(did,u.get('agent_hub_id'))).fetchone()
+                if not driver_row:
+                    raise Error('Livreur introuvable dans votre Hub.',404)
+            elif u['role'] == 'livreur' and did != u['id']:
+                raise Error('Vous pouvez consulter uniquement votre propre plan de chargement.',403)
             rows = [dict(r) for r in c.execute('''SELECT p.id,p.tracking,p.city_id,p.status,p.weight_kg,p.dim_l,p.dim_w,p.dim_h,ci.name city
                     FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id
-                    WHERE p.driver_id=? AND p.status NOT IN ('Livré','Retourné','Annulé') ORDER BY p.id''', (did,))]
-        if not rows: raise Error('Aucun colis ouvert pour ce livreur.')
+                    WHERE p.driver_id=? AND p.status NOT IN ('Livré','Retourné','Annulé')
+                    AND (?='admin' OR p.current_hub_id=? OR (?='livreur' AND p.current_hub_id IS NULL))
+                    ORDER BY p.id''', (did,u['role'],u.get('agent_hub_id'),u['role']))]
+        if not rows: raise Error('Aucun colis ouvert pour ce livreur dans le périmètre autorisé.')
         geos = [GEO.get(r['city'] or '') for r in rows]
         order = order_route(geos) if len(rows) > 1 else list(range(len(rows)))
         km = route_km([geos[i] for i in order]) if len(rows) > 1 else 0.0
