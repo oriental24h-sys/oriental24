@@ -107,12 +107,12 @@ def register_reception_extras(app, s):
         d = dict(r)
         if u['role'] == 'client' and d['client_id'] != u['id']:
             raise Error('Palette introuvable.', 404)
-        if u['role'] == 'agent' and (d['destination_hub_id'] != u.get('agent_hub_id') or d['status'] not in ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)')):
+        if u['role'] == 'hub_manager' and (d['destination_hub_id'] != u.get('agent_hub_id') or d['status'] not in ('En transit','Partiellement reçu','Reçu','Clôturé (écarts)')):
             raise Error('Palette introuvable.', 404)
         return d
 
     def receiver(u):
-        if u['role'] not in ('admin', 'agent'):
+        if u['role'] not in ('admin', 'hub_manager'):
             raise Error('Réception physique réservée à Admin ou à un agent de réception.', 403)
 
     def audit(c, did, u, action, details):
@@ -164,10 +164,10 @@ def register_reception_extras(app, s):
     SELECT_INC = '''SELECT i.*,u.name creator FROM pp_incidents i JOIN users u ON u.id=i.created_by'''
 
     @app.get('/api/partner-palettes/<int:did>/incidents')
-    @auth('admin', 'client', 'agent')
+    @auth('admin', 'client', 'hub_manager')
     def incident_list(did):
         u = user()
-        if u['role'] not in ('admin', 'agent') and not (u['role'] == 'client' and u['client_type'] == 'societe_livraison'):
+        if u['role'] not in ('admin', 'hub_manager') and not (u['role'] == 'client' and u['client_type'] == 'societe_livraison'):
             raise Error('Accès non autorisé.', 403)
         with conn() as c:
             c.execute('BEGIN')
@@ -177,7 +177,7 @@ def register_reception_extras(app, s):
             return jsonify(rows=rows, damaged_holds=[r['parcel_id'] for r in open_damaged])
 
     @app.get('/api/partner-palette-incidents/<int:iid>/photo')
-    @auth('admin', 'client', 'agent')
+    @auth('admin', 'client', 'hub_manager')
     def incident_photo(iid):
         u = user()
         with conn() as c:
@@ -197,7 +197,7 @@ def register_reception_extras(app, s):
             return resp
 
     @app.post('/api/partner-palettes/<int:did>/incidents')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def incident_create(did):
         u = user()
         receiver(u)
@@ -262,7 +262,7 @@ def register_reception_extras(app, s):
             return store(c, u, d, fp, did, 'incident', ok=True, incident_id=iid, status=status, remaining=remaining)
 
     @app.post('/api/partner-palettes/<int:did>/close-gaps')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def close_gaps(did):
         u = user()
         receiver(u)
@@ -320,7 +320,7 @@ def register_reception_extras(app, s):
             return jsonify(ok=True, changed=True)
 
     @app.post('/api/partner-palettes/<int:did>/incidents/<int:iid>/resolve')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def incident_resolve(did, iid):
         u = user()
         receiver(u)
@@ -359,10 +359,10 @@ def register_reception_extras(app, s):
             return ALERT_DEFAULTS[key]
 
     @app.get('/api/alerts')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def alerts():
         u = user()
-        scoped_hub = u['agent_hub_id'] if u['role'] == 'agent' else None
+        scoped_hub = u['agent_hub_id'] if u['role'] == 'hub_manager' else None
         with conn() as c:
             c.execute('BEGIN')
             groups = []
