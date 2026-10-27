@@ -204,7 +204,7 @@ def auth(*roles):
         def wrapped(*a,**kw):
             u=user()
             if roles and u['role'] not in roles: raise APIError('Accès non autorisé.',403)
-            if u['role']=='hub_manager'
+            if u['role']=='hub_manager':
                 if not hub_manager_route_allowed(request.method,request.path):
                     raise APIError('Accès refusé : cette route n’est pas encore validée pour le Hub.',403)
                 if hub_manager_requires_active_hub(request.path):
