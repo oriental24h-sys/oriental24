@@ -195,7 +195,7 @@ def register_logistics(app, services):
         if len(password)<10:raise Error('10 caractères minimum pour le mot de passe du responsable.')
         if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):raise Error('Adresse e-mail invalide pour le responsable.')
         if c.execute('SELECT 1 FROM users WHERE lower(email)=lower(?)',(email,)).fetchone():raise Error('Cette adresse e-mail est déjà utilisée.',409)
-        existing=c.execute("SELECT id,name FROM users WHERE agent_hub_id=? AND role IN ('hub_manager','agent') AND active=1 ORDER BY id LIMIT 1",(hub_id,)).fetchone()
+        existing=c.execute("SELECT id,name FROM users WHERE agent_hub_id=? AND role IN ('hub_manager','hub_manager') AND active=1 ORDER BY id LIMIT 1",(hub_id,)).fetchone()
         if existing:raise Error('Ce Hub possède déjà un responsable actif ('+existing['name']+').',409)
         uid=c.execute('''INSERT INTO users(name,email,password,role,company,phone,active,agent_hub_id,created_at)
                          VALUES(?,?,?,'hub_manager','ORIENTAL24',?,1,?,?)''',
@@ -292,7 +292,7 @@ def register_logistics(app, services):
     def allowed_doc(c,did,u):
         d=c.execute('SELECT * FROM ops_documents WHERE id=?',(did,)).fetchone()
         if not d or (u['role']=='client' and (d['kind']=='transfer' or d['client_id']!=u['id'])) or (u['role']=='livreur' and d['driver_id']!=u['id']):raise Error('Document introuvable.',404)
-        if u['role']=='agent' and (d['kind']!='transfer' or u.get('agent_hub_id') not in (d['source_hub_id'],d['destination_hub_id'])):raise Error('Document introuvable.',404)
+        if u['role']=='hub_manager' and (d['kind']!='transfer' or u.get('agent_hub_id') not in (d['source_hub_id'],d['destination_hub_id'])):raise Error('Document introuvable.',404)
         return dict(d)
     def document_data(c,d):
         lines=[dict(r) for r in c.execute('''SELECT l.*,p.phone,p.amount,p.status current_status,p.current_hub_id
@@ -301,7 +301,7 @@ def register_logistics(app, services):
         return {**d,'lines':lines,**ops_manifest_counts(lines)}
     def scoped_document_data(c,d,u):
         data=document_data(c,d)
-        if u['role']=='agent':
+        if u['role']=='hub_manager':
             data['lines']=hub_transfer_manifest_lines(data['lines'],d,u.get('agent_hub_id'))
             for line in data['lines']:
                 line.pop('departure_reconciliation_reason',None)
@@ -315,7 +315,7 @@ def register_logistics(app, services):
     services.update(ops_change=change,ops_notify_event=notify_event)
 
     @app.get(P+'/config')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def ops_config():
         u=user()
         with conn() as c:
@@ -339,7 +339,7 @@ def register_logistics(app, services):
                 h['primary_city_id']=None
                 if u['role']=='admin':
                     managers=[dict(r) for r in c.execute('''SELECT id,name,email,phone,active FROM users
-                        WHERE agent_hub_id=? AND role IN ('hub_manager','agent') ORDER BY active DESC,id''',(h['id'],))]
+                        WHERE agent_hub_id=? AND role IN ('hub_manager','hub_manager') ORDER BY active DESC,id''',(h['id'],))]
                     active_managers=[m for m in managers if m['active']]
                     h['manager']=active_managers[0] if active_managers else (managers[0] if managers else None)
                     h['active_manager_count']=len(active_managers)
@@ -412,7 +412,7 @@ def register_logistics(app, services):
                     # A saved map pin may belong to its former address; require fresh placement after relocation.
                     c.execute('UPDATE ops_hubs SET lat=NULL,lng=NULL WHERE id=?',(hid,))
                 if previous and not previous['active'] and bool(d.get('active')):
-                    manager_count=c.execute("SELECT count(*) FROM users WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','agent')",(hid,)).fetchone()[0]
+                    manager_count=c.execute("SELECT count(*) FROM users WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','hub_manager')",(hid,)).fetchone()[0]
                     if manager_count!=1:raise Error('Un Hub ne peut être réactivé qu’avec exactement un responsable actif.',409)
                 c.execute('UPDATE ops_hubs SET name=?,city_id=?,address=?,active=? WHERE id=?',(name,cid,address,int(bool(d.get('active'))),hid))
             else:
@@ -463,9 +463,9 @@ def register_logistics(app, services):
         with conn() as c:
             c.execute('BEGIN IMMEDIATE');hub(c,hid,False)
             previous=[dict(r) for r in c.execute("""SELECT id,name,email FROM users
-                WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','agent') ORDER BY id""",(hid,)).fetchall()]
+                WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','hub_manager') ORDER BY id""",(hid,)).fetchall()]
             if not previous:raise Error('Aucun responsable actif à remplacer. Utilisez l’ajout de responsable.',409)
-            c.execute("UPDATE users SET active=0 WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','agent')",(hid,))
+            c.execute("UPDATE users SET active=0 WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','hub_manager')",(hid,))
             revoke=services.get('security_revoke_user')
             for manager in previous:
                 if revoke:revoke(c,manager['id'],'Compte remplacé comme responsable de Hub',actor['id'])
@@ -645,21 +645,21 @@ def register_logistics(app, services):
         u=user()
         if u['role']=='admin':where,args='1=1',[]
         elif u['role']=='client':where,args="kind!='transfer' AND client_id=?",[u['id']]
-        elif u['role']=='agent' and u.get('agent_hub_id'):where,args="kind='transfer' AND (source_hub_id=? OR destination_hub_id=?)",[u['agent_hub_id'],u['agent_hub_id']]
+        elif u['role']=='hub_manager' and u.get('agent_hub_id'):where,args="kind='transfer' AND (source_hub_id=? OR destination_hub_id=?)",[u['agent_hub_id'],u['agent_hub_id']]
         elif u['role']=='livreur':where,args='driver_id=?',[u['id']]
         else:where,args='1=0',[]
         with conn() as c:
             return jsonify([scoped_document_data(c,dict(r),u) for r in c.execute('SELECT * FROM ops_documents WHERE '+where+' ORDER BY id DESC LIMIT 500',args).fetchall()])
 
     @app.get(P+'/palettes')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def ops_palettes():
         u=user();tab=request.args.get('tab','default')
         if tab not in ('default','retours','a-recevoir'):raise Error('Onglet de palettes invalide.')
         with conn() as c:
             where=["d.kind='transfer'"];args=[]
             local=None;central_id,central=current_central_hub(c)
-            if u['role']=='agent':
+            if u['role']=='hub_manager':
                 local=local_manager_hub(c,u)
                 if tab=='default':
                     where.append("d.palette_purpose='standard' AND (d.source_hub_id=? OR d.destination_hub_id=?)")
@@ -695,7 +695,7 @@ def register_logistics(app, services):
                     FROM ops_document_lines WHERE document_id=?''',(doc['id'],)).fetchone()
                 doc['count']=summary['count'] or 0;doc['received']=summary['received'] or 0
                 doc['remaining']=0 if doc['status']=='Annulé' else max(0,doc['count']-doc['received'])
-                if u['role']=='agent':
+                if u['role']=='hub_manager':
                     # Only each Hub's own transfer summaries are shown; manifest details remain
                     # hidden until a parcel is physically scanned into that Hub.
                     doc['note']='';doc['cancel_reason']=''
@@ -704,7 +704,7 @@ def register_logistics(app, services):
                            hub=local,total_colis=sum(r['count'] for r in rows),page=1,size=30)
 
     @app.get(P+'/palette-candidates')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def ops_palette_candidates():
         u=user();mode=request.args.get('mode','standard')
         if mode not in ('standard','return_to_central','return_to_origin','unresolved_origin'):raise Error('Mode de palette invalide.')
@@ -750,14 +750,14 @@ def register_logistics(app, services):
                     result.append(item)
                 return jsonify(mode=mode,source_hub_id=central_id,rows=result,available_hubs=available,
                                review_note='Aucune ville ni affectation de route n’est utilisée comme preuve. Admin doit confirmer une référence physique avant le routage.')
-            local=local_manager_hub(c,u) if u['role']=='agent' else None
-            if u['role']=='agent':source_id=local['id']
+            local=local_manager_hub(c,u) if u['role']=='hub_manager' else None
+            if u['role']=='hub_manager':source_id=local['id']
             else:
                 try:source_id=integer(request.args.get('source_hub_id'),'Hub de départ')
                 except Exception:source_id=None
             if mode=='return_to_origin':
                 if source_id!=central_id:raise Error('Le tri des retours doit être effectué au Hub Central.',403)
-                if u['role']=='agent' and local['id']!=central_id:raise Error('Cette opération est réservée au Hub Central.',403)
+                if u['role']=='hub_manager' and local['id']!=central_id:raise Error('Cette opération est réservée au Hub Central.',403)
                 try:dest_id=integer(request.args.get('destination_hub_id'),'Hub d’origine')
                 except Exception:dest_id=None
                 if not dest_id or dest_id==central_id or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(dest_id,)).fetchone():
@@ -854,11 +854,11 @@ def register_logistics(app, services):
                            manual_physical_review=bool(d['manual_physical_review']))
 
     @app.post(P+'/documents')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def ops_create_document():
         d=body();u=user();pids=ids(d);kind=d.get('kind')
         if kind not in ['pickup','return','transfer']:raise Error('Type de document invalide.')
-        if u['role']=='agent' and kind!='transfer':raise Error('Le Hub Manager peut uniquement préparer des transferts inter-Hubs.',403)
+        if u['role']=='hub_manager' and kind!='transfer':raise Error('Le Hub Manager peut uniquement préparer des transferts inter-Hubs.',403)
         purpose=d.get('palette_purpose','standard') if kind=='transfer' else 'standard'
         if purpose not in ('standard','return_to_central','return_to_origin'):
             raise Error('Type de palette invalide.')
@@ -876,7 +876,7 @@ def register_logistics(app, services):
                 central_is_active=bool(central_hub_row and central_hub_row['active'])
                 if not central_is_active:raise Error('Configurez un Hub Central actif avant de créer une palette inter-Hubs.',409)
                 local=None
-                if u['role']=='agent':
+                if u['role']=='hub_manager':
                     local=local_manager_hub(c,u)
                     requested=d.get('source_hub_id')
                     if requested not in (None,'') and integer(requested,'Hub de départ')!=local['id']:
@@ -892,7 +892,7 @@ def register_logistics(app, services):
                 if purpose=='return_to_origin':
                     if src['id']!=central_hub_id or dest['id']==central_hub_id:
                         raise Error('Le retour vers le Hub d’origine doit partir du Hub Central.',409)
-                    if u['role']=='agent' and local['id']!=central_hub_id:
+                    if u['role']=='hub_manager' and local['id']!=central_hub_id:
                         raise Error('Cette opération est réservée au Hub Central.',403)
             else:
                 src=hub(c,d.get('source_hub_id')) if kind!='pickup' else None
@@ -972,7 +972,7 @@ def register_logistics(app, services):
                 r=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=?',(hid,)).fetchone()
                 if not r:return None
                 info=dict(r)
-                if viewer['role']=='agent' and hid!=viewer.get('agent_hub_id'):info.pop('address',None)
+                if viewer['role']=='hub_manager' and hid!=viewer.get('agent_hub_id'):info.pop('address',None)
                 return info
             d['source_hub']=hub_info(d.get('source_hub_id'))
             d['destination_hub']=hub_info(d.get('destination_hub_id'))
@@ -992,7 +992,7 @@ def register_logistics(app, services):
             import qrcode, io, base64
             image=qrcode.make(d['reference']);buf=io.BytesIO();image.save(buf,format='PNG');d['qr']='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()
             audit_rows=[{**dict(r),'details':json.loads(r['details'])} for r in c.execute('SELECT a.*,u.name actor FROM ops_audit a JOIN users u ON u.id=a.actor_id WHERE document_id=? ORDER BY a.id DESC',(did,))]
-            if viewer['role']=='agent':
+            if viewer['role']=='hub_manager':
                 visible_ids={line['parcel_id'] for line in d['lines']};visible_trackings={line['tracking'].upper() for line in d['lines']}
                 audit_rows=[row for row in audit_rows
                     if (row['details'].get('parcel_id') is None or (type(row['details'].get('parcel_id')) is int and row['details']['parcel_id'] in visible_ids))
@@ -1019,7 +1019,7 @@ def register_logistics(app, services):
             raise Error(f"Colis non scanné : la ville {name} n’est pas rattachée à {destination['name']}. Choisissez un autre Hub.",409)
 
     @app.post(P+'/documents/<int:did>/departure-scan')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def ops_document_departure_scan(did):
         d=body();u=user();tracking=text(d,'tracking',maxlen=80).upper()
         with conn() as c:
@@ -1028,7 +1028,7 @@ def register_logistics(app, services):
 
     def dispatch_collection_line(c,did,tracking,u):
         doc=document_data(c,allowed_doc(c,did,u))
-        if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):
+        if u['role']=='hub_manager' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):
             raise Error('Document introuvable.',404)
         if doc['kind']!='transfer' or not doc['departure_scan_required']:
             raise Error('Ce document ne requiert pas les scans de sortie.',409)
@@ -1143,9 +1143,9 @@ def register_logistics(app, services):
         line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking),None)
         special_return=doc.get('palette_purpose') in ('return_to_central','return_to_origin')
         if line and line['departure_reconciled_at']:
-            if u['role']=='agent':raise Error('Colis non disponible pour réception à ce Hub.',404)
+            if u['role']=='hub_manager':raise Error('Colis non disponible pour réception à ce Hub.',404)
             raise Error('Cette ligne a été retirée du manifeste de départ.',409)
-        if u['role']=='agent':
+        if u['role']=='hub_manager':
             unavailable='Colis non disponible pour réception à ce Hub.'
             if not line:raise Error(unavailable,404)
             p=c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
@@ -1174,7 +1174,7 @@ def register_logistics(app, services):
             if p['current_hub_id'] is not None or p['status']!=expected_status:
                 raise Error('Le colis n’est pas en transit vers ce Hub ou a déjà été localisé ailleurs.',409)
         if doc['kind']!='return' and not special_return:
-            if u['role']=='agent':
+            if u['role']=='hub_manager':
                 try:guard(c,p,False)
                 except Error:raise Error('Colis non disponible pour réception à ce Hub.',404)
             else:guard(c,p,False)
@@ -1211,12 +1211,12 @@ def register_logistics(app, services):
         return jsonify(ok=True,already_received=False,parcel_status=event_status,stock_restocked=bool(stock_movement and stock_movement.get('restocked')))
 
     @app.post(P+'/documents/<int:did>/<action>')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def ops_document_action(did,action):
         d=body();u=user()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE');doc=document_data(c,allowed_doc(c,did,u))
-            if u['role']=='agent' and (action!='receive' or not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'arrival')):
+            if u['role']=='hub_manager' and (action!='receive' or not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'arrival')):
                 raise Error('Document introuvable.',404)
             if doc['kind']=='partner_palette':raise Error('Utilisez la réception dédiée Palettes partenaires.',409)
             if action=='dispatch' and doc['kind']=='transfer' and doc['departure_scan_required']:
@@ -1331,7 +1331,7 @@ def register_logistics(app, services):
         return jsonify(ok=True)
 
     @app.get(P+'/hub-dashboard')
-    @auth('agent')
+    @auth('hub_manager')
     def ops_hub_dashboard():
         u=user();hub_id=u.get('agent_hub_id')
         if type(hub_id) is not int or hub_id<=0:raise Error('Ce compte n’est pas rattaché à un Hub actif.',403)
@@ -1410,7 +1410,7 @@ def register_logistics(app, services):
                 metrics_started_at=metrics_started_at,windows=windows)
 
     @app.get(P+'/hub/drivers')
-    @auth('agent')
+    @auth('hub_manager')
     def ops_hub_drivers():
         actor=user()
         with conn() as c:
@@ -1431,7 +1431,7 @@ def register_logistics(app, services):
             return jsonify(hub=local_hub,drivers=rows)
 
     @app.post(P+'/hub/drivers')
-    @auth('agent')
+    @auth('hub_manager')
     def ops_hub_driver_create():
         d=body();actor=user()
         allowed={'name','email','phone','password'}
@@ -1456,7 +1456,7 @@ def register_logistics(app, services):
             return jsonify(ok=True,id=uid,hub=local_hub)
 
     @app.patch(P+'/hub/drivers/<int:driver_id>')
-    @auth('agent')
+    @auth('hub_manager')
     def ops_hub_driver_update(driver_id):
         d=body();actor=user()
         allowed={'name','email','phone','active','password'}
@@ -1491,7 +1491,7 @@ def register_logistics(app, services):
             return jsonify(ok=True,id=driver_id,hub=local_hub)
 
     @app.post(P+'/hub/drivers/<int:driver_id>/access')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def ops_hub_driver_access(driver_id):
         d=body();actor=user()
         if set(d)!={'action','reason','revision','confirmed'} or d.get('action') not in ('block','unblock','archive','restore'):
@@ -1500,8 +1500,8 @@ def register_logistics(app, services):
         reason=text(d,'reason',maxlen=300)
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
-            local_hub=local_manager_hub(c,actor) if actor['role']=='agent' else None
-            if actor['role']=='agent':
+            local_hub=local_manager_hub(c,actor) if actor['role']=='hub_manager' else None
+            if actor['role']=='hub_manager':
                 driver=c.execute("SELECT id,name,active,driver_hub_id,driver_revision,driver_blocked,driver_archived FROM users WHERE id=? AND role='livreur' AND driver_hub_id=?",(driver_id,local_hub['id'])).fetchone()
             else:
                 driver=c.execute("SELECT id,name,active,driver_hub_id,driver_revision,driver_blocked,driver_archived FROM users WHERE id=? AND role='livreur'",(driver_id,)).fetchone()
@@ -1532,7 +1532,7 @@ def register_logistics(app, services):
             return jsonify(ok=True,changed=True,revision=driver['driver_revision']+1,active=bool(active),blocked=bool(blocked),archived=bool(archived))
 
     @app.post(P+'/hub/assignments')
-    @auth('agent')
+    @auth('hub_manager')
     def ops_hub_assignments():
         d=body();actor=user();required={'driver_id','parcel_ids','request_key','confirmed'}
         if set(d)!=required or d.get('confirmed') is not True:raise Error('Confirmez explicitement l’affectation des colis sélectionnés.')
@@ -1588,7 +1588,7 @@ def register_logistics(app, services):
             return jsonify(**result)
 
     @app.get(P+'/hub/driver-statements')
-    @auth('agent')
+    @auth('hub_manager')
     def ops_hub_driver_statements():
         actor=user()
         with conn() as c:
@@ -1632,10 +1632,10 @@ def register_logistics(app, services):
             return jsonify(drivers=drivers,daily=daily,hubs=hubs,hub_activity=hub_activity,daily_assignments=daily_assignments,period_from=start,period_to=end,started_at=c.execute("SELECT value FROM settings WHERE key='ops_started_at'").fetchone()[0])
 
     def collection_load(c,did,u):
-        if u['role'] not in ('admin','agent'):raise Error('Accès réservé.',403)
+        if u['role'] not in ('admin','hub_manager'):raise Error('Accès réservé.',403)
         doc=document_data(c,allowed_doc(c,did,u))
         if doc['kind'] not in ('transfer','pickup','return'):raise Error('Document introuvable.',404)
-        if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'arrival'):raise Error('Document introuvable.',404)
+        if u['role']=='hub_manager' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'arrival'):raise Error('Document introuvable.',404)
         return doc,doc['lines']
 
     def collection_apply(c,doc,ls,u):
@@ -1648,10 +1648,10 @@ def register_logistics(app, services):
     services.setdefault('reception_adapters',{})['transfer']={'load':collection_load,'apply':collection_apply}
 
     def dispatch_collection_load(c,did,u):
-        if u['role'] not in ('admin','agent'):raise Error('Accès réservé.',403)
+        if u['role'] not in ('admin','hub_manager'):raise Error('Accès réservé.',403)
         doc=document_data(c,allowed_doc(c,did,u))
         if doc['kind']!='transfer':raise Error('Transfert introuvable.',404)
-        if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):raise Error('Document introuvable.',404)
+        if u['role']=='hub_manager' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):raise Error('Document introuvable.',404)
         src=hub(c,doc['source_hub_id']);dest=hub(c,doc['destination_hub_id'])
         central_id,central=current_central_hub(c)
         if not central_hub_transfer_allowed(doc['source_hub_id'],doc['destination_hub_id'],central_id,bool(central and central['active'])):
