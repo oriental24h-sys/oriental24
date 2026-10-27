@@ -99,7 +99,7 @@ async function ppRxCamWidget(){
 }
 /* --- étape 1 : code palette --- */
 function ppReceiveStart(){
- if(!(S.user.role==='admin'||S.user.role==='agent'))return;
+ if(!(S.user.role==='admin'||S.user.role==='hub_manager'))return;
  const ctx=ppContext('Réception palette');
  ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-rxstart"><div class="pp-rxqr">${icon('scan')}</div><h3>Scanner le code de la palette pour démarrer la réception</h3>
   <div class="pp-rxbox" id="pp-rx-box"><input id="pp-rx-code" placeholder="PP-000123 · réf. société · tracking d’un colis" autocomplete="off" maxlength="120"></div>
@@ -116,7 +116,7 @@ function ppReceiveStart(){
    if(r.status==='Préparé'){ppSignal('err');ppRxFlash('err');ppRxMsg('err','Palette <b>'+esc(r.reference)+'</b> encore en brouillon : la société doit d’abord confirmer l’envoi.');return}
    if(r.status==='Annulé'){ppSignal('err');ppRxFlash('err');ppRxMsg('err','Palette <b>'+esc(r.reference)+'</b> annulée : aucune réception possible.');return}
    if(r.status==='Clôturé (écarts)'||r.status==='Reçu'){ppSignal('dup');ppRxFlash('dup');ppRxMsg('dup','Palette <b>'+esc(r.reference)+'</b> déjà traitée : '+r.received+' / '+r.count+' reçus.');return}
-   ppSignal('ok');inp.value='';if(S?.user?.role==='agent')await openPartnerPalette(r.id);else await ppReceiveScan(r.id);
+   ppSignal('ok');inp.value='';if(S?.user?.role==='hub_manager')await openPartnerPalette(r.id);else await ppReceiveScan(r.id);
   }catch(e){ppSignal('err');ppRxMsg('err',esc(e.message))}
  };
  ctx.node.querySelector('#pp-rx-go').onclick=go;
@@ -235,7 +235,7 @@ window.o24Cam=ppRxCam;window.o24CamFormats=ppRxCamFormats;window.o24CamSupported
 
 /* Seller pickup receipt: collect individual scans, then commit one atomic batch. */
 async function rbCollectReceive(id){
- if(!['admin','agent'].includes(S?.user?.role))return;
+ if(!['admin','hub_manager'].includes(S?.user?.role))return;
  const ctx=ppContext('Réception du ramassage');ppUnlockSound();
  let cam=null,busy=false,frozen=null,doc=null;const scanned=new Map(),norm=v=>String(v||'').trim().toUpperCase();
  modalCleanup=()=>{try{cam?.stop()}catch(e){}};
