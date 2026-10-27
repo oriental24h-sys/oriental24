@@ -25,9 +25,9 @@ def register_return_palettes(app,s):
         if not isinstance(v,str) or len(v.strip())>limit or (required and not v.strip()):raise Error('Champ invalide : '+k)
         return v.strip()
     def access(u):
-        if u['role'] not in ('admin','agent','client'):raise Error('Accès réservé.',403)
+        if u['role'] not in ('admin','hub_manager','client'):raise Error('Accès réservé.',403)
     def creator(u):
-        if u['role'] not in ('admin','agent'):raise Error('Préparation, envoi et annulation réservés à Admin et aux agents de réception.',403)
+        if u['role'] not in ('admin','hub_manager'):raise Error('Préparation, envoi et annulation réservés à Admin et aux agents de réception.',403)
     def client(c,cid,active=True):
         if isinstance(cid,bool) or not re.fullmatch(r'[1-9][0-9]{0,9}',str(cid)):raise Error('Vendeur invalide.')
         r=c.execute("SELECT * FROM users WHERE id=? AND role='client'"+(' AND active=1' if active else ''),(cid,)).fetchone()
@@ -35,17 +35,17 @@ def register_return_palettes(app,s):
         return dict(r)
     def hub(c,hid,u):
         if isinstance(hid,bool) or not re.fullmatch(r'[1-9][0-9]{0,9}',str(hid)):
-            if u['role']=='agent':raise Error('Hub introuvable.',404)
+            if u['role']=='hub_manager':raise Error('Hub introuvable.',404)
             raise Error('Hub de départ invalide.')
         r=c.execute('SELECT * FROM ops_hubs WHERE id=? AND active=1',(hid,)).fetchone()
         if not r:
-            if u['role']=='agent':raise Error('Hub introuvable.',404)
+            if u['role']=='hub_manager':raise Error('Hub introuvable.',404)
             raise Error('Choisissez un hub de départ actif.',409)
-        if u['role']=='agent' and u['agent_hub_id']!=r['id']:raise Error('Hub introuvable.',404)
+        if u['role']=='hub_manager' and u['agent_hub_id']!=r['id']:raise Error('Hub introuvable.',404)
         return dict(r)
     def get(c,did,u):
         r=c.execute('SELECT d.*,m.transport,m.tracking_code,m.lots FROM ops_documents d JOIN return_palette_meta m ON m.document_id=d.id WHERE d.id=? AND d.kind=?',(did,KIND)).fetchone()
-        if not r or(u['role']=='agent' and r['destination_hub_id']!=u['agent_hub_id']) or(u['role']=='client' and r['client_id']!=u['id']):raise Error('Palette retour introuvable.',404)
+        if not r or(u['role']=='hub_manager' and r['destination_hub_id']!=u['agent_hub_id']) or(u['role']=='client' and r['client_id']!=u['id']):raise Error('Palette retour introuvable.',404)
         return dict(r)
     def lines(c,did):
         return [dict(r) for r in c.execute('SELECT l.*,p.phone,p.amount,p.status current_status,p.current_hub_id FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=? ORDER BY l.id',(did,))]
@@ -75,10 +75,10 @@ def register_return_palettes(app,s):
         with conn() as gc:
             gc.execute('BEGIN IMMEDIATE')
             row=gc.execute('SELECT destination_hub_id,client_id FROM ops_documents WHERE id=? AND kind=?',(did,KIND)).fetchone()
-            if u['role'] not in ('agent','client'):
+            if u['role'] not in ('hub_manager','client'):
                 if row:audit(gc,did,u,'Remise refusée',{'reason':'Rôle non autorisé à confirmer la remise','actor_role':u['role']})
                 block=('Remise réservée à Admin, aux agents de réception et au vendeur destinataire.',403)
-            elif u['role']=='agent' and row and row['destination_hub_id']!=u['agent_hub_id']:
+            elif u['role']=='hub_manager' and row and row['destination_hub_id']!=u['agent_hub_id']:
                 audit(gc,did,u,'Remise refusée',{'reason':'Agent rattaché à un autre hub','actor_hub_id':u['agent_hub_id']})
                 block=('Palette retour introuvable.',404)
             elif u['role']=='client' and row and row['client_id']!=u['id']:
@@ -111,11 +111,11 @@ def register_return_palettes(app,s):
         return jsonify(r)
 
     @app.get('/api/return-palettes/config')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def return_config():
         u=user();access(u)
         with conn() as c:
-            if u['role']=='agent':
+            if u['role']=='hub_manager':
                 hub_id=u.get('agent_hub_id')
                 hubs=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 AND h.id=?',(hub_id,)).fetchall()
                 clients=c.execute('''SELECT DISTINCT u.id,u.name,u.company,u.client_type FROM users u
@@ -129,7 +129,7 @@ def register_return_palettes(app,s):
             return jsonify(hubs=[dict(r) for r in hubs],clients=[dict(r) for r in clients])
 
     @app.get('/api/return-palettes/vendor-counts')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def return_vendor_counts():
         u=user();access(u)
         with conn() as c:
@@ -138,7 +138,7 @@ def register_return_palettes(app,s):
             return jsonify(counts={str(r['client_id']):r['n'] for r in rows})
 
     @app.get('/api/return-palettes/candidates')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def return_candidates():
         u=user();access(u)
         with conn() as c:
@@ -150,13 +150,13 @@ def register_return_palettes(app,s):
             return jsonify(rows=rows,client_id=cl['id'],hub_id=h['id'])
 
     @app.route('/api/return-palettes',methods=['GET','POST'])
-    @auth('admin','agent','client')
+    @auth('admin','hub_manager','client')
     def return_collection():
         u=user();access(u)
         with conn() as c:
             if request.method=='GET':
                 where=['d.kind=?'];args=[KIND]
-                if u['role']=='agent':where.append('d.destination_hub_id=?');args.append(u['agent_hub_id'])
+                if u['role']=='hub_manager':where.append('d.destination_hub_id=?');args.append(u['agent_hub_id'])
                 if u['role']=='client':where.append('d.client_id=?');args.append(u['id'])
                 state=request.args.get('state','');q=text(request.args,'q',120)
                 if state:
@@ -209,13 +209,13 @@ def register_return_palettes(app,s):
             return result(c,u,d,fp,get(c,did,u))
 
     @app.get('/api/return-palettes/<int:did>')
-    @auth('admin','agent','client')
+    @auth('admin','hub_manager','client')
     def return_detail(did):
         u=user();access(u)
         with conn() as c:return jsonify(detail(c,get(c,did,u)))
 
     @app.get('/api/return-palettes/<int:did>/csv')
-    @auth('admin','agent','client')
+    @auth('admin','hub_manager','client')
     def return_csv(did):
         u=user();access(u)
         with conn() as c:
@@ -227,11 +227,11 @@ def register_return_palettes(app,s):
             return Response('\ufeff'+buf.getvalue(),200,{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':f'attachment; filename="{d["reference"]}.csv"'})
 
     @app.post('/api/return-palettes/<int:did>/<action>')
-    @auth('admin','agent','client')
+    @auth('admin','hub_manager','client')
     def return_action(did,action):
         u=user();access(u)
         if action not in ['dispatch','cancel','receive','receive-all']:raise Error('Action inconnue.',404)
-        if action=='receive-all' and u['role']=='agent':
+        if action=='receive-all' and u['role']=='hub_manager':
             raise Error('Le responsable du Hub doit scanner chaque colis individuellement.',403)
         if action in ['receive','receive-all']:receive_guard(did,u)
         else:creator(u)
@@ -254,7 +254,7 @@ def register_return_palettes(app,s):
                 if action=='cancel':
                     reason=text(d,'reason',600,True);c.execute("UPDATE ops_documents SET status='Annulé',cancel_reason=?,revision=revision+1 WHERE id=?",(reason,did));c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,));audit(c,did,u,'Palette retour annulée avant envoi',{'reason':reason})
                     return result(c,u,d,fp,get(c,did,u))
-                if u['role']=='agent':
+                if u['role']=='hub_manager':
                     # tinydl l'agent kd'ha l'envoi depuis son hub (déjà garanti par get())
                     pass
                 c.execute("UPDATE ops_documents SET status='En transit',dispatched_at=?,revision=revision+1 WHERE id=?",(at,did));audit(c,did,u,'Retour expédié au vendeur',{'count':len(ls),'transport':doc['transport'],'tracking_code':doc['tracking_code'],'lots':doc['lots']})
