@@ -133,7 +133,7 @@ class ReceptionCollectionTests(unittest.TestCase):
         did=self.palette('partner');detail=self.manifest('partner',did,self.central);d=self.body(detail)
         self.assertEqual(self.commit('partner',did,d,self.other).status_code,404)
         r=self.commit('partner',did,d,self.central);self.assertEqual(r.status_code,200,r.json)
-        self.assertEqual(self.t.parcel_state(3)['status'],'Réceptionné')
+        self.assertEqual(self.t.parcel_state(3)['status'],'Ramassé')
         self.assertTrue(self.commit('partner',did,d,self.central).json['replayed'])
 
     def test_return_owner_batch_preserves_money(self):
@@ -182,7 +182,7 @@ class ReceptionCollectionTests(unittest.TestCase):
         detail=self.manifest('recovered',lid,self.central);d=self.body(detail)
         self.assertEqual(len(d['line_ids']),1)
         r=self.commit('recovered',lid,d,self.central);self.assertEqual(r.status_code,200,r.json)
-        self.assertEqual(self.t.parcel_state(3)['status'],'Réceptionné')
+        self.assertEqual(self.t.parcel_state(3)['status'],'Ramassé')
         self.assertTrue(self.commit('recovered',lid,d,self.central).json['replayed'])
         with self.conn() as c:
             self.assertIsNone(c.execute('SELECT missing_at FROM ops_document_lines WHERE id=?',(lid,)).fetchone()[0])

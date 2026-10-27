@@ -216,11 +216,11 @@ class HubPaletteFlowTests(unittest.TestCase):
         self.assertEqual(other_hub_returns.get_json()['rows'],[])
         self.assertEqual({line['tracking'] for line in self.visible_document_lines(doc_id,10,910)},{'TRK-RETURN-1','TRK-RETURN-2'})
         self.assertEqual(self.scan_departure(doc_id,'TRK-RETURN-1',10,910).status_code,200)
-        self.assertEqual({line['tracking'] for line in self.visible_document_lines(doc_id,10,910)},{'TRK-RETURN-2'})
+        self.assertEqual({line['tracking'] for line in self.visible_document_lines(doc_id,10,910)},{'TRK-RETURN-1','TRK-RETURN-2'})
         departed=self.scan_departure(doc_id,'TRK-RETURN-2',10,910)
         self.assertEqual(departed.status_code,200,departed.get_json())
-        self.assertEqual(self.visible_document_lines(doc_id,10,910),[])
-        self.assertEqual(self.visible_document_lines(doc_id,90,990),[])
+        self.assertEqual({line['tracking'] for line in self.visible_document_lines(doc_id,10,910)},{'TRK-RETURN-1','TRK-RETURN-2'})
+        self.assertEqual({line['tracking'] for line in self.visible_document_lines(doc_id,90,990)},{'TRK-RETURN-1','TRK-RETURN-2'})
 
         with self.conn() as c:
             rows=c.execute('SELECT id,status,current_hub_id,origin_hub_id,amount,invoice_id FROM parcels WHERE id IN (1,2) ORDER BY id').fetchall()

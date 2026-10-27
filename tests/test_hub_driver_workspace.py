@@ -39,7 +39,8 @@ class HubDriverWorkspaceTests(unittest.TestCase):
             self.client_id=c.execute("SELECT id FROM users WHERE role='client' LIMIT 1").fetchone()[0]
             c.execute("INSERT INTO driver_terms VALUES(?,'gross',1500,500,500,1,1,?)",(self.driver,m.now()))
         self.client=m.app.test_client()
-        r=self.client.post('/api/login',json={'email':self.email,'password':'TestPassword!123'})
+        r=self.client.post('/api/login',json={'email':self.email,'password':'TestPassword!123'},
+                           environ_overrides={'REMOTE_ADDR':f'10.{int(unique[:2],16)}.{int(unique[2:4],16)}.{int(unique[4:6],16)}'})
         self.assertEqual(r.status_code,200,r.json)
         r=self.client.get('/api/bootstrap')
         self.assertEqual(r.status_code,200,r.json)
@@ -528,6 +529,84 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         with self.m.conn() as c:
             p=c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone()
             self.assertEqual((p['current_hub_id'],p['driver_id'],p['status']),(self.hub,self.driver,'Reçu par le livreur'))
+
+    def test_sent_transfers_remain_visible_with_manifest_without_mutation_rights(self):
+        from werkzeug.security import generate_password_hash
+        unique=uuid.uuid4().hex
+        with self.m.conn() as c:
+            old_central=c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
+            old_city_hub=c.execute('SELECT hub_id FROM cities WHERE id=?',(self.city,)).fetchone()[0]
+            c.execute("INSERT INTO settings(key,value) VALUES('central_hub_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(self.hub),))
+            c.execute('UPDATE cities SET hub_id=? WHERE id=?',(self.foreign,self.city))
+            outside=c.execute("INSERT INTO ops_hubs(name,city_id,address,created_at) VALUES('Unrelated',?,'',?)",(self.city,self.m.now())).lastrowid
+            for role,hub in (('destination',self.foreign),('unrelated',outside)):
+                c.execute("INSERT INTO users(name,email,password,role,agent_hub_id,created_at) VALUES(?,?,?,'hub_manager',?,?)",(role,role+unique+'@example.test',generate_password_hash('TransferTest!123'),hub,self.m.now()))
+        def restore():
+            with self.m.conn() as c:
+                if old_central:c.execute("UPDATE settings SET value=? WHERE key='central_hub_id'",(old_central[0],))
+                else:c.execute("DELETE FROM settings WHERE key='central_hub_id'")
+                c.execute('UPDATE cities SET hub_id=? WHERE id=?',(old_city_hub,self.city))
+                c.execute('UPDATE ops_hubs SET active=1 WHERE id=?',(self.hub,))
+        self.addCleanup(restore)
+        browsers={};headers={}
+        for n,role in enumerate(('destination','unrelated')):
+            browser=self.m.app.test_client()
+            r=browser.post('/api/login',json={'email':role+unique+'@example.test','password':'TransferTest!123'},environ_overrides={'REMOTE_ADDR':f'10.71.0.{n+1}'})
+            self.assertEqual(r.status_code,200,r.json)
+            browsers[role]=browser;headers[role]={'X-CSRF-Token':browser.get('/api/bootstrap').json['csrf']}
+        destination=browsers['destination'];unrelated=browsers['unrelated']
+        first,second=self.parcel(self.hub),self.parcel(self.hub)
+        ids={first[0],second[0]};trackings={first[1],second[1]}
+        foreign,_=self.parcel(outside)
+        with self.m.conn() as c:c.execute('UPDATE parcels SET origin_hub_id=? WHERE id=?',(self.hub,foreign))
+        created=self.post('logistics/documents',dict(kind='transfer',palette_purpose='standard',source_hub_id=self.hub,destination_hub_id=self.foreign,parcel_ids=list(ids),note=''))
+        self.assertEqual(created.status_code,200,created.json)
+        did=created.json['id'];path=f'/api/logistics/documents/{did}'
+        self.assertEqual(destination.get(path).json['lines'],[])
+        self.assertEqual(unrelated.get(path).status_code,404)
+        self.assertEqual(self.post(f'logistics/documents/{did}/departure-scan',dict(tracking=first[1])).status_code,200)
+        # Partial departure retains the source manifest, but only dispatched lines reach the destination.
+        self.assertEqual({l['tracking'] for l in self.client.get(path).json['lines']},trackings)
+        self.assertEqual({l['tracking'] for l in destination.get(path).json['lines']},{first[1]})
+        self.assertEqual(destination.get(f'/api/parcels/{first[0]}').status_code,404)
+        self.assertEqual(self.post(f'logistics/documents/{did}/departure-scan',dict(tracking=second[1])).status_code,200)
+        def assert_source_tracking():
+            rows={p['id']:p for p in self.client.get('/api/bootstrap').json['parcels']}
+            self.assertTrue(ids <= rows.keys())
+            self.assertNotIn(foreign,rows)  # An origin_hub_id alone is never departure evidence.
+            for pid in ids:
+                self.assertTrue(rows[pid]['hub_read_only'])
+                self.assertFalse(rows[pid]['hub_status_editable'])
+                detail=self.client.get(f'/api/parcels/{pid}')
+                self.assertEqual(detail.status_code,200,detail.json)
+                r=self.client.patch(f'/api/parcels/{pid}',json={'status':'Reporté','revision':detail.json['parcel']['ops_revision']},headers=self.headers)
+                self.assertEqual(r.status_code,404,r.json)
+            doc=self.client.get(path)
+            self.assertEqual(doc.status_code,200,doc.json)
+            self.assertEqual({l['tracking'] for l in doc.json['lines']},trackings)
+            self.assertEqual(doc.json['count'],2)
+            listed=next(d for d in self.client.get('/api/logistics/documents').json if d['id']==did)
+            self.assertEqual({l['tracking'] for l in listed['lines']},trackings)
+        assert_source_tracking()
+        for pid in ids:
+            self.assertEqual(unrelated.get(f'/api/parcels/{pid}').status_code,404)
+        candidates=self.client.get('/api/logistics/palette-candidates',query_string={'source_hub_id':self.hub,'destination_hub_id':self.foreign,'mode':'standard'})
+        self.assertEqual(candidates.status_code,200,candidates.json)
+        self.assertFalse(ids & {p['id'] for p in candidates.json['rows']})
+        for pid,tracking in (first,second):
+            r=destination.post(path+'/receive',json={'tracking':tracking},headers=headers['destination'])
+            self.assertEqual(r.status_code,200,r.json)
+        assert_source_tracking()
+        self.assertEqual(self.client.get(path).json['status'],'Reçu')
+        self.assertEqual({l['tracking'] for l in destination.get(path).json['lines']},trackings)
+        with self.m.conn() as c:
+            # History is retained even after a later onward movement; no transfer line is active anymore.
+            c.execute('UPDATE parcels SET current_hub_id=? WHERE id IN (?,?)',(outside,first[0],second[0]))
+        assert_source_tracking()
+        self.assertEqual({l['tracking'] for l in destination.get(path).json['lines']},trackings)
+        with self.m.conn() as c:c.execute('UPDATE ops_hubs SET active=0 WHERE id=?',(self.hub,))
+        self.assertEqual(self.client.get(path).status_code,403)
+        self.assertFalse(ids & {p['id'] for p in self.client.get('/api/bootstrap').json['parcels']})
 
     def test_hub_keeps_read_only_tracking_after_driver_handoff(self):
         pid,_=self.parcel(self.hub)
