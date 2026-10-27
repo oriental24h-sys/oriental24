@@ -404,7 +404,7 @@ def register_advanced_tech(app, s):
 
     # ---------- API : affectation au tri ----------
     @app.get('/api/sort-zones')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def zones_list():
         with conn() as c:
             rows = [dict(r) for r in c.execute('SELECT * FROM sort_zones ORDER BY code')]
@@ -425,7 +425,7 @@ def register_advanced_tech(app, s):
         return jsonify(ok=True)
 
     @app.get('/api/parcels/<int:pid>/zone')
-    @auth('admin', 'agent', 'livreur')
+    @auth('admin', 'hub_manager', 'livreur')
     def parcel_zone(pid):
         u = user()
         with conn() as c:
