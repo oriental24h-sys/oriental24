@@ -1130,7 +1130,7 @@ function parcelsView() {
   const actions = hubManager ? "" : `<a class="btn export-btn" href="/api/export">${icon("download")}Exporter CSV</a>${create ? `<button class="btn import-trigger" onclick="openImports()">${icon("upload")}Importer</button>` : ""}${create ? `<button class="btn primary" onclick="newParcel()">${icon("plus")}Nouveau colis</button>` : ""}`;
   return (
     heading(title, subtitle, actions) +
-    `<section class="card"><div class="tabs"><button class="active">${hubManager ? "Au Hub et confiés aux livreurs" : S.user.role === "livreur" ? "Mes colis assignés" : "Tous les colis"} <span class="tag" style="margin-left:6px">${S.parcels.length}</span></button><button onclick="filters.status='En livraison';$('#status-filter').value=filters.status;drawParcelTable()">En livraison</button><button onclick="filters.status='Livré';$('#status-filter').value=filters.status;drawParcelTable()">Livrés</button></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="parcel-search" placeholder="Référence, nom, téléphone…" value="${esc(filters.q)}" oninput="filters.q=this.value;listPage=1;drawParcelTable()"></div><select id="status-filter" aria-label="Filtrer par statut" onchange="filters.status=this.value;listPage=1;drawParcelTable()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option value="${esc(s)}" ${s === filters.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select id="treatment-filter" aria-label="Statut de traitement" onchange="filters.treatment=this.value;listPage=1;drawParcelTable()"><option value="">Statut de traitement</option><option value="treated" ${filters.treatment === "treated" ? "selected" : ""}>Traité</option><option value="untreated" ${filters.treatment === "untreated" ? "selected" : ""}>Non traité</option></select><select aria-label="Filtrer par ville" onchange="filters.city=this.value;listPage=1;drawParcelTable()"><option value="">Toutes les villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === filters.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div>${hubManager ? "" : `<button class="btn sm" onclick="openScanner()">${icon("scan")}Scanner</button><button class="btn sm" onclick="printSelected()">${icon("print")}Étiquettes</button>`}${hubManager ? `<button class="btn sm" onclick="hubBulkAssign()" title="Affecter les colis sélectionnés à un livreur local">${icon("user")}Affecter</button>` : S.user.role === "admin" || (S.user.role === "livreur" && S.users.some((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active)) ? `<button class="btn sm" onclick="bulkAssign()" title="Affectation en masse des colis cochés">${icon("user")}Affecter</button>` : ""}<button class="icon-btn" onclick="filters={q:'',city:'',status:'',from:'',to:'',treatment:''};listPage=1;renderView()" title="Réinitialiser les filtres">${icon("refresh")}</button></div><div id="parcel-table"></div></section>`
+    `<section class="card"><div class="tabs"><button class="active">${hubManager ? "Au Hub et confiés aux livreurs" : S.user.role === "livreur" ? "Mes colis assignés" : "Tous les colis"} <span class="tag" style="margin-left:6px">${S.parcels.length}</span></button><button onclick="filters.status='En livraison';$('#status-filter').value=filters.status;drawParcelTable()">En livraison</button><button onclick="filters.status='Livré';$('#status-filter').value=filters.status;drawParcelTable()">Livrés</button></div><div class="toolbar"><div class="search-field">${icon("search")}<input id="parcel-search" placeholder="Référence, nom, téléphone…" value="${esc(filters.q)}" oninput="filters.q=this.value;listPage=1;drawParcelTable()"></div><select id="status-filter" aria-label="Filtrer par statut" onchange="filters.status=this.value;listPage=1;drawParcelTable()"><option value="">Tous les statuts</option>${S.statuses.map((s) => `<option value="${esc(s)}" ${s === filters.status ? "selected" : ""}>${esc(s)}</option>`).join("")}</select><select id="treatment-filter" aria-label="Statut de traitement" onchange="filters.treatment=this.value;listPage=1;drawParcelTable()"><option value="">Statut de traitement</option><option value="treated" ${filters.treatment === "treated" ? "selected" : ""}>Traité</option><option value="untreated" ${filters.treatment === "untreated" ? "selected" : ""}>Non traité</option></select><select aria-label="Filtrer par ville" onchange="filters.city=this.value;listPage=1;drawParcelTable()"><option value="">Toutes les villes</option>${S.cities.map((c) => `<option value="${c.id}" ${String(c.id) === filters.city ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select><div class="spacer"></div>${hubManager ? `<button class="btn sm" onclick="printSelected()" title="Imprimer les étiquettes des colis de votre Hub">${icon("print")}Étiquettes</button>` : `<button class="btn sm" onclick="openScanner()">${icon("scan")}Scanner</button><button class="btn sm" onclick="printSelected()">${icon("print")}Étiquettes</button>`}${hubManager ? `<button class="btn sm" onclick="hubBulkAssign()" title="Affecter les colis sélectionnés à un livreur local">${icon("user")}Affecter</button>` : S.user.role === "admin" || (S.user.role === "livreur" && S.users.some((u) => u.role === "livreur" && u.team_lead_id === S.user.id && u.active)) ? `<button class="btn sm" onclick="bulkAssign()" title="Affectation en masse des colis cochés">${icon("user")}Affecter</button>` : ""}<button class="icon-btn" onclick="filters={q:'',city:'',status:'',from:'',to:'',treatment:''};listPage=1;renderView()" title="Réinitialiser les filtres">${icon("refresh")}</button></div><div id="parcel-table"></div></section>`
   );
 }
 function drawParcelTable() {
@@ -1175,6 +1175,43 @@ function newParcel() {
     `<div class="full form-hint">Choisissez si la commande utilise des produits suivis dans le stock, ou si vous créez un colis classique sans déduction de stock.</div><div class="form-actions" style="justify-content:stretch;gap:12px"><button type="button" class="btn primary" onclick="newParcelFromStock()">${icon("box")}Commande depuis le stock</button><button type="button" class="btn" onclick="newParcelRegular()">${icon("plus")}CMD classique</button></div><div class="full form-hint">Depuis le stock : les unités sont réservées immédiatement, puis déduites au Hub Central quand l’administration contrôle et crée le colis. Une CMD classique ne touche pas au stock.</div>`,
   );
 }
+// Saisie libre de la ville : tolère les fautes de frappe, l'arabe et les translittérations.
+let cityFreeTimer = null;
+function bindCityFreeInput() {
+  if (typeof $ !== "function" || typeof api !== "function") return;
+  const input = $("#city-free-input"),
+    note = $("#city-free-note"),
+    select = $('#modal-form select[name="city_id"]');
+  if (!input || !note || !select) return;
+  const say = (text, kind) => {
+    note.textContent = text;
+    note.className = "sub" + (kind ? " " + kind : "");
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(cityFreeTimer);
+    const value = input.value.trim();
+    if (!value) return say("La ville est reconnue automatiquement.");
+    cityFreeTimer = setTimeout(async () => {
+      try {
+        const r = await api("/cities/resolve?q=" + encodeURIComponent(value));
+        if (r.found) {
+          select.value = String(r.id);
+          say(r.note || `« ${value} » reconnue comme ${r.name}`, "ok");
+        } else {
+          select.value = "";
+          say(
+            r.suggestions && r.suggestions.length
+              ? `Ville non reconnue. Peut-être : ${r.suggestions.map((s) => s.name).join(", ")}`
+              : "Ville non reconnue. Choisissez-la dans la liste.",
+            "bad",
+          );
+        }
+      } catch (e) {
+        say("Vérification impossible pour le moment.");
+      }
+    }, 350);
+  });
+}
 function newParcelFromStock() {
   closeModal();
   newFulfillment();
@@ -1184,11 +1221,12 @@ function newParcelRegular() {
   modal(
     "Nouveau colis",
     form(
-      `${S.user.role === "admin" ? select("client_id", "Client / Société", clientOptions()) : ""}${clientTrackingSlot()}${input("recipient", "Nom du destinataire")}${input("phone", "Téléphone", "", "tel", true, 'placeholder="06…"')}${select("city_id", "Ville de livraison", [["", "Choisir une ville"], ...cities.map((c) => [c.id, c.name + " — " + money(c.fee) + " MAD"])])}${input("amount", "Montant à collecter (MAD)", "", "number", true, 'min="0" max="1000000" step="0.01"')}${input("product", "Nature du produit", "", "text", false)}${textarea("address", "Adresse complète (facultatif · la ville est utilisée par défaut)", "")}${textarea("note", "Note de livraison")}<div class="full parcel-create-flags"><div class="parcel-create-flag"><div><strong>Ne pas autoriser à ouvrir le colis</strong><small>Le destinataire ne peut pas ouvrir le colis avant le paiement.</small></div><label class="switch"><input type="checkbox" name="not_allowed_to_open" aria-label="Ne pas autoriser à ouvrir le colis"></label></div><div class="parcel-create-flag"><div><strong>Commande avec échange</strong><small>Signaler qu’un échange est prévu avec le destinataire.</small></div><label class="switch"><input type="checkbox" name="is_exchange" aria-label="Commande avec échange"></label></div><div class="parcel-create-flag"><div><strong>Colis fragile</strong><small>Manipuler avec précaution. Le signalement apparaît sur le colis et dans toute réclamation liée (transit, Hub, livreur).</small></div><label class="switch"><input type="checkbox" name="is_fragile" aria-label="Colis fragile"></label></div></div><div class="full form-hint">Seules les villes ouvertes à la livraison sont disponibles. Le tarif en vigueur est conservé sur le colis lors de sa création.</div>`,
+      `${S.user.role === "admin" ? select("client_id", "Client / Société", clientOptions()) : ""}${clientTrackingSlot()}${input("recipient", "Nom du destinataire")}${input("phone", "Téléphone", "", "tel", true, 'placeholder="06…"')}${select("city_id", "Ville de livraison", [["", "Choisir une ville"], ...cities.map((c) => [c.id, c.name + " — " + money(c.fee) + " MAD"])])}<label class="field city-free"><span>Ou tapez la ville (faute de frappe ou arabe acceptés)</span><input name="city_name" id="city-free-input" type="text" autocomplete="off" placeholder="Ex. : Ojda, وجدة" aria-describedby="city-free-note"><small class="sub" id="city-free-note">La ville est reconnue automatiquement.</small></label>${input("amount", "Montant à collecter (MAD)", "", "number", true, 'min="0" max="1000000" step="0.01"')}${input("product", "Nature du produit", "", "text", false)}${textarea("address", "Adresse complète (facultatif · la ville est utilisée par défaut)", "")}${textarea("note", "Note de livraison")}<div class="full parcel-create-flags"><div class="parcel-create-flag"><div><strong>Ne pas autoriser à ouvrir le colis</strong><small>Le destinataire ne peut pas ouvrir le colis avant le paiement.</small></div><label class="switch"><input type="checkbox" name="not_allowed_to_open" aria-label="Ne pas autoriser à ouvrir le colis"></label></div><div class="parcel-create-flag"><div><strong>Commande avec échange</strong><small>Signaler qu’un échange est prévu avec le destinataire.</small></div><label class="switch"><input type="checkbox" name="is_exchange" aria-label="Commande avec échange"></label></div><div class="parcel-create-flag"><div><strong>Colis fragile</strong><small>Manipuler avec précaution. Le signalement apparaît sur le colis et dans toute réclamation liée (transit, Hub, livreur).</small></div><label class="switch"><input type="checkbox" name="is_fragile" aria-label="Colis fragile"></label></div></div><div class="full form-hint">Seules les villes ouvertes à la livraison sont disponibles. Le tarif en vigueur est conservé sur le colis lors de sa création.</div>`,
       "Créer le colis",
     ),
   );
   bindClientTracking();
+  bindCityFreeInput();
   bindForm(async (d) => {
     const r = await api("/parcels", "POST", d);
     await saved("Colis " + r.tracking + " créé" + (r.city_support ? " · Support " + r.city_support.name : " · aucun support n’est affecté à cette ville"));
@@ -1400,7 +1438,7 @@ function cityForm(id) {
   modal(
     id ? "Modifier la ville" : "Étendre votre couverture",
     form(
-      `${input("name", "Nom de la ville", c.name)}${input("region", "Région", c.region, "text", true, 'placeholder="Oriental, Fès-Meknès…"')}${input("fee", "Tarif livraison (MAD)", c.fee, "number", true, 'min="0" step="0.01"')}${input("return_fee", "Frais de retour (MAD)", c.return_fee, "number", true, 'min="0" step="0.01"')}<div class="switch"><input id="city-delivery" name="delivery" type="checkbox" ${c.delivery ? "checked" : ""}><label for="city-delivery">Livraison ouverte</label></div><div class="switch"><input id="city-pickup" name="pickup" type="checkbox" ${c.pickup ? "checked" : ""}><label for="city-pickup">Ramassage ouvert</label></div><div class="full form-hint orange">Une ville active en livraison apparaît sur le site public et dans le formulaire d’ajout de colis. Vous pouvez la désactiver sans perdre l’historique.</div>`,
+      `${input("name", "Nom de la ville", c.name)}${input("name_ar", "Nom en arabe (facultatif · aide à reconnaître la ville)", c.name_ar || "")}${input("region", "Région", c.region, "text", true, 'placeholder="Oriental, Fès-Meknès…"')}${input("fee", "Tarif livraison (MAD)", c.fee, "number", true, 'min="0" step="0.01"')}${input("return_fee", "Frais de retour (MAD)", c.return_fee, "number", true, 'min="0" step="0.01"')}<div class="switch"><input id="city-delivery" name="delivery" type="checkbox" ${c.delivery ? "checked" : ""}><label for="city-delivery">Livraison ouverte</label></div><div class="switch"><input id="city-pickup" name="pickup" type="checkbox" ${c.pickup ? "checked" : ""}><label for="city-pickup">Ramassage ouvert</label></div><div class="full form-hint orange">Une ville active en livraison apparaît sur le site public et dans le formulaire d’ajout de colis. Vous pouvez la désactiver sans perdre l’historique.</div>`,
     ),
   );
   bindForm(async (d) => {

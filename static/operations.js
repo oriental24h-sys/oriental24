@@ -172,7 +172,7 @@ function drawImportRows() {
         .map((r) => [
           `<strong>${r.line}</strong><span class="sub mono">${esc(r.reference || "—")}</span>`,
           `<strong>${esc(r.recipient || "—")}</strong><span class="sub">${esc(r.phone || "—")}</span>`,
-          esc(r.city || "—"),
+          `${esc(r.city || "—")}${r.city_note ? `<span class="sub city-auto" title="Ville reconnue automatiquement">↺ ${esc(r.city_note)}</span>` : ""}`,
           `${r.amount === null ? "—" : money(r.amount) + " MAD"}<span class="sub">Frais ${r.fee === null ? "—" : money(r.fee) + " MAD"}</span>`,
           r.errors.length
             ? `<div class="row-errors">${r.errors.map((e) => `<span>${esc(e)}</span>`).join("")}</div>`
