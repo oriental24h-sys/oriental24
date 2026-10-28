@@ -186,43 +186,59 @@ def ensure_hub_manager_can_leave(connection, user_id, hub_id):
 def install_one_active_hub_manager_guards(connection):
     """Prevent assigning two active Hub Manager accounts to the same Hub.
 
-    The guards intentionally do not rewrite or reject pre-existing duplicate data at
-    startup. Admins can deactivate/reassign a duplicate account; new conflicting writes
-    are blocked immediately. ``agent`` is included for compatibility with old code paths.
+    Pre-existing duplicates are preserved so an Admin can resolve them explicitly.
+    The update guard makes a narrow exception for a pure legacy-role conversion
+    (agent -> hub_manager); otherwise that migration would be blocked by the
+    duplicate guard meant to protect new assignments.
     """
     required = {'id', 'role', 'active', 'agent_hub_id'}
     if not required.issubset(_columns(connection, 'users')):
         raise RuntimeError('users must have role, active and agent_hub_id before manager guards are installed')
 
-    connection.executescript('''
-    CREATE TRIGGER IF NOT EXISTS users_one_active_hub_manager_insert
-    BEFORE INSERT ON users
-    WHEN NEW.role IN ('hub_manager','agent')
-      AND COALESCE(NEW.active,0)=1
-      AND NEW.agent_hub_id IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM users u
-        WHERE u.agent_hub_id=NEW.agent_hub_id
-          AND u.active=1
-          AND u.role IN ('hub_manager','agent')
-      )
-    BEGIN
-      SELECT RAISE(ABORT, 'Hub already has an active manager');
-    END;
+    connection.execute("""
+        CREATE TRIGGER IF NOT EXISTS users_one_active_hub_manager_insert
+        BEFORE INSERT ON users
+        WHEN NEW.role IN ('hub_manager','agent')
+          AND COALESCE(NEW.active,0)=1
+          AND NEW.agent_hub_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM users u
+            WHERE u.agent_hub_id=NEW.agent_hub_id
+              AND u.active=1
+              AND u.role IN ('hub_manager','agent')
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'Hub already has an active manager');
+        END
+    """)
 
-    CREATE TRIGGER IF NOT EXISTS users_one_active_hub_manager_update
-    BEFORE UPDATE OF role,active,agent_hub_id ON users
-    WHEN NEW.role IN ('hub_manager','agent')
-      AND COALESCE(NEW.active,0)=1
-      AND NEW.agent_hub_id IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM users u
-        WHERE u.agent_hub_id=NEW.agent_hub_id
-          AND u.active=1
-          AND u.role IN ('hub_manager','agent')
-          AND u.id IS NOT NEW.id
-      )
-    BEGIN
-      SELECT RAISE(ABORT, 'Hub already has an active manager');
-    END;
-    ''')
+    # Upgrade the older trigger definition in-place exactly once. IF NOT EXISTS
+    # alone would keep the previous trigger forever and continue to block migration.
+    current = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='users_one_active_hub_manager_update'"
+    ).fetchone()
+    if not current or 'legacy_role_migration_v1' not in (current[0] or ''):
+        connection.execute('DROP TRIGGER IF EXISTS users_one_active_hub_manager_update')
+    connection.execute("""
+        CREATE TRIGGER IF NOT EXISTS users_one_active_hub_manager_update
+        BEFORE UPDATE OF role,active,agent_hub_id ON users
+        WHEN NEW.role IN ('hub_manager','agent')
+          AND COALESCE(NEW.active,0)=1
+          AND NEW.agent_hub_id IS NOT NULL
+          AND NOT ( /* legacy_role_migration_v1 */
+            OLD.role='agent'
+            AND NEW.role='hub_manager'
+            AND OLD.active IS NEW.active
+            AND OLD.agent_hub_id IS NEW.agent_hub_id
+          )
+          AND EXISTS (
+            SELECT 1 FROM users u
+            WHERE u.agent_hub_id=NEW.agent_hub_id
+              AND u.active=1
+              AND u.role IN ('hub_manager','agent')
+              AND u.id IS NOT NEW.id
+          )
+        BEGIN
+          SELECT RAISE(ABORT, 'Hub already has an active manager');
+        END
+    """)
