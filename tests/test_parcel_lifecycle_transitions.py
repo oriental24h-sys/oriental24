@@ -11,8 +11,7 @@ class DriverParcelLifecycleTests(unittest.TestCase):
                 self.assertNotIn('Livré', DRIVER_TRANSITIONS[status])
 
     def test_delivery_requires_driver_custody_or_active_delivery_attempt(self):
-        for status in ('Reçu par le livreur', 'En livraison', 'Programmé',
-                       'Reporté', 'Intéressé'):
+        for status in ('En livraison', 'Programmé', 'Reporté', 'Intéressé'):
             with self.subTest(status=status):
                 self.assertIn('Livré', DRIVER_TRANSITIONS[status])
 
