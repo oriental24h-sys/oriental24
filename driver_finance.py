@@ -274,17 +274,40 @@ def register_driver_finance(app, services):
             return jsonify([{**dict(r),'details':json.loads(r['details'])} for r in rows])
 
     @app.get(PREFIX)
-    @auth('admin', 'livreur')
+    @auth('admin', 'livreur', 'hub_manager')
     def overview():
-        u=user(); cond,args=('1=1',[]) if u['role']=='admin' else ('s.driver_id=?',[u['id']])
+        u=user()
+        if u['role']=='admin':
+            cond,args='1=1',[]
+        elif u['role']=='hub_manager':
+            cond,args='s.hub_id=?',[u.get('agent_hub_id')]
+        else:
+            cond,args='s.driver_id=?',[u['id']]
         with conn() as c:
             c.execute('BEGIN')
+            if u['role']=='hub_manager' and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone():
+                raise Error('Hub actif requis.',403)
             rows = c.execute(f'SELECT s.* FROM driver_statements s WHERE {cond} ORDER BY s.id DESC',args).fetchall()
+            if u['role']=='hub_manager':
+                scoped=[]
+                for row in rows:
+                    try:
+                        statement(c,row['id'],u)
+                        scoped.append(row)
+                    except Error as exc:
+                        if exc.status not in (403,404): raise
+                rows=scoped
             statements=[balances(c,r) for r in rows]
             active=[r for r in statements if not r['cancelled_at']]
             summary={k:sum(r[k] for r in active) for k in ('cod_cents','commission_cents','cash_remaining_cents','commission_remaining_cents','retained_cents')}
-            txs = c.execute(f'''SELECT t.*,s.driver_id,s.driver_name FROM driver_transactions t JOIN driver_statements s ON s.id=t.statement_id
-                WHERE {cond} ORDER BY t.id DESC LIMIT 500''', args).fetchall()
+            visible_ids=[r['id'] for r in rows]
+            txs=[]
+            for offset in range(0,len(visible_ids),500):
+                ids=visible_ids[offset:offset+500]
+                marks=','.join('?' for _ in ids)
+                if not marks: continue
+                txs.extend(c.execute(f'''SELECT t.*,s.driver_id,s.driver_name FROM driver_transactions t JOIN driver_statements s ON s.id=t.statement_id
+                    WHERE s.id IN ({marks}) ORDER BY t.id DESC LIMIT 500''',ids).fetchall())
             return jsonify(statements=statements,summary=summary,transactions=[dict(r) for r in txs])
 
     @app.post(PREFIX+'/preview')
