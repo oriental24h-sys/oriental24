@@ -261,7 +261,7 @@ def scope(u,alias='p',c=None,follow_drivers=False,include_sent=False):
 def hub_status_capabilities(c,rows,u):
     if u['role']!='hub_manager' or not rows:return rows
     # Tracking rights do not grant status-editing rights after an inter-Hub send.
-    condition,args=hub_tracking_parcel_scope(c,'p',u.get('agent_hub_id'))
+    condition,args=hub_parcel_scope(c,'p',u.get('agent_hub_id'))
     editable=set()
     for offset in range(0,len(rows),800):
         ids=[p['id'] for p in rows[offset:offset+800]]
