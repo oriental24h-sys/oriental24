@@ -18,12 +18,28 @@ STATUS_HELP = {
  'En livraison':'Tournée de livraison au destinataire.', 'Retourné':'Retour déclaré ; les règles financières existantes sont conservées.',
  'Annulé':'Annulation déclarée avec motif (livreur ou admin). Aucun encaissement ; le colis n’entre dans aucun relevé tant qu’il reste annulé. Le livreur peut reprendre cette commande et choisir un autre état autorisé.'}
 DRIVER_HUB_ONLY_STATUSES = ('Réceptionné','Retourné')
-# Courier choices are independent of the previous state. Delivered alone is terminal.
-# Keep the existing courier vocabulary (not creation/confirmation/internal transit states).
-DRIVER_STATUS_TARGETS = ['Reporté','Programmé','Reçu par le livreur','Livré','Refusé',
-                         'Intéressé','Ramassé','Au hub','En livraison','Annulé']
-DRIVER_TRANSITIONS = {source:[] if source=='Livré' else [s for s in DRIVER_STATUS_TARGETS if s!=source]
-                      for source in STATUSES}
+# Drivers may only move a parcel through operationally valid custody/delivery steps.
+# Admin/Hub workflows have their own guarded actions and are not limited by this map.
+# In particular, a driver cannot mark a newly created, hub-bound, returned, cancelled,
+# or already delivered parcel as delivered without a recorded handoff to the driver.
+DRIVER_TRANSITIONS = {
+ 'Créé': [],
+ 'Confirmé': ['Ramassé','Annulé'],
+ 'Ramassé': ['Au hub','Annulé'],
+ 'Au hub': ['Reçu par le livreur'],
+ 'Transit': ['Réceptionné'],
+ 'Réceptionné': ['Reçu par le livreur'],
+ 'Reçu par le livreur': ['En livraison','Programmé','Reporté','Annulé'],
+ 'En livraison': ['Livré','Refusé','Intéressé','Programmé','Reporté','Annulé'],
+ 'Programmé': ['En livraison','Livré','Refusé','Intéressé','Reporté','Annulé'],
+ 'Reporté': ['Programmé','En livraison','Livré','Refusé','Intéressé','Annulé'],
+ 'Intéressé': ['Programmé','En livraison','Livré','Refusé','Reporté','Annulé'],
+ 'Refusé': [],
+ 'Livré': [],
+ 'Retourné': [],
+ 'Annulé': [],
+ CENTRAL_RETURN_TRANSIT: [],
+}
 ATTEMPT_SOURCES = ['En livraison','Programmé']
 ATTEMPT_OUTCOMES = ['Livré','Programmé','Refusé','Retourné','Reporté']
 # Contact/deferred states are deliberately not assigned a physical progress rank.
