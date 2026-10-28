@@ -788,7 +788,9 @@ def register_logistics(app, services):
             if mode=='return_to_central':
                 if source_id==central_id:raise Error('Le Hub Central ne peut pas envoyer un retour vers lui-même.')
                 dest_id=central_id
-                sql="p.current_hub_id=? AND p.status IN ('Retourné','Refusé','Échange Réceptionné')"
+                # Tous les colis physiquement présents au Hub (hors Livré) : la décision
+                # de scan explique ensuite lesquels partent directement ou demandent un OUI.
+                sql="p.current_hub_id=? AND p.status!='Livré'"
             else:
                 dest_id=integer(request.args.get('destination_hub_id'),'Hub de destination')
                 dest=hub(c,dest_id)
@@ -799,11 +801,25 @@ def register_logistics(app, services):
             if mode=='standard' and source_id==central_id:
                 sql+=' AND ci.hub_id=?'
                 candidate_args.append(dest_id)
-            rows=c.execute('''SELECT p.id,p.tracking,p.recipient,p.status,p.origin_hub_id,ci.name city,oh.name origin_hub
+            rows=c.execute('''SELECT p.id,p.tracking,p.recipient,p.status,p.origin_hub_id,p.next_attempt_at,
+                ci.name city,oh.name origin_hub
                 FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id
                 WHERE '''+sql+''' AND NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)
                 ORDER BY p.id DESC LIMIT 500''',candidate_args).fetchall()
-            return jsonify(mode=mode,source_hub_id=source_id,destination_hub_id=dest_id,rows=[dict(r) for r in rows])
+            result=[]
+            for raw in rows:
+                item=dict(raw)
+                if mode=='return_to_central':
+                    decision=return_scan.decide_policy(c,item,source_id,now)
+                    item['decision']=decision['code']
+                    item['decision_message']=decision['message']
+                    item['requires_confirmation']=bool(decision.get('requires_confirmation'))
+                    item['days_at_hub']=(decision.get('details') or {}).get('days_at_hub')
+                    item['handovers']=(decision.get('details') or {}).get('handovers')
+                    item['appointment']=(decision.get('details') or {}).get('appointment')
+                result.append(item)
+            return jsonify(mode=mode,source_hub_id=source_id,destination_hub_id=dest_id,rows=result,
+                           total=len(result))
 
     @app.get(P+'/palette-scan')
     @auth('admin','agent')
