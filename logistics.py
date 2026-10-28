@@ -601,6 +601,10 @@ def register_logistics(app, services):
             if prior:
                 if prior['payload_hash']!=hashed or prior['parcel_id']!=pid or prior['actor_id']!=u['id']:raise Error('Clé déjà utilisée pour une autre saisie.',409)
                 return jsonify(ok=True,id=prior['id'],already_recorded=True)
+            # A driver may record delivery attempts only after physical custody has
+            # left the Hub. A matching driver assignment alone is not proof of handoff.
+            if u['role']=='livreur' and p.get('current_hub_id') is not None:
+                raise Error('Le colis est encore enregistré dans le stock du Hub ; confirmez la remise physique au livreur avant la tentative.',409)
             revision(p,d)
             if u['role']=='livreur':
                 if p['status']=='Livré':raise Error('Commande Livré : état définitivement verrouillé pour le livreur.',409)
