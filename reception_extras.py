@@ -9,6 +9,11 @@ from werkzeug.utils import secure_filename
 from hub_schema import install_one_active_hub_manager_guards, migrate_driver_hub_id
 
 KIND = 'partner_palette'
+
+
+def migrate_legacy_hub_manager_role(c):
+    """Convert old persisted `agent` accounts without changing Hub assignments."""
+    return migrate_legacy_hub_manager_role(c).rowcount
 INCIDENTS = ('missing', 'extra', 'damaged')
 PHOTO_LIMIT = 1024 * 1024
 ALERT_DEFAULTS = {'alert_transit_hours': 48, 'alert_partial_hours': 24, 'alert_unassigned_hours': 24}
