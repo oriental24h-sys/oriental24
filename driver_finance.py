@@ -445,10 +445,11 @@ def register_driver_finance(app, services):
         return jsonify(ok=True)
 
     @app.get(PREFIX+'/export')
-    @auth('admin', 'livreur')
+    @auth('admin', 'livreur', 'hub_manager')
     def export_statements():
         u=user();args=[];sql='SELECT * FROM driver_statements'
         if u['role']=='livreur':sql+=' WHERE driver_id=?';args=[u['id']]
+        elif u['role']=='hub_manager':sql+=' WHERE hub_id=?';args=[u.get('agent_hub_id')]
         output=io.StringIO();w=csv.writer(output,delimiter=';')
         w.writerow(['Relevé','Livreur','Méthode','COD MAD','Commission MAD','Retenue MAD','COD restant MAD','Commission restante MAD','Statut','Émis le'])
         def amount(v):return f'{Decimal(v)/100:.2f}'
@@ -457,7 +458,14 @@ def register_driver_finance(app, services):
             return "'"+v if v.lstrip().startswith(('=','+','-','@')) else v
         with conn() as c:
             c.execute('BEGIN')
+            if u['role']=='hub_manager' and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone():
+                raise Error('Hub actif requis.',403)
             for row in c.execute(sql+' ORDER BY id DESC',args).fetchall():
+                if u['role']=='hub_manager':
+                    try:statement(c,row['id'],u)
+                    except Error as exc:
+                        if exc.status in (403,404):continue
+                        raise
                 s=balances(c,row)
                 w.writerow([s['reference'],safe(s['driver_name']),s['mode'],*(amount(s[k]) for k in ('cod_cents','commission_cents','retained_cents','cash_remaining_cents','commission_remaining_cents')),s['status'],s['created_at']])
         return Response('\ufeff'+output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="ORIENTAL24-caisse-livreurs.csv"'})
