@@ -21,7 +21,7 @@ def register_reception_extras(app, s):
             c.execute('ALTER TABLE users ADD COLUMN agent_hub_id INTEGER REFERENCES ops_hubs(id)')
         # One-time idempotent conversion. Keep the legacy column name during this rollout so
         # currently deployed palette/receipt modules do not lose hub assignments.
-        c.execute("UPDATE users SET role='hub_manager' WHERE role='agent'")
+        c.execute("UPDATE users SET role='hub_manager' WHERE role='hub_manager'")
         install_one_active_hub_manager_guards(c)
         migrate_driver_hub_id(c,created_at=now(),append_audit=s['append_audit_log'])
         if 'missing_at' not in {r[1] for r in c.execute('PRAGMA table_info(ops_document_lines)')}:
