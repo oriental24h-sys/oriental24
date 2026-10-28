@@ -350,6 +350,8 @@
     const p = S.parcels.find((x) => x.id === id);
     const o = DA_STATUS_OPTS.find((x) => x.key === key);
     if (!p || !o || p.status === 'Livré' || p.financial_locked || p.invoice_id || p.operations_locked) return;
+    // Reprise échange : verrouillée, seul le Hub la réceptionne.
+    if (p.exchange_of_id || p.status === 'Échange à récupérer' || p.status === 'Échange Réceptionné') return;
     if (!(S.status_policy?.driver_transitions?.[p.status] || []).includes(o.status)) return;
     const frDay = (v) => v ? new Intl.DateTimeFormat(daLocale()).format(new Date(v + 'T12:00:00')) : '';
     modal('Confirmer : ' + o.label, form(
@@ -362,6 +364,9 @@
        ${o.key === 'noresponse' ? `<div class="full form-hint">Sera enregistré comme « Reporté » avec ce motif (l’ancien rendez-vous est retiré).</div>` : ''}`,
       'Confirmer'));
     bindForm(async (d) => {
+      // Le clic « Confirmer » est un geste utilisateur : on en profite pour débloquer
+      // la lecture audio (politique anti-autoplay des navigateurs mobiles).
+      if (typeof o24ExchangeArm === 'function') o24ExchangeArm();
       const payload = { status: d.status, note: d.note, revision: p.ops_revision || 0 };
       if (d.otp) payload.otp = String(d.otp).replace(/\D/g, '');
       if (d.reason_code) payload.reason_code = d.reason_code;
@@ -370,18 +375,41 @@
         payload.next_attempt_at = d.next_at;
         payload.note = 'Reporté au ' + frDay(d.next_at) + (d.note ? ' · ' + d.note : '');
       }
+      let result = null;
       try {
-        await api409(
+        result = await api409(
           (f) => api('/parcels/' + id, 'PATCH', { ...payload, revision: f ? f.ops_revision : payload.revision }),
           async () => ({ ops_revision: (await api('/parcels/' + id)).parcel.ops_revision }));
       } catch (e) { toast(e.message || 'Mise à jour refusée', true); return; }
       await saved('Statut mis à jour : ' + o.label);
       daPos(true);   // v1.8.0 : à chaque étape, la position suit la tournée
       render();
+      // Commande avec échange : la livraison crée la reprise EC<tracking> comptée sur le livreur.
+      window.daExchangeNotice(result && result.exchange);
       // Optional proof remains available separately, not forced after confirmation.
       // if (o.key === 'livre') daPodModal(id);   // v1.4.28 : proposition photo / signature après une livraison
     });
   };
+  /* Échange : alerte « Récupère échange » avec le nouveau tracking, sans dépendre
+     d'un fichier externe (repli autonome si exchange.js n'est pas déployé). */
+  window.daExchangeNotice = (ex) => {
+    if (!ex || !ex.tracking) return;
+    if (typeof window.o24ExchangeAlert === 'function') { window.o24ExchangeAlert(ex); return; }
+    try {
+      if (typeof window.o24ExchangeSound === 'function') window.o24ExchangeSound();
+      else if ('speechSynthesis' in window) {
+        const u = new SpeechSynthesisUtterance('Récupère échange'); u.lang = 'fr-FR'; window.speechSynthesis.speak(u);
+      }
+    } catch (e) { /* silencieux : l'alerte visuelle reste affichée */ }
+    const html = `<div style="display:grid;gap:10px">
+      <p style="margin:0;font-size:18px;font-weight:800;color:#b45309;text-transform:uppercase">Récupère échange</p>
+      <div style="font-family:ui-monospace,Menlo,monospace;font-size:18px;font-weight:800;color:#0b223f;border:2px dashed #b45309;background:#fff7ed;border-radius:10px;padding:12px;text-align:center;word-break:break-all" dir="ltr">${esc(ex.tracking)}</div>
+      <p class="form-hint" style="margin:0">Récupérez l'ancien article chez le destinataire${ex.recipient ? ' <b>' + esc(ex.recipient) + '</b>' : ''}, puis remettez-le au Hub. La reprise reste comptée sur vous jusqu'à sa réception au Hub.</p>
+      <div class="form-actions"><button type="button" class="btn primary" onclick="closeModal()">J'ai compris</button></div></div>`;
+    if (typeof modal === 'function') modal('Échange à récupérer', html, true);
+    else if (typeof toast === 'function') toast('Récupère échange · ' + ex.tracking, true);
+  };
+
   /* v1.4.28 : preuve de livraison — photo (caméra du téléphone, compressée) ou signature tactile du
      destinataire. Optionnel : « Passer » n'enregistre rien. */
   window.daPodModal = (id) => {

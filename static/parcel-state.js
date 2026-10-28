@@ -42,6 +42,10 @@ window.addEventListener('resize',()=>activeReasonMenu?.place?.());
 // The row's status itself is the dropdown trigger; no generic modal is opened.
 function parcelStatusChoices(p){
  if(S.user.role==='client')return clientInterestedEligible(p)?['Intéressé']:[];
+ if(p.exchange_of_id){
+  // Reprise échange : état verrouillé. Le Hub peut seulement la réceptionner.
+  return S.user.role==='agent'&&p.status==='Échange à récupérer'&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked?['Échange Réceptionné']:[];
+ }
  if(['admin','agent'].includes(S.user.role))return S.user.role==='agent'&&!hubParcelStatusEditable(p)?[]:S.statuses.filter(s=>s!=='Vers Hub Central');
  const next=S.status_policy.driver_transitions;
  return [p.status,...(next[p.status]||[])].filter(s=>!['Réceptionné','Retourné'].includes(s));
