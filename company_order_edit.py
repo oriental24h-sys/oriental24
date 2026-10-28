@@ -39,7 +39,7 @@ def register_company_order_edit(app,s):
         if u.get('client_type')!='societe_livraison':raise Error('Action réservée aux sociétés de livraison.',403)
         d=request.get_json(silent=True)
         if not isinstance(d,dict):raise Error('Objet JSON requis.')
-        allowed={'revision','confirmed'} if request.method=='DELETE' else {'revision','tracking','recipient','phone','address','city_id','amount','product','note','not_allowed_to_open','is_exchange'}
+        allowed={'revision','confirmed'} if request.method=='DELETE' else {'revision','tracking','recipient','phone','address','city_id','amount','product','note','not_allowed_to_open','is_exchange','is_fragile'}
         if set(d)-allowed:raise Error('Champ non modifiable.')
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
@@ -75,6 +75,8 @@ def register_company_order_edit(app,s):
                 check_available(c,tracking,Error,client_id=u['id'])
             for k in ('not_allowed_to_open','is_exchange'):
                 if type(d.get(k)) is not bool:raise Error('Option invalide : '+k)
+            # « Fragile » est optionnel : absent = non fragile (compatibilité des appels existants).
+            if 'is_fragile' in d and type(d.get('is_fragile')) is not bool:raise Error('Option invalide : is_fragile')
             if type(d.get('city_id')) is not int:raise Error('Ville invalide.')
             city=c.execute('SELECT * FROM cities WHERE id=?',(d['city_id'],)).fetchone()
             if not city or (city['id']!=p['city_id'] and not city['delivery']):raise Error('Choisissez une ville ouverte à la livraison.')
@@ -83,13 +85,13 @@ def register_company_order_edit(app,s):
             fee,ret=p['fee'],p['return_fee']
             if city['id']!=p['city_id']:
                 fee,ret=s['tariff_fees_for'](c,u['id'],dict(city)) if 'tariff_fees_for' in s else (city['fee'],city['return_fee'])
-            c.execute('''UPDATE parcels SET tracking=?,recipient=?,phone=?,address=?,city_id=?,amount=?,fee=?,return_fee=?,product=?,note=?,open_allowed=?,is_exchange=?,ops_revision=ops_revision+1,updated_at=? WHERE id=?''',
-                (tracking,fields['recipient'],fields['phone'],fields['address'],city['id'],amount,fee,ret,fields['product'],fields['note'],int(not d['not_allowed_to_open']),int(d['is_exchange']),t,pid))
+            c.execute('''UPDATE parcels SET tracking=?,recipient=?,phone=?,address=?,city_id=?,amount=?,fee=?,return_fee=?,product=?,note=?,open_allowed=?,is_exchange=?,is_fragile=?,ops_revision=ops_revision+1,updated_at=? WHERE id=?''',
+                (tracking,fields['recipient'],fields['phone'],fields['address'],city['id'],amount,fee,ret,fields['product'],fields['note'],int(not d['not_allowed_to_open']),int(d['is_exchange']),int(d.get('is_fragile',False)),t,pid))
             for doc in docs:
                 c.execute('UPDATE ops_document_lines SET tracking=?,recipient=?,city=? WHERE document_id=? AND parcel_id=?',(tracking,fields['recipient'],city['name'],doc['id'],pid))
                 c.execute('UPDATE ops_documents SET revision=revision+1 WHERE id=?',(doc['id'],))
                 c.execute('INSERT INTO ops_audit(document_id,actor_id,action,details,created_at) VALUES(?,?,?,?,?)',(doc['id'],u['id'],'Commande du brouillon modifiée avant envoi',json.dumps({'parcel_id':pid,'tracking':tracking},ensure_ascii=False),t))
             s['event'](c,pid,p['status'],'Informations modifiées par la société avant envoi.',u)
-            after=dict(fields,tracking=tracking,city_id=city['id'],amount=amount,fee=fee,return_fee=ret,open_allowed=int(not d['not_allowed_to_open']),is_exchange=int(d['is_exchange']))
+            after=dict(fields,tracking=tracking,city_id=city['id'],amount=amount,fee=fee,return_fee=ret,open_allowed=int(not d['not_allowed_to_open']),is_exchange=int(d['is_exchange']),is_fragile=int(d.get('is_fragile',False)))
             s['append_audit_log'](c,actor_id=u['id'],actor_name=u['name'],action='company_order_edited',entity_type='parcel',entity_id=pid,old_value={k:p[k] for k in after},new_value=after,metadata={'draft_ids':[x['id'] for x in docs]},created_at=t)
             return jsonify(ok=True,revision=p['ops_revision']+1)

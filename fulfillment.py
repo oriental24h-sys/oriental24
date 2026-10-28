@@ -84,14 +84,15 @@ def register_fulfillment(app, services):
     @auth('admin','client')
     def fulfillment_reserve():
         d=data();u=user();key=text(d,'request_key',maxlen=80)
-        for flag in ('not_allowed_to_open','is_exchange'):
+        for flag in ('not_allowed_to_open','is_exchange','is_fragile'):
             if flag in d and type(d[flag]) is not bool:raise Error('Les options d’ouverture et d’échange doivent être cochées ou décochées.')
         if not re.fullmatch('[A-Za-z0-9_-]{20,80}',key):raise Error('Clé de saisie invalide.')
         items=d.get('items')
         if not isinstance(items,list) or not 1<=len(items)<=30:raise Error('Ajoutez de 1 à 30 références produit.')
         shipping={k:text(d,k,maxlen=300) for k in ['recipient','phone','address']}
         shipping.update(amount=number(d,'amount'),city_id=number(d,'city_id',1,1000000000,True),note=text(d,'note',False,600))
-        shipping.update(open_allowed=int(not d.get('not_allowed_to_open',False)),is_exchange=int(d.get('is_exchange',False)))
+        shipping.update(open_allowed=int(not d.get('not_allowed_to_open',False)),is_exchange=int(d.get('is_exchange',False)),
+                        is_fragile=int(d.get('is_fragile',False)))
         if not re.fullmatch(r'\+?[\d\s-]{9,18}',shipping['phone']):raise Error('Téléphone invalide.')
         cid=u['id'] if u['role']=='client' else number(d,'client_id',1,1000000000,True)
         hashed=hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest()
@@ -148,7 +149,7 @@ def register_fulfillment(app, services):
                 if not city:raise Error('Cette ville n’est plus ouverte. Annulez la réservation pour libérer le stock.',409)
                 tracking=tracking_for(c,o['client_id'],sh.get('tracking'),Error,ignore_order=oid);t=now()
                 fee,ret=services['tariff_fees_for'](c,o['client_id'],dict(city)) if services.get('tariff_fees_for') else (city['fee'],city['return_fee'])
-                pid=c.execute("INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,status,product,note,created_at,updated_at,current_hub_id,open_allowed,is_exchange) VALUES(?,?,?,?,?,?,?,?,?,'Ramassé',?,?,?,?,?,?,?)",(tracking,o['client_id'],sh['recipient'],sh['phone'],sh['address'],city['id'],sh['amount'],fee,ret,'; '.join(l['sku']+' × '+str(l['quantity']) for l in o['lines']),sh['note'],t,t,hub['id'],sh.get('open_allowed',1),sh.get('is_exchange',0))).lastrowid
+                pid=c.execute("INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,status,product,note,created_at,updated_at,current_hub_id,open_allowed,is_exchange,is_fragile) VALUES(?,?,?,?,?,?,?,?,?,'Ramassé',?,?,?,?,?,?,?,?)",(tracking,o['client_id'],sh['recipient'],sh['phone'],sh['address'],city['id'],sh['amount'],fee,ret,'; '.join(l['sku']+' × '+str(l['quantity']) for l in o['lines']),sh['note'],t,t,hub['id'],sh.get('open_allowed',1),sh.get('is_exchange',0),sh.get('is_fragile',0))).lastrowid
                 for l in o['lines']:
                     p=c.execute('SELECT * FROM products WHERE id=? AND client_id=?',(l['product_id'],o['client_id'])).fetchone()
                     if not p or p['quantity']<reserved(c,p['id']):raise Error('Stock physique incohérent avec les réservations. Contrôle requis.',409)

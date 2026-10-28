@@ -585,7 +585,8 @@ def register_logistics(app, services):
             p=parcel(c,pid,u)
             attempts=[dict(r) for r in c.execute('SELECT a.*,u.name actor FROM ops_attempts a JOIN users u ON u.id=a.actor_id WHERE parcel_id=? ORDER BY a.id DESC',(pid,))]
             links=[dict(r) for r in c.execute('SELECT d.id,d.reference,d.kind,d.status,l.received_at FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id WHERE l.parcel_id=? AND (d.client_id=? OR ?=\'admin\' OR d.driver_id=?) ORDER BY d.id DESC',(pid,u['id'],u['role'],u['id']))]
-            tickets=[dict(r) for r in c.execute("SELECT t.id,t.subject,t.status,l.priority FROM ops_ticket_links l JOIN tickets t ON t.id=l.ticket_id WHERE l.parcel_id=? AND (t.user_id=? OR ?='admin') ORDER BY t.id DESC",(pid,u['id'],u['role']))]
+            hub_scope=u['role']=='agent' and type(u.get('agent_hub_id')) is int and p.get('current_hub_id')==u.get('agent_hub_id')
+            tickets=[dict(r) for r in c.execute("SELECT t.id,t.subject,t.status,l.priority FROM ops_ticket_links l JOIN tickets t ON t.id=l.ticket_id WHERE l.parcel_id=? AND (t.user_id=? OR ?='admin' OR ?=1) ORDER BY t.id DESC",(pid,u['id'],u['role'],1 if hub_scope else 0))]
             return jsonify(parcel=p,attempts=attempts,documents=links,tickets=tickets)
 
     @app.post(P+'/parcels/<int:pid>/attempts')
@@ -1312,6 +1313,8 @@ def register_logistics(app, services):
         if priority not in ['Basse','Normale','Haute']:raise Error('Priorité invalide.')
         with conn() as c:
             c.execute('BEGIN IMMEDIATE');p=parcel(c,pid,u)
+            fragile=bool(p.get('is_fragile'))
+            if fragile and priority=='Normale':priority='Haute'
             category,key,fingerprint,attachments=prepare_claim(d,Error)
             if key:
                 prior=c.execute('SELECT * FROM claim_requests WHERE user_id=? AND request_key=?',(u['id'],key)).fetchone()
@@ -1323,8 +1326,13 @@ def register_logistics(app, services):
             c.execute('INSERT INTO ops_ticket_links(ticket_id,parcel_id,priority) VALUES(?,?,?)',(tid,pid,priority))
             for f in attachments:c.execute('INSERT INTO claim_attachments(ticket_id,name,mime,content,sha256,size,created_at) VALUES(?,?,?,?,?,?,?)',(tid,f['name'],f['mime'],f['content'],f['sha256'],f['size'],now()))
             if key:c.execute('INSERT INTO claim_requests(user_id,request_key,parcel_id,fingerprint,ticket_id) VALUES(?,?,?,?,?)',(u['id'],key,pid,fingerprint,tid))
-            for row in c.execute("SELECT id FROM users WHERE role='admin' AND active=1"):notify(c,row['id'],'Réclamation liée à un colis',p['tracking']+' · TKT-'+str(tid),pid)
-            return jsonify(ok=True,id=tid)
+            if fragile:
+                # Le caractère fragile suit la réclamation : tout le monde le voit en transit.
+                c.execute('UPDATE ops_ticket_links SET priority=? WHERE ticket_id=?',('Haute',tid))
+                event(c,pid,p['status'],'Réclamation ouverte sur un colis fragile · manipuler avec précaution',u)
+            for row in c.execute("SELECT id FROM users WHERE role='admin' AND active=1"):
+                notify(c,row['id'],'Réclamation liée à un colis'+(' FRAGILE' if fragile else ''),p['tracking']+' · TKT-'+str(tid),pid)
+            return jsonify(ok=True,id=tid,fragile=fragile)
 
     @app.patch(P+'/tickets/<int:tid>')
     @auth('admin')

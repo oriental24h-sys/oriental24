@@ -81,6 +81,7 @@ def init_db():
         if 'status_updated_at' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN status_updated_at TEXT')
         if 'open_allowed' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN open_allowed INTEGER NOT NULL DEFAULT 1')
         if 'is_exchange' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN is_exchange INTEGER NOT NULL DEFAULT 0')
+        if 'is_fragile' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN is_fragile INTEGER NOT NULL DEFAULT 0')
         exchange_flow.migrate(c)
         client_types.migrate(c)
         if 'support_id' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN support_id INTEGER REFERENCES users(id)')
@@ -429,10 +430,11 @@ def detail(pid):
 def create_parcel():
     d=request.get_json(silent=True);u=user()
     if not isinstance(d,dict):raise APIError('Données de colis invalides.')
-    for flag in ('not_allowed_to_open','is_exchange'):
-        if flag in d and type(d[flag]) is not bool:raise APIError('Les options d’ouverture et d’échange doivent être cochées ou décochées.')
+    for flag in ('not_allowed_to_open','is_exchange','is_fragile'):
+        if flag in d and type(d[flag]) is not bool:raise APIError('Les options d’ouverture, d’échange et de fragilité doivent être cochées ou décochées.')
     open_allowed=0 if d.get('not_allowed_to_open',False) else 1
     is_exchange=int(d.get('is_exchange',False))
+    is_fragile=int(d.get('is_fragile',False))
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         city=c.execute('SELECT * FROM cities WHERE id=? AND delivery=1',(d.get('city_id'),)).fetchone()
@@ -441,12 +443,15 @@ def create_parcel():
         if not c.execute("SELECT id FROM users WHERE id=? AND role='client' AND active=1",(cid,)).fetchone(): raise APIError('Client invalide.')
         phone=text(d,'phone')
         if not re.fullmatch(r'\+?[\d\s-]{9,18}',phone): raise APIError('Numéro de téléphone invalide.')
+        # Adresse facultative : sans adresse, la ville sert de repère de livraison.
+        address=text(d,'address',False) or city['name']
         track=client_types.tracking_for(c,cid,d.get('tracking'),APIError);t=now()
         fee,ret=globals()['tariff_fees_for'](c,int(cid),dict(city)) if 'tariff_fees_for' in globals() else (city['fee'],city['return_fee'])
-        cur=c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,open_allowed,is_exchange,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(track,cid,text(d,'recipient'),phone,text(d,'address'),city['id'],number(d,'amount'),fee,ret,text(d,'product',False),text(d,'note',False),open_allowed,is_exchange,t,t))
+        cur=c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,open_allowed,is_exchange,is_fragile,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(track,cid,text(d,'recipient'),phone,address,city['id'],number(d,'amount'),fee,ret,text(d,'product',False),text(d,'note',False),open_allowed,is_exchange,is_fragile,t,t))
         flags=[]
         if not open_allowed:flags.append('ouverture du colis interdite')
         if is_exchange:flags.append('échange demandé')
+        if is_fragile:flags.append('colis fragile')
         event_note='Colis enregistré'+(' · '+' · '.join(flags) if flags else '')
         event(c,cur.lastrowid,'Créé',event_note,u)
         assigned=c.execute('SELECT su.id,su.name,su.phone FROM parcels p LEFT JOIN users su ON su.id=p.support_id WHERE p.id=?',(cur.lastrowid,)).fetchone()
@@ -907,16 +912,35 @@ def tickets():
             cur=c.execute('INSERT INTO tickets(user_id,subject,category,created_at) VALUES(?,?,?,?)',(u['id'],text(d,'subject'),text(d,'category'),now()))
             c.execute('INSERT INTO messages(ticket_id,user_id,body,created_at) VALUES(?,?,?,?)',(cur.lastrowid,u['id'],text(d,'body',maxlen=3000),now()))
             return jsonify(ok=True)
-        sql='SELECT t.*,u.name author,l.parcel_id,l.priority,l.assigned_to,l.first_response_at,p.tracking FROM tickets t JOIN users u ON u.id=t.user_id LEFT JOIN ops_ticket_links l ON l.ticket_id=t.id LEFT JOIN parcels p ON p.id=l.parcel_id';args=[]
-        if u['role']!='admin':sql+=' WHERE t.user_id=?';args=[u['id']]
+        sql=('SELECT t.*,u.name author,l.parcel_id,l.priority,l.assigned_to,l.first_response_at,'
+             'p.tracking,p.status parcel_status,p.is_fragile,p.current_hub_id parcel_hub_id '
+             'FROM tickets t JOIN users u ON u.id=t.user_id '
+             'LEFT JOIN ops_ticket_links l ON l.ticket_id=t.id LEFT JOIN parcels p ON p.id=l.parcel_id')
+        args=[]
+        if u['role']=='admin':
+            pass
+        elif u['role']=='agent':
+            # Responsable de Hub : ses propres tickets + les tickets des commandes
+            # physiquement présentes dans son Hub (lecture/échange de messages).
+            hub_id=u.get('agent_hub_id') if type(u.get('agent_hub_id')) is int else 0
+            sql+=(' WHERE (t.user_id=? OR EXISTS(SELECT 1 FROM ops_ticket_links l2 JOIN parcels p2 ON p2.id=l2.parcel_id '
+                  'WHERE l2.ticket_id=t.id AND p2.current_hub_id=?))')
+            args=[u['id'],hub_id]
+        else:
+            sql+=' WHERE t.user_id=?';args=[u['id']]
         return jsonify([dict(r) for r in c.execute(sql+' ORDER BY t.id DESC',args)])
 @app.route('/api/tickets/<int:tid>',methods=['GET','POST','PATCH'])
 @auth()
 def ticket(tid):
     u=user();d=request.get_json(silent=True) or {}
     with conn() as c:
-        t=c.execute('SELECT t.*,l.parcel_id,l.priority,l.assigned_to,l.first_response_at,p.tracking FROM tickets t LEFT JOIN ops_ticket_links l ON l.ticket_id=t.id LEFT JOIN parcels p ON p.id=l.parcel_id WHERE t.id=?',(tid,)).fetchone()
-        if not t or (u['role']!='admin' and t['user_id']!=u['id']):raise APIError('Ticket introuvable.',404)
+        t=c.execute('SELECT t.*,l.parcel_id,l.priority,l.assigned_to,l.first_response_at,p.tracking,p.status parcel_status,p.is_fragile,p.current_hub_id parcel_hub_id FROM tickets t LEFT JOIN ops_ticket_links l ON l.ticket_id=t.id LEFT JOIN parcels p ON p.id=l.parcel_id WHERE t.id=?',(tid,)).fetchone()
+        visible=bool(t) and (u['role']=='admin' or t['user_id']==u['id'])
+        if not visible and t and u['role']=='agent' and t['parcel_hub_id'] is not None:
+            # Un Responsable de Hub peut traiter les réclamations des commandes de son Hub.
+            hub_id=u.get('agent_hub_id') if type(u.get('agent_hub_id')) is int else 0
+            visible=bool(hub_id) and t['parcel_hub_id']==hub_id
+        if not visible:raise APIError('Ticket introuvable.',404)
         if request.method=='POST':
             c.execute('INSERT INTO messages(ticket_id,user_id,body,created_at) VALUES(?,?,?,?)',(tid,u['id'],text(d,'body',maxlen=3000),now()))
             if u['role']=='admin':
