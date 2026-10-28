@@ -32,8 +32,8 @@ def register_fulfillment(app, services):
         except (TypeError,ValueError):hub_id=None
         if not hub_id:return None
         return c.execute('SELECT * FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone()
-    def require_central_agent(c,u):
-        if u['role']=='agent':
+    def require_central_manager(c,u):
+        if u['role']=='hub_manager':
             central=central_stock_hub(c)
             if not central or u.get('agent_hub_id')!=central['id']:
                 raise Error('Préparation stock réservée au responsable du Hub Central.',403)
@@ -65,17 +65,17 @@ def register_fulfillment(app, services):
     def scope_order(c,oid,u):
         o=c.execute('SELECT o.*,u.company,u.name client,p.tracking,p.status parcel_status,ci.name city FROM fulfillment_orders o JOIN users u ON u.id=o.client_id LEFT JOIN parcels p ON p.id=o.parcel_id LEFT JOIN cities ci ON ci.id=json_extract(o.shipping,\'$.city_id\') WHERE o.id=?',(oid,)).fetchone()
         if not o or (u['role']=='client' and o['client_id']!=u['id']):raise Error('Préparation introuvable.',404)
-        if u['role']=='agent':
-            require_central_agent(c,u)
+        if u['role']=='hub_manager':
+            require_central_manager(c,u)
             if o['status'] not in ('Réservé','Préparé'):raise Error('Préparation introuvable.',404)
         return {**dict(o),'shipping':json.loads(o['shipping']),'lines':[dict(l) for l in c.execute('SELECT * FROM fulfillment_lines WHERE order_id=? ORDER BY id',(oid,))]}
     @app.get('/api/fulfillment/orders')
-    @auth('admin','client','agent')
+    @auth('admin','client','hub_manager')
     def fulfillment_orders():
         u=user()
         with conn() as c:
-            if u['role']=='agent':
-                require_central_agent(c,u)
+            if u['role']=='hub_manager':
+                require_central_manager(c,u)
                 rows=c.execute("SELECT id FROM fulfillment_orders WHERE status IN ('Réservé','Préparé') ORDER BY id DESC LIMIT 500").fetchall()
             else:
                 rows=c.execute('SELECT id FROM fulfillment_orders '+('WHERE client_id=?' if u['role']=='client' else '')+' ORDER BY id DESC LIMIT 500',[u['id']] if u['role']=='client' else []).fetchall()
@@ -117,23 +117,23 @@ def register_fulfillment(app, services):
             c.executemany('INSERT INTO fulfillment_lines(order_id,product_id,sku,name,quantity) VALUES(?,?,?,?,?)',[(oid,*line) for line in lines])
             return jsonify(ok=True,id=oid,already_created=False)
     @app.get('/api/fulfillment/orders/<int:oid>')
-    @auth('admin','client','agent')
+    @auth('admin','client','hub_manager')
     def fulfillment_order(oid):
         with conn() as c:return jsonify(scope_order(c,oid,user()))
     @app.post('/api/fulfillment/orders/<int:oid>/<action>')
-    @auth('admin','client','agent')
+    @auth('admin','client','hub_manager')
     def fulfillment_action(oid,action):
         d=data();u=user()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE');o=scope_order(c,oid,u)
             if action=='cancel':
-                if u['role']=='agent':raise Error('Seul le vendeur ou Admin peut annuler une réservation.',403)
+                if u['role']=='hub_manager':raise Error('Seul le vendeur ou Admin peut annuler une réservation.',403)
                 if o['status']!='Réservé':raise Error('Seule une réservation non préparée peut être annulée.',409)
                 reason=text(d,'reason',maxlen=600)
                 c.execute("UPDATE fulfillment_orders SET status='Annulé',reason=?,processed_at=?,processed_by=? WHERE id=?",(reason,now(),u['id'],oid))
             elif action=='ship':
-                if u['role'] not in ('admin','agent'):raise Error('Préparation réservée à Admin et au responsable du Hub Central.',403)
-                if u['role']=='agent':require_central_agent(c,u)
+                if u['role'] not in ('admin','hub_manager'):raise Error('Préparation réservée à Admin et au responsable du Hub Central.',403)
+                if u['role']=='hub_manager':require_central_manager(c,u)
                 if o['status']!='Réservé':raise Error('Commande déjà traitée.',409)
                 central_setting=c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
                 try:central_id=int(central_setting['value']) if central_setting and str(central_setting['value']).isdigit() else None
