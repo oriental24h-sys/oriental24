@@ -8,7 +8,7 @@ class DispatchCollectionTests(unittest.TestCase):
         self.r=base.ReceptionCollectionTests();self.r.setUp();self.t=self.r.t
         register_dispatch_collection(self.t.app,self.t.services)
         self.client=self.t.client;self.conn=self.t.conn
-        self.admin=self.t.headers('admin');self.source=self.t.headers('agent',10,910);self.central=self.t.headers('agent',90,990)
+        self.admin=self.t.headers('admin');self.source=self.t.headers('hub_manager',10,910);self.central=self.t.headers('hub_manager',90,990)
     def tearDown(self):self.r.tearDown()
     def manifest(self,kind,did,headers=None):
         r=self.client.get(f'/api/dispatch-collection/{kind}/{did}',headers=headers or self.admin)
@@ -55,7 +55,7 @@ class DispatchCollectionTests(unittest.TestCase):
             self.assertEqual(ops_manifest_counts(ls)['count'],1)
         received=self.r.manifest('transfer',did,self.central)
         self.assertEqual(len([l for l in received['lines'] if not l['excluded']]),1)
-        new=self.t.create_palette('agent',10,'standard',10,90,[4],910)
+        new=self.t.create_palette('hub_manager',10,'standard',10,90,[4],910)
         self.assertEqual(new.status_code,200,new.json)
         self.assertEqual(self.r.commit('transfer',did,self.r.body(received),self.central).status_code,200)
         with self.conn() as c:
@@ -82,7 +82,7 @@ class DispatchCollectionTests(unittest.TestCase):
 
     def test_city_mapping_rechecked_without_partial_dispatch(self):
         with self.conn() as c:c.execute('UPDATE parcels SET current_hub_id=90 WHERE id IN (3,4)')
-        r=self.t.create_palette('agent',90,'standard',90,10,[3,4],990);self.assertEqual(r.status_code,200,r.json);did=r.json['id']
+        r=self.t.create_palette('hub_manager',90,'standard',90,10,[3,4],990);self.assertEqual(r.status_code,200,r.json);did=r.json['id']
         d=self.manifest('transfer',did,self.central)
         with self.conn() as c:c.execute('UPDATE cities SET hub_id=20 WHERE id=2')
         self.assertEqual(self.check('transfer',did,d,'TRK-STANDARD',self.central).status_code,409)
