@@ -117,7 +117,7 @@ def register_tour_control(app,s):
     @auth('admin','hub_manager')
     def control_tower():
         actor=user()
-        if actor['role']=='agent':
+        if actor['role']=='hub_manager':
             hub_id=actor.get('agent_hub_id')
             extra=getattr(app,'o24_ramassage_tower_payload',None)
             if type(hub_id) is not int or hub_id<=0 or not extra:raise Error('Le Hub de ce compte est inactif ou introuvable.',403)
