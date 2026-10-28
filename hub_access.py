@@ -95,7 +95,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('GET', r'/api/ramassage-bons'),
     ('GET', r'/api/ramassage-bons/hub/queue'),
     ('GET', r'/api/ramassage-bons/hub/collected'),
-    ('GET', r'/api/driver-finance'),
+    ('GET', r'/api/driver-finance'), ('GET', r'/api/driver-finance/export'),
     ('GET', r'/api/driver-finance/export'),
     ('GET', r'/api/ramassage-bons/\d+'),
     ('POST', r'/api/ramassage-bons/\d+/receive'),
