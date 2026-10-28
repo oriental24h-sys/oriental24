@@ -107,7 +107,7 @@ class RamassageBonTests(unittest.TestCase):
                           [(1, 'Admin', 'a@x.test', 'admin', None),
                            (2, 'Yasmine', 'c@x.test', 'client', None),
                            (910, 'Manager Oujda', 'm10@x.test', 'hub_manager', 10),
-                           (920, 'Manager Berkane', 'm20@x.test', 'agent', 20)])
+                           (920, 'Manager Berkane', 'm20@x.test', 'hub_manager', 20)])
             c.executemany(
                 'INSERT INTO parcels(id,tracking,client_id,city_id,status,invoice_id,current_hub_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
                 [(101, 'O24-101', 2, 1, 'Créé', None, None, now(), now()),
@@ -139,24 +139,24 @@ class RamassageBonTests(unittest.TestCase):
     def batch_fixture(self):
         bid=self.create([101,102]).get_json()['id']
         self.client.post(f'/api/ramassage-bons/{bid}/validate',headers=self.hdr())
-        d=self.client.get(f'/api/ramassage-bons/{bid}',headers=self.hdr('agent',910,10)).get_json()
+        d=self.client.get(f'/api/ramassage-bons/{bid}',headers=self.hdr('hub_manager',910,10)).get_json()
         return bid,dict(snapshot=d['snapshot'],parcel_ids=[101,102],confirmed=True,request_key='batch-'+__import__('uuid').uuid4().hex)
 
     def test_batch_atomic_receipt_and_retry(self):
         bid,d=self.batch_fixture()
         self.assertEqual(self.status(101),('Confirmé',None))
-        r=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=self.hdr('agent',910,10),json=d)
+        r=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=self.hdr('hub_manager',910,10),json=d)
         self.assertEqual(r.status_code,200,r.data)
         self.assertEqual(self.status(101),('Ramassé',10));self.assertEqual(self.status(102),('Ramassé',10))
-        retry=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=self.hdr('agent',910,10),json=d)
+        retry=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=self.hdr('hub_manager',910,10),json=d)
         self.assertTrue(retry.json['replayed'])
-        r=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=self.hdr('agent',910,10),json={**d,'parcel_ids':[101]})
+        r=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=self.hdr('hub_manager',910,10),json={**d,'parcel_ids':[101]})
         self.assertEqual(r.status_code,409)
         self.assertTrue(hub_manager_route_allowed('POST',f'/api/ramassage-bons/{bid}/receive-batch'))
 
     def test_batch_requires_all_scans_confirmation_and_own_hub(self):
         bid,d=self.batch_fixture()
-        for headers,change,code in [(self.hdr(),{},403),(self.hdr('agent',920,20),{},404),(self.hdr('agent',910,10),{'parcel_ids':[101]},409),(self.hdr('agent',910,10),{'parcel_ids':[101,101]},400),(self.hdr('agent',910,10),{'confirmed':False},400),(self.hdr('agent',910,10),{'parcel_ids':[101,105]},409)]:
+        for headers,change,code in [(self.hdr(),{},403),(self.hdr('hub_manager',920,20),{},404),(self.hdr('hub_manager',910,10),{'parcel_ids':[101]},409),(self.hdr('hub_manager',910,10),{'parcel_ids':[101,101]},400),(self.hdr('hub_manager',910,10),{'confirmed':False},400),(self.hdr('hub_manager',910,10),{'parcel_ids':[101,105]},409)]:
             r=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=headers,json={**d,**change})
             self.assertEqual(r.status_code,code,r.data)
             self.assertEqual(self.status(101),('Confirmé',None));self.assertEqual(self.status(102),('Confirmé',None))
@@ -180,7 +180,7 @@ class RamassageBonTests(unittest.TestCase):
 
     def test_batch_can_finish_partial_receipt_and_admin_allowed(self):
         bid,d=self.batch_fixture()
-        self.client.post(f'/api/ramassage-bons/{bid}/receive',headers=self.hdr('agent',910,10),json={'tracking':'O24-101'})
+        self.client.post(f'/api/ramassage-bons/{bid}/receive',headers=self.hdr('hub_manager',910,10),json={'tracking':'O24-101'})
         r=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=self.hdr('admin',1),json=d)
         self.assertEqual(r.status_code,409);self.assertEqual(self.status(102),('Confirmé',None))
         detail=self.client.get(f'/api/ramassage-bons/{bid}',headers=self.hdr('admin',1)).json
@@ -210,27 +210,27 @@ class RamassageBonTests(unittest.TestCase):
 
     def collected_setup(self):
         bid,d=self.batch_fixture()
-        self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=self.hdr('agent',910,10),json=d)
+        self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=self.hdr('hub_manager',910,10),json=d)
         return bid
 
     def test_collected_scope_search_filters_and_pagination(self):
         self.collected_setup();url='/api/ramassage-bons/hub/collected'
-        for headers in (self.hdr('admin',1),self.hdr('agent',910,10)):
+        for headers in (self.hdr('admin',1),self.hdr('hub_manager',910,10)):
             r=self.client.get(url+'?size=1',headers=headers)
             self.assertEqual(r.status_code,200,r.data);self.assertEqual(r.json['total'],2);self.assertEqual(len(r.json['rows']),1)
             self.assertEqual(r.json['counts'],{'at_hub':2})
             r=self.client.get(url+'?q=O24-101&state=at_hub',headers=headers)
             self.assertEqual(r.json['total'],1);self.assertEqual(r.json['rows'][0]['parcel_id'],101)
             self.assertEqual(self.client.get(url+'?q=%25',headers=headers).json['total'],0)
-        self.assertEqual(self.client.get(url,headers=self.hdr('agent',920,20)).json['total'],0)
-        self.assertEqual(self.client.get(url+'?hub_id=20',headers=self.hdr('agent',910,10)).status_code,404)
+        self.assertEqual(self.client.get(url,headers=self.hdr('hub_manager',920,20)).json['total'],0)
+        self.assertEqual(self.client.get(url+'?hub_id=20',headers=self.hdr('hub_manager',910,10)).status_code,404)
         self.assertEqual(self.client.get(url,headers=self.hdr()).status_code,403)
-        self.assertEqual(self.client.get(url,headers=self.hdr('agent',910)).status_code,404)
+        self.assertEqual(self.client.get(url,headers=self.hdr('hub_manager',910)).status_code,404)
         self.assertTrue(hub_manager_route_allowed('GET',url))
         self.assertFalse(hub_manager_route_allowed('POST',url))
 
     def test_collected_excludes_societe_and_does_not_drop_unexpected_status(self):
-        self.collected_setup();url='/api/ramassage-bons/hub/collected';headers=self.hdr('agent',910,10)
+        self.collected_setup();url='/api/ramassage-bons/hub/collected';headers=self.hdr('hub_manager',910,10)
         with self.conn() as c:c.execute("UPDATE parcels SET status='Livré',current_hub_id=NULL WHERE id=101")
         r=self.client.get(url,headers=headers)
         self.assertEqual(r.json['total'],2);self.assertEqual(r.json['counts'],{'at_hub':1,'review':1})
@@ -238,7 +238,7 @@ class RamassageBonTests(unittest.TestCase):
         self.assertEqual(self.client.get(url,headers=headers).json['total'],0)
 
     def test_collected_rejects_invalid_filters_and_inactive_hub(self):
-        url='/api/ramassage-bons/hub/collected';headers=self.hdr('agent',910,10)
+        url='/api/ramassage-bons/hub/collected';headers=self.hdr('hub_manager',910,10)
         for query in ('page=0','size=-1','state=bad','hub_id=no'):
             self.assertEqual(self.client.get(url+'?'+query,headers=headers).status_code,400)
         with self.conn() as c:c.execute('UPDATE ops_hubs SET active=0 WHERE id=10')
@@ -284,15 +284,15 @@ class RamassageBonTests(unittest.TestCase):
         bid = self.create([101, 102]).get_json()['id']
         self.client.post('/api/ramassage-bons/%d/validate' % bid, headers=self.hdr())
         # Mauvais Hub refusé
-        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('agent', 920, 20),
+        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('hub_manager', 920, 20),
                              json={'tracking': 'O24-101'})
         self.assertEqual(r.status_code, 404)
         # Tracking inconnu refusé
-        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('agent', 910, 10),
+        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('hub_manager', 910, 10),
                              json={'tracking': 'INCONNU'})
         self.assertEqual(r.status_code, 404)
         # Première réception -> En cours, colis Ramassé et localisé au Hub
-        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('agent', 910, 10),
+        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('hub_manager', 910, 10),
                              json={'tracking': 'O24-101'})
         self.assertEqual(r.status_code, 200, r.data)
         self.assertEqual(r.get_json()['status'], 'En cours')
@@ -300,11 +300,11 @@ class RamassageBonTests(unittest.TestCase):
         self.assertEqual(st, 'Ramassé')
         self.assertEqual(hub, 10)
         # Idempotence du scan
-        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('agent', 910, 10),
+        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('hub_manager', 910, 10),
                              json={'tracking': 'O24-101'})
         self.assertEqual(r.get_json().get('already_received'), True)
         # Dernière réception -> Reçu
-        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('agent', 910, 10),
+        r = self.client.post('/api/ramassage-bons/%d/receive' % bid, headers=self.hdr('hub_manager', 910, 10),
                              json={'tracking': 'O24-102'})
         self.assertEqual(r.get_json()['status'], 'Reçu')
         self.assertEqual(self.status(102)[0], 'Ramassé')
