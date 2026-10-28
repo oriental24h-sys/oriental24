@@ -13,7 +13,7 @@ class CentralHubPreparationTests(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.env = {k: os.environ.get(k) for k in ('DB_PATH', 'ORIENTAL24_MODE')}
         os.environ.update(DB_PATH=cls.tmp.name+'/test.sqlite', ORIENTAL24_MODE='demo')
-        cls.m = importlib.import_module('app')
+        cls.m = importlib.reload(importlib.import_module('app'))
         cls.m.app.config['TESTING'] = True
         with cls.m.conn() as c:
             cls.city = c.execute('SELECT id FROM cities WHERE delivery=1 LIMIT 1').fetchone()[0]
