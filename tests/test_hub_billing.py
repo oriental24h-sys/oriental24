@@ -32,7 +32,7 @@ class HubBillingTests(unittest.TestCase):
                 driver_id INTEGER,current_hub_id INTEGER,status_updated_at TEXT,updated_at TEXT,created_at TEXT);
             CREATE TABLE ops_assignments(id INTEGER PRIMARY KEY,parcel_id INTEGER,new_driver_id INTEGER,hub_id INTEGER);
             CREATE TABLE ops_attempts(id INTEGER PRIMARY KEY,parcel_id INTEGER,driver_id INTEGER,outcome TEXT,operational_hub_id INTEGER);
-            INSERT INTO users VALUES(1,'admin',1),(2,'agent',1),(3,'agent',1),(4,'livreur',1);
+            INSERT INTO users VALUES(1,'admin',1),(2,'hub_manager',1),(3,'hub_manager',1),(4,'livreur',1);
             INSERT INTO ops_hubs VALUES(10,'Hub A',1),(20,'Hub B',1),(30,'Inactive',0);
             INSERT INTO cities VALUES(1,'City');
             INSERT INTO parcels VALUES
@@ -220,7 +220,7 @@ class HubBillingTests(unittest.TestCase):
         self.assertEqual(r.json['invoice']['cash_remaining_cents'],0)
         # Gross-method commission stays payable and is never fabricated as paid.
         self.assertEqual(r.json['invoice']['commission_due_cents'],1300)
-        headers={'X-Role':'agent','X-Hub':'10'}
+        headers={'X-Role':'hub_manager','X-Hub':'10'}
         detail=self.client.get('/api/hub-billing/1',headers=headers).json
         self.assertEqual(detail['invoice']['state'],'Paid')
         self.assertEqual(detail['receipt']['amount_cents'],10000)
@@ -251,7 +251,7 @@ class HubBillingTests(unittest.TestCase):
 
     def test_receipt_admin_only_manager_cannot_mark_own_or_foreign(self):
         self.terms();self.issue()
-        for role,hid in [('agent',10),('agent',20),('livreur',10)]:
+        for role,hid in [('hub_manager',10),('hub_manager',20),('livreur',10)]:
             r=self.client.post('/api/hub-billing/1/paid',json={},headers={'X-Role':role,'X-Hub':str(hid)})
             self.assertEqual(r.status_code,403)
         with self.conn() as c:self.assertEqual(c.execute('SELECT count(*) FROM hub_billing_receipts').fetchone()[0],0)
@@ -286,7 +286,7 @@ class HubBillingTests(unittest.TestCase):
         from pypdf import PdfReader
         from io import BytesIO
         self.terms();self.terms(20);self.issue()
-        r=self.client.get('/api/hub-billing/1/pdf',headers={'X-Role':'agent','X-Hub':'10'})
+        r=self.client.get('/api/hub-billing/1/pdf',headers={'X-Role':'hub_manager','X-Hub':'10'})
         self.assertEqual(r.status_code,200)
         text='\n'.join(p.extract_text() for p in PdfReader(BytesIO(r.data)).pages)
         for expected in ['Facture','Hub A','Total COD livré','Total Net','ID de suivi','Page :']:
@@ -296,7 +296,7 @@ class HubBillingTests(unittest.TestCase):
         r=self.client.get('/api/hub-billing/1/pdf')
         text='\n'.join(p.extract_text() for p in PdfReader(BytesIO(r.data)).pages)
         self.assertIn('Hub A',text);self.assertNotIn('Changed',text)
-        self.assertEqual(self.client.get('/api/hub-billing/1/pdf',headers={'X-Role':'agent','X-Hub':'20'}).status_code,404)
+        self.assertEqual(self.client.get('/api/hub-billing/1/pdf',headers={'X-Role':'hub_manager','X-Hub':'20'}).status_code,404)
         self.assertEqual(self.client.get('/api/hub-billing/1/pdf',headers={'X-Role':'livreur'}).status_code,403)
 
     def test_net_calculation_and_missing_terms(self):
@@ -307,7 +307,7 @@ class HubBillingTests(unittest.TestCase):
 
     def test_manager_scope_read_detail_and_csv_and_admin_only_controls(self):
         self.terms();self.terms(20);self.issue()
-        headers={'X-Role':'agent','X-Hub':'10'}
+        headers={'X-Role':'hub_manager','X-Hub':'10'}
         r=self.client.get('/api/hub-billing',headers=headers)
         self.assertEqual(r.status_code,200);self.assertEqual(len(r.json['rows']),1)
         self.assertNotIn('hubs',r.json);self.assertNotIn('schedule',r.json)
