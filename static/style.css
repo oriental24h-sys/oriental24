@@ -2533,3 +2533,6 @@ td strong {
 .exchange-listen:hover{background:#92400e;border-color:#92400e}
 @keyframes exchangePulse{0%,100%{box-shadow:0 0 0 0 rgba(180,83,9,.55)}50%{box-shadow:0 0 0 10px rgba(180,83,9,0)}}
 @media (max-width:520px){.exchange-alert-shout{font-size:24px}.exchange-alert-track{font-size:17px}}
+
+/* Colis fragile : signalement visible dans les réclamations. */
+.ticket-fragile{color:#b91c1c;font-weight:800;letter-spacing:.2px}
