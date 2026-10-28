@@ -94,12 +94,14 @@ class CentralHubPreparationTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT quantity FROM products WHERE id=?',(self.product,)).fetchone()[0],quantity-2)
             self.assertEqual(c.execute('SELECT count(*) FROM movements WHERE fulfillment_order_id=?',(self.oid,)).fetchone()[0],1)
 
-    def test_legacy_agent_can_prepare(self):
+    def test_legacy_agent_role_is_not_authorized(self):
+        # Runtime authorization uses the canonical role. Legacy DB rows are migrated
+        # to hub_manager at startup; a manually reintroduced alias must not bypass it.
         with self.m.conn() as c:
             c.execute("UPDATE users SET role='agent' WHERE id=?",(self.manager_ids['central'],))
         try:
-            r=self.ship()
-            self.assertEqual(r.status_code,200,r.json)
+            self.assertEqual(self.browsers['central'].get('/api/fulfillment/orders').status_code,403)
+            self.assertEqual(self.ship().status_code,403)
         finally:
             with self.m.conn() as c:
                 c.execute("UPDATE users SET role='hub_manager' WHERE id=?",(self.manager_ids['central'],))
