@@ -516,7 +516,7 @@ def register_hub_invoices(app, services):
         return hub
 
     @app.get(_MANAGER_PREFIX)
-    @auth('agent')
+    @auth('hub_manager')
     def hub_manager_invoices():
         actor=user()
         with conn() as c:
