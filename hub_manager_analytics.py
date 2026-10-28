@@ -174,7 +174,7 @@ def register_hub_manager_analytics(app,s):
             data['hub']=dict(hub)
         return data
     @app.get('/api/hub-manager-analytics')
-    @auth('agent')
+    @auth('hub_manager')
     def hub_manager_analytics():
         data=load()
         fmt=request.args.get('format','json');view=request.args.get('view','drivers')
