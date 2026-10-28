@@ -10,7 +10,7 @@ BASE = os.path.dirname(__file__)
 app = Flask(__name__)
 from runtime import configure
 DB = configure(app, BASE)
-from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, DRIVER_HUB_ONLY_STATUSES, policy as status_policy
+from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, ATTEMPT_OUTCOMES, DRIVER_HUB_ONLY_STATUSES, policy as status_policy
 from billing import driver_paid_sql
 import client_types
 from company_order_edit import company_order_flags, register_company_order_edit
@@ -509,11 +509,11 @@ def update_parcel(pid):
         if 'status' in d:
             s=d['status']
             if s not in STATUSES: raise APIError('Statut invalide.')
-            # A delivery status must always have a matching recorded delivery attempt.
-            # The attempts endpoint validates receiver/COD/OTP and is idempotent; a direct
-            # PATCH would otherwise mark the parcel delivered without a COD audit record.
-            if s=='Livré':
-                raise APIError('Pour confirmer une livraison, utilisez la procédure de tentative de livraison afin de vérifier le réceptionnaire, le COD et le code client si nécessaire.',409)
+            # Operational outcomes must be recorded through the idempotent attempts endpoint.
+            # This preserves reason, appointment, receiver/COD/OTP validation and the audit row;
+            # a direct PATCH would otherwise change the visible status without that evidence.
+            if s in ATTEMPT_OUTCOMES:
+                raise APIError('Ce résultat doit être enregistré via la procédure de tentative logistique afin de conserver le motif, la preuve opérationnelle et les contrôles COD/code client.',409)
             if u['role']=='livreur':
                 transitions=DRIVER_TRANSITIONS
                 if s not in transitions.get(p['status'],[]): raise APIError('Transition non autorisée pour ce colis.')
