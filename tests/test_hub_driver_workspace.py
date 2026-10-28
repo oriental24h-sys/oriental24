@@ -1048,6 +1048,17 @@ class HubDriverWorkspaceTests(unittest.TestCase):
             self.assertIn('Retour palette reçu',restocks[0]['note'])
         self.assertEqual(admin.post(f"/api/fulfillment/orders/{prep.json['id']}/restock",json={'checked':True,'reason':'manual'},headers=admin_headers).status_code,409)
 
+    def test_canonical_hub_manager_can_access_scoped_tower_and_sidebar_counts(self):
+        for path in ('/api/control-tower','/api/control-tower/map-data'):
+            response=self.client.get(path)
+            self.assertEqual(response.status_code,200,response.json)
+            self.assertEqual(response.json.get('hub_scope_id'),self.hub)
+        side=self.client.get('/api/sidebar-counts')
+        self.assertEqual(side.status_code,200,side.json)
+        counts=side.json['counts']
+        for key in ('partner-palettes','return-palettes','palette-hub','documents','hub-driver-statements','ramassage-collected'):
+            self.assertIn(key,counts)
+
     def test_hub_manager_can_access_hub_invoice_list_with_canonical_role(self):
         response=self.client.get('/api/logistics/hub/invoices')
         self.assertEqual(response.status_code,200,response.json)
