@@ -79,12 +79,19 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         headers={'X-CSRF-Token':courier.get('/api/bootstrap').json['csrf']}
         ids=[]
         for outcome in ('Livré','Annulé','Intéressé','Reporté'):
-            initial='En livraison' if outcome=='Livré' else 'Reçu par le livreur'
+            initial='Reçu par le livreur' if outcome=='Annulé' else 'En livraison'
             pid,_=self.parcel(None,initial,self.driver,self.hub);ids.append(pid)
             with self.m.conn() as c:
                 self.m.event(c,pid,initial,'Remise physique au livreur',{'id':self.manager})
-            if outcome=='Livré':
-                r=courier.post(f'/api/logistics/parcels/{pid}/attempts',json=dict(outcome=outcome,revision=0,simple_delivery=True,request_key=uuid.uuid4().hex),headers=headers)
+                reason=c.execute('SELECT code FROM ops_reasons WHERE active=1 ORDER BY code LIMIT 1').fetchone()
+            if outcome in ('Livré','Reporté'):
+                payload=dict(outcome=outcome,revision=0,request_key=uuid.uuid4().hex)
+                if outcome=='Livré':
+                    payload['simple_delivery']=True
+                else:
+                    self.assertIsNotNone(reason,'Fixture must provide an active reason for a postponed delivery')
+                    payload.update(reason_code=reason['code'],next_attempt_at=datetime.now(TZ).date().isoformat())
+                r=courier.post(f'/api/logistics/parcels/{pid}/attempts',json=payload,headers=headers)
             else:
                 r=courier.patch(f'/api/parcels/{pid}',json=dict(status=outcome,revision=0,note='Résultat confirmé par le livreur'),headers=headers)
             self.assertEqual(r.status_code,200,r.json)
@@ -95,7 +102,7 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         row=result.json['rows'][0]
         self.assertEqual((row['assigned'],row['processed'],row['pending'],row['progress'],row['delivery_rate']),(4,4,0,100,25))
         with self.m.conn() as c:
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM ops_attempts WHERE parcel_id IN (?,?,?,?)',ids).fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM ops_attempts WHERE parcel_id IN (?,?,?,?)',ids).fetchone()[0],2)
         r=self.scan('receive',[(pid,1) for pid in ids[1:]],hub=self.hub)
         self.assertEqual(r.status_code,200,r.json)
         row=self.client.get(endpoint).json['rows'][0]
