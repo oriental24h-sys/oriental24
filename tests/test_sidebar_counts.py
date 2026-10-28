@@ -36,10 +36,10 @@ class SidebarCountsTests(unittest.TestCase):
     @staticmethod
     def scope(u, c=None):
         if u['role']=='admin': return '1=1', []
-        field = {'client':'client_id','agent':'current_hub_id','support':'support_id','livreur':'driver_id'}[u['role']]
-        return f'p.{field}=?', [u.get('agent_hub_id') if u['role']=='agent' else u['id']]
+        field = {'client':'client_id','hub_manager:'current_hub_id','support':'support_id','livreur':'driver_id'}[u['role']]
+        return f'p.{field}=?', [u.get('agent_hub_id') if u['role']=='hub_manager else u['id']]
 
-    def counts(self, role='agent', uid=1, hub=10):
+    def counts(self, role='hub_manager, uid=1, hub=10):
         return sidebar_counts(self.c, dict(id=uid,role=role,agent_hub_id=hub), self.scope)
 
     def test_reception_decrements_not_visits(self):
