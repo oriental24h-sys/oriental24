@@ -24,7 +24,7 @@ class UnifiedInvoicePDFTests(unittest.TestCase):
         c=sqlite3.connect(':memory:');c.row_factory=sqlite3.Row
         c.executescript('CREATE TABLE settings(key,value);CREATE TABLE cities(id,name);CREATE TABLE ops_hubs(id,name,address,city_id);INSERT INTO cities VALUES(1,"Agadir");INSERT INTO ops_hubs VALUES(10,"Hub Test","Adresse du Hub",1);')
         c.execute('INSERT INTO settings VALUES(?,?)',('driver_invoice_profile',json.dumps(dict(legal_name='ORIENTAL24',ice='COMPANY-ICE',rc='COMPANY-RC'))))
-        hub=issuer_for_actor(c,dict(role='agent',agent_hub_id=10))
+        hub=issuer_for_actor(c,dict(role='hub_manager',agent_hub_id=10))
         self.assertEqual(hub['legal_name'],'Hub Test');self.assertEqual(hub['city'],'Agadir')
         self.assertNotIn('ice',hub);self.assertNotIn('rc',hub)
         self.assertEqual(issuer_for_actor(c,dict(role='admin'))['ice'],'COMPANY-ICE')
