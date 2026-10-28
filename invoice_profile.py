@@ -24,7 +24,7 @@ def hub_identity(c, hid):
 
 
 def issuer_for_actor(c, actor):
-    if actor and actor.get('role')=='agent':
+    if actor and actor.get('role')=='hub_manager':
         return hub_identity(c,actor.get('agent_hub_id'))
     if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'").fetchone():
         return dict(legal_name='ORIENTAL24')
