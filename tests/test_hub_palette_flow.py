@@ -174,7 +174,7 @@ class HubPaletteFlowTests(unittest.TestCase):
 
     @staticmethod
     def headers(role, hub_id=None, actor_id=1):
-        result = {'X-Role': 'hub_manager' if role == 'agent' else role, 'X-Actor': str(actor_id), 'X-Name': 'Test actor'}
+        result = {'X-Role': role, 'X-Actor': str(actor_id), 'X-Name': 'Test actor'}
         if hub_id is not None:
             result['X-Hub'] = str(hub_id)
         return result
@@ -189,29 +189,29 @@ class HubPaletteFlowTests(unittest.TestCase):
 
     def scan_departure(self, doc_id, tracking, hub_id, actor_id):
         return self.client.post(f'/api/logistics/documents/{doc_id}/departure-scan',
-                                json={'tracking': tracking},headers=self.headers('agent',hub_id,actor_id))
+                                json={'tracking': tracking},headers=self.headers('hub_manager',hub_id,actor_id))
 
     def receive(self, doc_id, tracking, hub_id, actor_id):
         return self.client.post(f'/api/logistics/documents/{doc_id}/receive',
-                                json={'tracking': tracking},headers=self.headers('agent',hub_id,actor_id))
+                                json={'tracking': tracking},headers=self.headers('hub_manager',hub_id,actor_id))
 
     def visible_document_lines(self, doc_id, hub_id, actor_id):
-        response=self.client.get('/api/logistics/documents',headers=self.headers('agent',hub_id,actor_id))
+        response=self.client.get('/api/logistics/documents',headers=self.headers('hub_manager',hub_id,actor_id))
         self.assertEqual(response.status_code,200,response.get_json())
         document=next(row for row in response.get_json() if row['id']==doc_id)
         return document['lines']
 
     def test_failed_delivery_returns_through_central_to_physical_origin_without_finance_changes(self):
-        created = self.create_palette('agent',10,'return_to_central',10,90,[1,2],910)
+        created = self.create_palette('hub_manager',10,'return_to_central',10,90,[1,2],910)
         self.assertEqual(created.status_code,200,created.get_json())
         doc_id=created.get_json()['id']
-        default_tab=self.client.get('/api/logistics/palettes?tab=default',headers=self.headers('agent',10,910))
+        default_tab=self.client.get('/api/logistics/palettes?tab=default',headers=self.headers('hub_manager',10,910))
         self.assertEqual(default_tab.status_code,200,default_tab.get_json())
         self.assertEqual(default_tab.get_json()['rows'],[])
-        central_returns=self.client.get('/api/logistics/palettes?tab=retours',headers=self.headers('agent',90,990))
+        central_returns=self.client.get('/api/logistics/palettes?tab=retours',headers=self.headers('hub_manager',90,990))
         self.assertEqual(central_returns.status_code,200,central_returns.get_json())
         self.assertEqual({r['id'] for r in central_returns.get_json()['rows']},{doc_id})
-        other_hub_returns=self.client.get('/api/logistics/palettes?tab=retours',headers=self.headers('agent',20,920))
+        other_hub_returns=self.client.get('/api/logistics/palettes?tab=retours',headers=self.headers('hub_manager',20,920))
         self.assertEqual(other_hub_returns.status_code,200,other_hub_returns.get_json())
         self.assertEqual(other_hub_returns.get_json()['rows'],[])
         self.assertEqual({line['tracking'] for line in self.visible_document_lines(doc_id,10,910)},{'TRK-RETURN-1','TRK-RETURN-2'})
@@ -237,7 +237,7 @@ class HubPaletteFlowTests(unittest.TestCase):
         unresolved=self.client.get('/api/logistics/palette-candidates?mode=unresolved_origin',headers=self.headers('admin'))
         self.assertEqual(unresolved.status_code,200,unresolved.get_json())
         self.assertEqual({r['id'] for r in unresolved.get_json()['rows']},{2})
-        manager_unresolved=self.client.get('/api/logistics/palette-candidates?mode=unresolved_origin',headers=self.headers('agent',90,990))
+        manager_unresolved=self.client.get('/api/logistics/palette-candidates?mode=unresolved_origin',headers=self.headers('hub_manager',90,990))
         self.assertEqual(manager_unresolved.status_code,403)
 
         review=self.client.post('/api/logistics/parcels/2/origin-review',json={
@@ -248,15 +248,15 @@ class HubPaletteFlowTests(unittest.TestCase):
 
         candidates=self.client.get('/api/logistics/palette-candidates?mode=return_to_origin&source_hub_id=90&destination_hub_id=10',headers=self.headers('admin'))
         self.assertEqual({r['id'] for r in candidates.get_json()['rows']},{1,2})
-        returned=self.create_palette('agent',90,'return_to_origin',90,10,[1,2],990)
+        returned=self.create_palette('hub_manager',90,'return_to_origin',90,10,[1,2],990)
         self.assertEqual(returned.status_code,200,returned.get_json())
         second_id=returned.get_json()['id']
-        incoming=self.client.get('/api/logistics/palettes?tab=a-recevoir',headers=self.headers('agent',10,910))
+        incoming=self.client.get('/api/logistics/palettes?tab=a-recevoir',headers=self.headers('hub_manager',10,910))
         self.assertEqual(incoming.status_code,200,incoming.get_json())
         self.assertEqual(incoming.get_json()['rows'],[])
         self.assertEqual(self.scan_departure(second_id,'TRK-RETURN-1',90,990).status_code,200)
         self.assertEqual(self.scan_departure(second_id,'TRK-RETURN-2',90,990).status_code,200)
-        incoming=self.client.get('/api/logistics/palettes?tab=a-recevoir',headers=self.headers('agent',10,910))
+        incoming=self.client.get('/api/logistics/palettes?tab=a-recevoir',headers=self.headers('hub_manager',10,910))
         self.assertEqual({r['id'] for r in incoming.get_json()['rows']},{second_id})
         self.assertEqual(self.receive(second_id,'TRK-RETURN-1',10,910).status_code,200)
         self.assertEqual(self.receive(second_id,'TRK-RETURN-2',10,910).status_code,200)
@@ -269,7 +269,7 @@ class HubPaletteFlowTests(unittest.TestCase):
     def test_manager_access_route_is_hub_scoped_and_blocking_revokes_access(self):
         blocked=self.client.post('/api/logistics/hub/drivers/101/access',json={
             'action':'block','reason':'Fin de collaboration locale','revision':1,'confirmed':True,
-        },headers=self.headers('agent',10,910))
+        },headers=self.headers('hub_manager',10,910))
         self.assertEqual(blocked.status_code,200,blocked.get_json())
         self.assertEqual(self.revocations,[(101,'Compte block par Hub Manager',910)])
         with self.conn() as c:
@@ -277,27 +277,27 @@ class HubPaletteFlowTests(unittest.TestCase):
         self.assertEqual((driver['active'],driver['driver_blocked'],driver['driver_revision']),(0,1,2))
         stale=self.client.post('/api/logistics/hub/drivers/101/access',json={
             'action':'unblock','reason':'Ancienne tentative','revision':1,'confirmed':True,
-        },headers=self.headers('agent',10,910))
+        },headers=self.headers('hub_manager',10,910))
         self.assertEqual(stale.status_code,409)
 
         cross_hub=self.client.post('/api/logistics/hub/drivers/101/access',json={
             'action':'unblock','reason':'Tentative inter-Hub','revision':2,'confirmed':True,
-        },headers=self.headers('agent',20,920))
+        },headers=self.headers('hub_manager',20,920))
         self.assertEqual(cross_hub.status_code,404)
         bypass=self.client.patch('/api/logistics/hub/drivers/101',json={
             'name':'Courier A','email':'courier-a@example.test','phone':'0600000101',
             'active':True,'password':'',
-        },headers=self.headers('agent',10,910))
+        },headers=self.headers('hub_manager',10,910))
         self.assertEqual(bypass.status_code,409)
 
     def test_standard_palette_candidates_exclude_invoiced_and_active_statement_lines(self):
         response=self.client.get('/api/logistics/palette-candidates?mode=standard&source_hub_id=10&destination_hub_id=90',
-                                 headers=self.headers('agent',10,910))
+                                 headers=self.headers('hub_manager',10,910))
         self.assertEqual(response.status_code,200,response.get_json())
         self.assertEqual({r['id'] for r in response.get_json()['rows']},{3})
 
     def test_secondary_hub_cannot_send_directly_to_another_secondary(self):
-        response=self.create_palette('agent',10,'standard',10,20,[3],910)
+        response=self.create_palette('hub_manager',10,'standard',10,20,[3],910)
         self.assertEqual(response.status_code,409,response.get_json())
 
 
@@ -306,7 +306,7 @@ class HubPaletteFlowTests(unittest.TestCase):
             return dict(c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone())
 
     def test_central_return_status_is_per_scanned_and_received_parcel(self):
-        r=self.create_palette('agent',10,'return_to_central',10,90,[1,2],910)
+        r=self.create_palette('hub_manager',10,'return_to_central',10,90,[1,2],910)
         self.assertEqual(r.status_code,200,r.get_json());did=r.get_json()['id']
         self.assertEqual(self.parcel_state(1)['status'],'Refusé')
         r=self.scan_departure(did,'TRK-RETURN-1',10,910)
@@ -333,7 +333,7 @@ class HubPaletteFlowTests(unittest.TestCase):
         with self.conn() as c:self.assertEqual(c.execute('SELECT status FROM ops_documents WHERE id=?',(did,)).fetchone()[0],'Reçu')
 
     def test_admin_receipt_and_duplicate_scans_are_idempotent(self):
-        r=self.create_palette('agent',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
+        r=self.create_palette('hub_manager',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
         self.assertEqual(self.scan_departure(did,'TRK-RETURN-1',20,920).status_code,404)
         self.assertEqual(self.scan_departure(did,'TRK-RETURN-1',10,910).status_code,200)
         revision=self.parcel_state(1)['ops_revision']
@@ -347,7 +347,7 @@ class HubPaletteFlowTests(unittest.TestCase):
         p=self.parcel_state(1);self.assertEqual((p['amount'],p['invoice_id']),(125.5,700))
 
     def test_new_transit_marker_rejects_status_tampering(self):
-        r=self.create_palette('agent',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
+        r=self.create_palette('hub_manager',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
         self.assertEqual(self.scan_departure(did,'TRK-RETURN-1',10,910).status_code,200)
         # The delivery status is the source of truth for a return; if it is tampered to a
         # contradictory state, the Central receipt must be rejected.
@@ -357,7 +357,7 @@ class HubPaletteFlowTests(unittest.TestCase):
         self.assertEqual(r.status_code,409)
 
     def test_legacy_inflight_return_can_still_be_received(self):
-        r=self.create_palette('agent',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
+        r=self.create_palette('hub_manager',10,'return_to_central',10,90,[1],910);did=r.get_json()['id']
         # Simulate a return dispatched by the pre-update departure scan, which stamped the
         # legacy 'Vers Hub Central' transit marker on both the line and the parcel.
         with self.conn() as c:
@@ -376,7 +376,7 @@ class HubPaletteFlowTests(unittest.TestCase):
         with self.conn() as c:
             c.execute("INSERT INTO users(id,name,email,role) VALUES(2,'Seller','seller@test','client')")
             c.execute("UPDATE parcels SET client_id=2,status='Créé',current_hub_id=NULL,invoice_id=NULL WHERE id IN (3,4)")
-        admin=self.headers('admin');agent=self.headers('agent',10,910)
+        admin=self.headers('admin');agent=self.headers('hub_manager',10,910)
         r=self.client.post('/api/ramassage-bons',headers=admin,json=dict(client_id=2,hub_id=10,city_id=2,address='Address',phone='0600000000',pickup_date='2026-11-01',parcel_ids=[3,4]))
         self.assertEqual(r.status_code,200,r.json);bid=r.json['id']
         self.client.post(f'/api/ramassage-bons/{bid}/validate',headers=admin)
@@ -386,8 +386,8 @@ class HubPaletteFlowTests(unittest.TestCase):
         r=self.client.post(f'/api/ramassage-bons/{bid}/receive-batch',headers=agent,json=dict(parcel_ids=[3,4],snapshot=detail['snapshot'],confirmed=True,request_key='test-collected-central-001'))
         self.assertEqual(r.status_code,200,r.json)
         self.assertEqual(self.client.get(url,headers=agent).json['counts'],{'at_hub':2})
-        self.assertEqual(self.client.get(url,headers=self.headers('agent',20,920)).json['total'],0)
-        r=self.create_palette('agent',10,'standard',10,90,[3,4],910)
+        self.assertEqual(self.client.get(url,headers=self.headers('hub_manager',20,920)).json['total'],0)
+        r=self.create_palette('hub_manager',10,'standard',10,90,[3,4],910)
         self.assertEqual(r.status_code,200,r.json);did=r.json['id']
         self.assertEqual(self.client.get(url,headers=agent).json['counts'],{'prepared':2})
         self.assertEqual(self.scan_departure(did,'TRK-STANDARD',10,910).status_code,200)
@@ -405,7 +405,7 @@ class HubPaletteFlowTests(unittest.TestCase):
         self.assertEqual(self.client.get(url,headers=agent).json['total'],0)
 
     def test_standard_transfers_still_use_transit_then_receptionne(self):
-        r=self.create_palette('agent',10,'standard',10,90,[3],910)
+        r=self.create_palette('hub_manager',10,'standard',10,90,[3],910)
         self.assertEqual(r.status_code,200,r.get_json());did=r.get_json()['id'];track=self.parcel_state(3)['tracking']
         self.assertEqual(self.scan_departure(did,track,10,910).status_code,200)
         self.assertEqual(self.parcel_state(3)['status'],'Transit')
@@ -415,7 +415,7 @@ class HubPaletteFlowTests(unittest.TestCase):
     def outbound_transfer(self):
         with self.conn() as c:
             c.execute('UPDATE parcels SET current_hub_id=90,city_id=2 WHERE id=3')
-        r=self.create_palette('agent',90,'standard',90,10,[3],990)
+        r=self.create_palette('hub_manager',90,'standard',90,10,[3],990)
         self.assertEqual(r.status_code,200,r.get_json())
         return r.get_json()['id'],self.parcel_state(3)['tracking']
 
