@@ -2,7 +2,7 @@
 function parcelStateEditable(p){return !['client','support','agent'].includes(S.user.role)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked&&!(S.user.role==='livreur'&&['Livré','Retourné'].includes(p.status))}
 function clientInterestedEligible(p){return S?.user?.role==='client'&&p.status!=='Intéressé'&&!['Livré','Retourné','Refusé','Annulé'].includes(p.status)&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked&&!['Réglée','Soldé','Paid'].includes(p.invoice_status)}
 function hubParcelStatusEditable(p){return S?.user?.role==='agent'&&p.hub_status_editable===true&&p.status!=='Livré'&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked}
-function parcelStatusEditable(p){if(S?.user?.role==='livreur')return p.status!=='Livré'&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked;return S?.user?.role==='agent'?hubParcelStatusEditable(p):S?.user?.role==='client'?clientInterestedEligible(p):parcelStateEditable(p)}
+function parcelStatusEditable(p){if(S?.user?.role==='livreur')return p.status!=='Livré'&&!(typeof o24ExchangeCustodyStatus==='function'&&o24ExchangeCustodyStatus(p.status))&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked;return S?.user?.role==='agent'?hubParcelStatusEditable(p):S?.user?.role==='client'?clientInterestedEligible(p):parcelStateEditable(p)}
 function parcelNoteControl(p){if(S.user.role==='livreur'&&parcelStateEditable(p))return `<button class="parcel-note-button" onclick="openDriverFollowup(${p.id})">Motif / note ${icon('edit')}</button>`;const label=p.reason_label||p.reason_code||'Aucun motif';return parcelStateEditable(p)?`<button class="parcel-note-button ${p.reason_code?'has-reason':''}" aria-label="Note de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelReason(${p.id},this)"><span>Note${p.reason_code?' · '+esc(label):''}</span>${icon('down')}</button>`:`<span class="parcel-note-readonly">${esc(label)}</span>`}
 function parcelStatusControl(p){if(S?.user?.role==='client')return clientInterestedEligible(p)?`<button class="parcel-status-button client-interested-button" title="Marquer comme intéressé" aria-label="Marquer ${esc(p.tracking)} comme intéressé" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">Marquer intéressé${icon('down')}</button>`:'';return parcelStatusEditable(p)?`<button class="parcel-status-button" aria-label="État de ${esc(p.tracking)}" aria-haspopup="dialog" aria-expanded="false" onclick="openParcelState(${p.id},this)">${esc(p.status)}${icon('down')}</button>`:''}
 function parcelStateControls(p){return `<div class="parcel-state-controls">${tag(p.status)}${parcelStatusControl(p)}${parcelNoteControl(p)}</div>`}
@@ -84,12 +84,14 @@ async function submitParcelStatus(state,status,fields){
  const inline=!!document.querySelector(`[data-parcel-expanded="${state.id}"]`),inModal=!!document.querySelector('.parcel-command-modal');
  try{
   if(state.attempt&&status==='Livré'&&S.user.role==='livreur')fields={...fields,simple_delivery:true};
-  if(state.attempt)await api409(f=>api('/logistics/parcels/'+state.id+'/attempts','POST',{...fields,outcome:status,revision:f?f.ops_revision:(state.parcel.ops_revision||0),request_key:state.requestKey}),async()=>({ops_revision:(await api('/logistics/parcels/'+state.id)).parcel.ops_revision}));
-  else await api409(f=>api('/parcels/'+state.id,'PATCH',{...fields,status,revision:f?f.ops_revision:(state.parcel.ops_revision||0)}),async()=>({ops_revision:(await api('/parcels/'+state.id)).parcel.ops_revision}));
+  let result;
+  if(state.attempt)result=await api409(f=>api('/logistics/parcels/'+state.id+'/attempts','POST',{...fields,outcome:status,revision:f?f.ops_revision:(state.parcel.ops_revision||0),request_key:state.requestKey}),async()=>({ops_revision:(await api('/logistics/parcels/'+state.id)).parcel.ops_revision}));
+  else result=await api409(f=>api('/parcels/'+state.id,'PATCH',{...fields,status,revision:f?f.ops_revision:(state.parcel.ops_revision||0)}),async()=>({ops_revision:(await api('/logistics/parcels/'+state.id)).parcel.ops_revision}));
   if(S?.user?.id!==state.owner)return;if(activeReasonMenu===state)closeParcelReason(false);
   await refresh();await renderView();
   if(inline){const b=document.querySelector(`.parcel-expand-button[onclick="toggleParcelRow(${state.id},this)"]`);if(b)await toggleParcelRow(state.id,b)}
   if(inModal)await parcelDetail(state.id);toast('État enregistré : '+status);
+  if(result&&result.exchange&&typeof o24ExchangeAlert==='function')o24ExchangeAlert(result.exchange);
  }catch(e){statusMenuError(state,e)}
 }
 

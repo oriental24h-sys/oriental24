@@ -157,6 +157,8 @@ function tag(s) {
           ? "bad"
           : ["Programmé", "Reporté", "À régler", "En attente", "Demandé"].includes(s)
             ? "warn"
+            : ["Échange à récupérer", "Échange Réceptionné"].includes(s)
+              ? "exchange"
             : "";
   return `<span class="tag ${cls}">${esc(s)}</span>`;
 }

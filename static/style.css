@@ -2518,3 +2518,12 @@ td strong {
 .profile-notification-option input{appearance:none;-webkit-appearance:none;width:36px;height:20px;background:#d9e0e9;border:0;border-radius:20px;position:relative;cursor:pointer;transition:background .15s}
 .profile-notification-option input:before{content:"";position:absolute;width:14px;height:14px;border-radius:50%;background:white;top:3px;left:3px;box-shadow:0 1px 3px #0002;transition:transform .15s}
 .profile-notification-option input:checked{background:#ed7b25}.profile-notification-option input:checked:before{transform:translateX(16px)}.profile-notification-option input:focus-visible{outline:2px solid #143b65;outline-offset:3px}
+
+/* Commande avec échange : alerte livreur et billet de reprise. */
+.exchange-alert{display:grid;gap:12px}
+.exchange-alert-shout{margin:0;font-size:20px;font-weight:800;letter-spacing:.4px;color:#b45309;text-transform:uppercase}
+.exchange-alert-track{font-family:ui-monospace,Menlo,monospace;font-size:19px;font-weight:800;color:#0b223f;border:2px dashed #b45309;background:#fff7ed;border-radius:10px;padding:12px;text-align:center;word-break:break-all}
+.exchange-alert-table{width:100%;border-collapse:collapse;font-size:13px}
+.exchange-alert-table th{text-align:left;color:#5a6b8f;font-weight:600;padding:6px 8px 6px 0;width:38%;vertical-align:top}
+.exchange-alert-table td{padding:6px 0;color:#0d1b33;overflow-wrap:anywhere}
+.tag.exchange{background:#fff1e0;color:#b45309;border:1px solid #f4c48a}
