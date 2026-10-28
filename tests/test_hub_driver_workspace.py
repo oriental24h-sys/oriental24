@@ -13,7 +13,7 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         cls.env = {k: os.environ.get(k) for k in ('DB_PATH', 'ORIENTAL24_MODE')}
         os.environ['DB_PATH'] = cls.tmp.name + '/test.sqlite'
         os.environ['ORIENTAL24_MODE'] = 'demo'
-        cls.m = importlib.import_module('app')
+        cls.m = importlib.reload(importlib.import_module('app'))
         cls.m.app.config['TESTING'] = True
 
     @classmethod
