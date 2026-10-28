@@ -254,10 +254,19 @@ def register_return_palettes(app,s):
                 if action=='cancel':
                     reason=text(d,'reason',600,True);c.execute("UPDATE ops_documents SET status='Annulé',cancel_reason=?,revision=revision+1 WHERE id=?",(reason,did));c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,));audit(c,did,u,'Palette retour annulée avant envoi',{'reason':reason})
                     return result(c,u,d,fp,get(c,did,u))
-                if u['role']=='hub_manager':
-                    # Le responsable du hub effectue l'envoi depuis son hub (déjà garanti par get()).
-                    pass
-                c.execute("UPDATE ops_documents SET status='En transit',dispatched_at=?,revision=revision+1 WHERE id=?",(at,did));audit(c,did,u,'Retour expédié au vendeur',{'count':len(ls),'transport':doc['transport'],'tracking_code':doc['tracking_code'],'lots':doc['lots']})
+                # Revalidate the physical stock snapshot at dispatch time. A parcel can
+                # move or be delivered after the return palette was prepared; a stale
+                # draft must never dispatch a parcel that is no longer at this Hub.
+                if not ls:
+                    raise Error('Impossible d’envoyer une palette retour vide.',409)
+                for l in ls:
+                    p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
+                    if not p:
+                        raise Error('Un colis de la palette n’existe plus.',409)
+                    lockcheck(c,p,doc['client_id'],doc['destination_hub_id'],doc['id'])
+                    if not l['active'] or l['tracking']!=p['tracking']:
+                        raise Error('Contenu du manifeste modifié depuis sa préparation.',409)
+                c.execute("UPDATE ops_documents SET status='En transit',dispatched_at=?,revision=revision+1 WHERE id=?",(at,did));audit(c,did,u,'Retour expédié au vendeur',{'count':len(ls),'trackings':[l['tracking'] for l in ls],'transport':doc['transport'],'tracking_code':doc['tracking_code'],'lots':doc['lots']})
                 for l in ls:event(c,l['parcel_id'],l['initial_status'],doc['reference']+' · retour expédié au vendeur, remise encore attendue',u)
                 return result(c,u,d,fp,get(c,did,u))
             if doc['status'] not in ['En transit','Partiellement remis']:raise Error('Confirmez l’envoi du retour avant la remise au vendeur.',409)
