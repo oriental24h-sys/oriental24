@@ -2527,3 +2527,9 @@ td strong {
 .exchange-alert-table th{text-align:left;color:#5a6b8f;font-weight:600;padding:6px 8px 6px 0;width:38%;vertical-align:top}
 .exchange-alert-table td{padding:6px 0;color:#0d1b33;overflow-wrap:anywhere}
 .tag.exchange{background:#fff1e0;color:#b45309;border:1px solid #f4c48a}
+
+/* Bouton d'écoute : cible tactile large pour le livreur. */
+.exchange-listen{background:#b45309;border-color:#b45309;color:#fff;font-weight:800;animation:exchangePulse 1.6s ease-in-out infinite}
+.exchange-listen:hover{background:#92400e;border-color:#92400e}
+@keyframes exchangePulse{0%,100%{box-shadow:0 0 0 0 rgba(180,83,9,.55)}50%{box-shadow:0 0 0 10px rgba(180,83,9,0)}}
+@media (max-width:520px){.exchange-alert-shout{font-size:24px}.exchange-alert-track{font-size:17px}}

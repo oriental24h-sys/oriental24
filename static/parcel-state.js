@@ -80,7 +80,10 @@ async function selectParcelStatus(state,status){
  }catch(e){statusMenuError(state,e)}
 }
 async function submitParcelStatus(state,status,fields){
- if(state.busy||activeReasonMenu!==state)return;state.busy=true;state.node.querySelectorAll('button[data-status],button[type=submit]').forEach(b=>b.disabled=true);
+ if(state.busy||activeReasonMenu!==state)return;
+ // Débloque le son dans le geste de confirmation (politique autoplay des navigateurs).
+ if(S?.user?.role==='livreur'&&typeof o24ExchangeArm==='function')o24ExchangeArm();
+ state.busy=true;state.node.querySelectorAll('button[data-status],button[type=submit]').forEach(b=>b.disabled=true);
  const inline=!!document.querySelector(`[data-parcel-expanded="${state.id}"]`),inModal=!!document.querySelector('.parcel-command-modal');
  try{
   if(state.attempt&&status==='Livré'&&S.user.role==='livreur')fields={...fields,simple_delivery:true};
