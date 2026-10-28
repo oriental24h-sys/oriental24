@@ -16,7 +16,7 @@ def register_dispatch_collection(app,s):
     def load(c,kind,did,u):
         a=registry.get(kind)
         if not a:raise Error('Envoi inconnu.',404)
-        if u['role']=='agent' and not c.execute('SELECT id FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone():raise Error('Hub actif requis.',403)
+        if u['role']=='hub_manager' and not c.execute('SELECT id FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone():raise Error('Hub actif requis.',403)
         doc,ls=a['load'](c,did,u)
         ps=[dict(c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()) for l in ls]
         snapshot=hashlib.sha256(json.dumps([doc,ls,ps],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
@@ -28,7 +28,7 @@ def register_dispatch_collection(app,s):
     def available(doc):return doc['status'] in ('Préparé','Départ partiel')
 
     @app.get('/api/dispatch-collection/<kind>/<int:did>')
-    @auth('admin','agent','client')
+    @auth('admin','hub_manager','client')
     def dispatch_collection_get(kind,did):
         u=user()
         with conn() as c:
@@ -38,7 +38,7 @@ def register_dispatch_collection(app,s):
                 if available(doc) and not sent(kind,doc,l) and not excluded(l):
                     try:a['check'](c,doc,l,u)
                     except Error as e:reason=str(e)
-                private=u['role']=='agent' and l.get('current_hub_id')!=u.get('agent_hub_id')
+                private=u['role']=='hub_manager' and l.get('current_hub_id')!=u.get('agent_hub_id')
                 rows.append(dict(id=l['id'],tracking=l['tracking'],received_at=sent(kind,doc,l),excluded=excluded(l),blocked=bool(reason),blocked_reason=reason,
                     recipient='' if private else l.get('recipient',''),city='' if private else l.get('city','')))
             return jsonify(id=did,reference=doc['reference'],status=doc['status'],snapshot=snapshot,lines=rows,available=available(doc),allow_partial_dispatch=bool(a.get('release')),
@@ -46,7 +46,7 @@ def register_dispatch_collection(app,s):
                 confirmation='Je confirme le départ physique de tous les colis scannés. Aucun envoi avant cette validation.')
 
     @app.get('/api/dispatch-collection/<kind>/<int:did>/check')
-    @auth('admin','agent','client')
+    @auth('admin','hub_manager','client')
     def dispatch_collection_check(kind,did):
         u=user();tracking=request.args.get('tracking','').strip().casefold()
         with conn() as c:
@@ -60,7 +60,7 @@ def register_dispatch_collection(app,s):
             return jsonify(ok=True,line_id=l['id'],already_scanned=False)
 
     @app.post('/api/dispatch-collection/<kind>/<int:did>')
-    @auth('admin','agent','client')
+    @auth('admin','hub_manager','client')
     def dispatch_collection_commit(kind,did):
         d=request.get_json(silent=True);u=user()
         if not isinstance(d,dict) or d.get('confirmed') is not True:raise Error('Confirmez explicitement le départ physique.')
