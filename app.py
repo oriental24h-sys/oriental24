@@ -838,10 +838,13 @@ def edit_user(uid):
         hub_id=v['agent_hub_id']
         if v['role']=='hub_manager':
             hub_id=d.get('agent_hub_id',hub_id)
-            hub_row=c.execute('SELECT active FROM ops_hubs WHERE id=?',(hub_id,)).fetchone() if type(hub_id) is int else None
-            if not hub_row or (active and not hub_row['active']):raise APIError('Choisissez un Hub actif pour ce responsable.')
-            if active:validate_hub_manager_slot(c,hub_id,uid)
-            leaving_slot=bool(v['active']) and (not active or hub_id!=v['agent_hub_id'])
+            hub_changed=hub_id!=v['agent_hub_id']
+            activation_or_hub_change=('active' in d) or hub_changed
+            if activation_or_hub_change:
+                hub_row=c.execute('SELECT active FROM ops_hubs WHERE id=?',(hub_id,)).fetchone() if type(hub_id) is int else None
+                if not hub_row or (active and not hub_row['active']):raise APIError('Choisissez un Hub actif pour ce responsable.')
+                if active:validate_hub_manager_slot(c,hub_id,uid)
+            leaving_slot=bool(v['active']) and (not active or hub_changed)
             if leaving_slot:
                 try:ensure_hub_manager_can_leave(c,uid,v['agent_hub_id'])
                 except ValueError as exc:raise APIError(str(exc),409)
