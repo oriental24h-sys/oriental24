@@ -106,7 +106,7 @@ class RamassageBonTests(unittest.TestCase):
             c.executemany('INSERT INTO users(id,name,email,role,active,agent_hub_id) VALUES(?,?,?,?,1,?)',
                           [(1, 'Admin', 'a@x.test', 'admin', None),
                            (2, 'Yasmine', 'c@x.test', 'client', None),
-                           (910, 'Manager Oujda', 'm10@x.test', 'agent', 10),
+                           (910, 'Manager Oujda', 'm10@x.test', 'hub_manager', 10),
                            (920, 'Manager Berkane', 'm20@x.test', 'agent', 20)])
             c.executemany(
                 'INSERT INTO parcels(id,tracking,client_id,city_id,status,invoice_id,current_hub_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
