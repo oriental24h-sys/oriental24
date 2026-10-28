@@ -254,7 +254,9 @@ async function hubPaletteLoadCandidates(){
   if(hubPaletteDialog!==d||serial!==d.loadSerial||!host.isConnected)return;
   const available=result.rows||[],rows=available.slice(0,100);d.loadedRoute=route;
   if((d.scans||[]).length){d.scans=[]}
- host.innerHTML=rows.length?`<div class="full form-hint">${rows.length} colis admissible(s) affiché(s) pour ce trajet.${available.length>100?' Une palette contient 100 colis maximum. Préparez ensuite une autre palette pour les colis restants.':''}</div><div class="hp-selection-tools"><button type="button" class="btn sm" id="hp-select-all" onclick="hubPaletteSelectAll(true)">Sélectionner tout</button><button type="button" class="btn sm" id="hp-clear-all" onclick="hubPaletteSelectAll(false)">Tout désélectionner</button><span class="sub" id="hp-selected-count">0 / ${rows.length} sélectionnés</span></div>${rows.map(p=>`<label class="check-label hub-palette-candidate"><input class="hp-pick" type="checkbox" value="${p.id}" onchange="hubPaletteSelectionChanged()"><span><b>${esc(p.tracking)}</b> · ${esc(p.recipient)}<small class="sub">${esc(p.city||'')} · ${esc(p.status)}${p.origin_hub?' · origine vérifiée : '+esc(p.origin_hub):''}</small></span></label>`).join('')}`:empty('Aucun colis admissible','Aucun colis physiquement présent et compatible avec les villes de ce Hub de destination.');
+ const badge=p=>p.decision==='accept'?`<span class="tag good">Part direct</span>`:p.decision==='double'?`<span class="tag warn">Déjà Livré</span>`:p.decision==='confirm'?`<span class="tag warn">Rendez-vous · OUI requis</span>`:p.decision==='blocked'?`<span class="tag bad">À valider</span>`:'';
+ const facts=p=>[p.days_at_hub!==undefined&&p.days_at_hub!==null?p.days_at_hub+' j':'',p.handovers!==undefined&&p.handovers!==null?p.handovers+' passage(s) livreur':'',p.appointment?'RDV '+p.appointment:''].filter(Boolean).join(' · ');
+ host.innerHTML=rows.length?`<div class="full form-hint">${rows.length} colis physiquement au Hub de départ.${available.length>100?' Une palette contient 100 colis maximum : préparez-en une autre pour le reste.':''} Cochez ceux à renvoyer : la coche vaut validation (OUI).</div><div class="hp-selection-tools"><button type="button" class="btn sm" id="hp-select-all" onclick="hubPaletteSelectAll(true)">Sélectionner tout</button><button type="button" class="btn sm" id="hp-clear-all" onclick="hubPaletteSelectAll(false)">Tout désélectionner</button><span class="sub" id="hp-selected-count">0 / ${rows.length} sélectionnés</span></div>${rows.map(p=>`<label class="check-label hub-palette-candidate"><input class="hp-pick" type="checkbox" value="${p.id}" data-decision="${esc(p.decision||'')}" onchange="hubPaletteSelectionChanged()"><span><b>${esc(p.tracking)}</b> · ${esc(p.recipient)} ${badge(p)}<small class="sub">${esc(p.city||'')} · ${esc(p.status)}${facts(p)?' · '+esc(facts(p)):''}${p.origin_hub?' · origine vérifiée : '+esc(p.origin_hub):''}</small></span></label>`).join('')}`:empty('Aucun colis au Hub de départ','Aucun colis physiquement enregistré dans ce Hub. Scannez d’abord les colis à leur réception, puis revenez ici.');
   hubPaletteSelectionChanged();
  }catch(e){if(hubPaletteDialog===d&&serial===d.loadSerial&&host.isConnected){host.textContent=e.message;toast(e.message,true)}}
 }
@@ -269,9 +271,15 @@ async function hubPaletteCreate(){
  let parcel_ids=(d.scans||[]).map(p=>p.id);
  if(!parcel_ids.length)parcel_ids=[...document.querySelectorAll('#hp-candidates .hp-pick:checked')].map(x=>Number(x.value));
  if(!parcel_ids.length){toast('Scannez au moins un colis à renvoyer.',true);return}
+ const confirmed_ids=(d.scans||[]).filter(p=>p.confirmed).map(p=>p.id),overridden_ids=(d.scans||[]).filter(p=>p.forced).map(p=>p.id);
+ // Cocher un colis dans la liste vaut validation explicite (OUI).
+ document.querySelectorAll('#hp-candidates .hp-pick:checked').forEach(x=>{
+  const dec=x.getAttribute('data-decision'),pid=Number(x.value);
+  if(dec==='confirm'&&!confirmed_ids.includes(pid))confirmed_ids.push(pid);
+  if(dec==='blocked'&&!overridden_ids.includes(pid))overridden_ids.push(pid);
+ });
  const selectedRoute=Number(document.getElementById('hp-source')?.value||d.defaultSource)+':'+Number(document.getElementById('hp-destination')?.value||d.fixedDestination);
  if(d.loadedRoute!==selectedRoute){hubPaletteResetCandidates();toast('Le trajet a changé : rechargez les colis.',true);return}
- const confirmed_ids=(d.scans||[]).filter(p=>p.confirmed).map(p=>p.id),overridden_ids=(d.scans||[]).filter(p=>p.forced).map(p=>p.id);
  const body={kind:'transfer',palette_purpose:d.purpose,source_hub_id:Number(document.getElementById('hp-source')?.value||d.defaultSource),destination_hub_id:Number(document.getElementById('hp-destination')?.value||d.fixedDestination),parcel_ids,confirmed_ids,overridden_ids,transport:document.getElementById('hp-transport')?.value||'',tracking_code:document.getElementById('hp-track')?.value||'',lots:Number(document.getElementById('hp-lots')?.value||0),note:document.getElementById('hp-note')?.value||''};
  try{const r=await api('/logistics/documents','POST',body);hubPaletteDialog=null;closeModal();hubPaletteTab=d.purpose==='return_to_origin'?'a-recevoir':d.purpose==='standard'?'default':'retours';toast('Palette préparée · '+r.reference);await renderView();await openOpsDocument(r.id)}catch(e){toast(e.message,true)}
 }
