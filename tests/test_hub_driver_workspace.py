@@ -1113,9 +1113,11 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         r=self.status_patch(pid,'Programmé',reason_code=reason,next_attempt_at=future)
         self.assertEqual(r.status_code,200,r.json)
         with self.m.conn() as c:c.execute("UPDATE parcels SET otp_required=1,otp_code='1234' WHERE id=?",(pid,))
-        self.assertEqual(self.status_patch(pid,'Livré',revision=1).status_code,400)
-        self.assertEqual(self.status_patch(pid,'Livré',revision=1,otp='9999').status_code,400)
-        self.assertEqual(self.status_patch(pid,'Livré',revision=1,otp='1234').status_code,200)
+        # A Hub Manager cannot close delivery through generic PATCH, even with a valid OTP.
+        # Final delivery must use the logistics attempt flow or an Admin-supervised correction.
+        self.assertEqual(self.status_patch(pid,'Livré',revision=1).status_code,409)
+        self.assertEqual(self.status_patch(pid,'Livré',revision=1,otp='9999').status_code,409)
+        self.assertEqual(self.status_patch(pid,'Livré',revision=1,otp='1234').status_code,409)
 
     def test_admin_can_still_correct_final_status(self):
         pid,_=self.parcel(self.hub,'Livré',self.driver,self.hub)
