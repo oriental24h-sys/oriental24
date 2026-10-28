@@ -10,7 +10,8 @@ BASE = os.path.dirname(__file__)
 app = Flask(__name__)
 from runtime import configure
 DB = configure(app, BASE)
-from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, DRIVER_HUB_ONLY_STATUSES, policy as status_policy
+from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, DRIVER_HUB_ONLY_STATUSES, EXCHANGE_RECEIVED, EXCHANGE_STATUSES, policy as status_policy
+import exchange_flow
 from billing import driver_paid_sql
 import client_types
 from company_order_edit import company_order_flags, register_company_order_edit
@@ -80,6 +81,7 @@ def init_db():
         if 'status_updated_at' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN status_updated_at TEXT')
         if 'open_allowed' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN open_allowed INTEGER NOT NULL DEFAULT 1')
         if 'is_exchange' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN is_exchange INTEGER NOT NULL DEFAULT 0')
+        exchange_flow.migrate(c)
         client_types.migrate(c)
         if 'support_id' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN support_id INTEGER REFERENCES users(id)')
         # Return tracking is a dimension separate from the delivery status: a return
@@ -486,6 +488,7 @@ def update_parcel(pid):
         if c.execute('SELECT 1 FROM driver_statement_lines WHERE parcel_id=? AND active=1',(pid,)).fetchone():
             raise APIError('Ce colis est figé dans un relevé livreur. Annulez le relevé avant toute correction.',409)
         if p['invoice_id']: raise APIError('Ce colis est facturé et ne peut plus être modifié.')
+        exchange_created=None
         ops_change(c,p,d,u)
         if 'driver_id' in d:
             if u['role']=='livreur':
@@ -511,6 +514,12 @@ def update_parcel(pid):
         if 'status' in d:
             s=d['status']
             if s not in STATUSES: raise APIError('Statut invalide.')
+            if s in EXCHANGE_STATUSES:
+                # Reprise échange : uniquement sur la commande jumelle créée automatiquement.
+                if not p.get('exchange_of_id'):
+                    raise APIError('La situation « échange » est réservée à la commande de reprise créée après une livraison avec échange.',409)
+                if u['role']=='livreur':
+                    raise APIError('La reprise échange est réceptionnée par le responsable de Hub.',403)
             if u['role']=='livreur':
                 transitions=DRIVER_TRANSITIONS
                 if s not in transitions.get(p['status'],[]): raise APIError('Transition non autorisée pour ce colis.')
@@ -522,11 +531,15 @@ def update_parcel(pid):
             if s=='Livré' and p.get('otp_required'):c.execute('UPDATE parcels SET otp_verified_at=? WHERE id=?',(now(),pid))
             c.execute('UPDATE parcels SET status=?,note=?,updated_at=? WHERE id=?',(s,note or p['note'],now(),pid))
             event(c,pid,s,note or 'Statut mis à jour',u)
+            if s=='Livré':
+                exchange_created=exchange_flow.create_for_delivery(c,pid,u,event,now,append_audit_log)
+            elif s==EXCHANGE_RECEIVED:
+                exchange_flow.mark_received(c,pid,u,event,now)
             if u['role']=='agent':
                 append_audit_log(c,actor_id=u['id'],actor_name=u['name'],action='hub_parcel_status_changed',
                     entity_type='parcel',entity_id=pid,old_value={'status':p['status']},new_value={'status':s},
                     metadata={'hub_id':u['agent_hub_id'],'note':note},created_at=now())
-    return jsonify(ok=True)
+    return jsonify(ok=True, exchange=exchange_created)
 @app.post('/api/parcels/bulk-assign')
 @auth('admin','livreur')
 def bulk_assign_parcels():

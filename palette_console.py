@@ -322,7 +322,7 @@ def register_palette_console(app,s):
                 p=c.execute("SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE p.tracking=? AND p.client_id=?",(code,cl['id'])).fetchone()
                 if not p:raise Error('Colis '+code+' introuvable pour ce vendeur.',404)
                 p=dict(p)
-                if p['status'] not in ('Refusé','Retourné'):raise Error('Colis '+code+' : seuls Refusé/Retourné sont retournables.',409)
+                if p['status'] not in ('Refusé','Retourné','Échange Réceptionné'):raise Error('Colis '+code+' : seuls Refusé/Retourné sont retournables.',409)
                 if p['current_hub_id']!=h['id']:raise Error('Colis '+code+' physiquement hors du hub choisi.',409)
                 if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():raise Error('Colis '+code+' déjà réservé dans un document actif.',409)
                 ps.append(p)

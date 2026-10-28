@@ -28,7 +28,7 @@ def annotate_parcel_transit(c,rows):
         for r in c.execute(query,chunk):
             p=mapped[r['parcel_id']]
             if p['transit_direction']:continue
-            if p['status'] in ('Refusé','Retourné') and r['palette_purpose']!='return_to_origin':continue
+            if p['status'] in ('Refusé','Retourné','Échange Réceptionné') and r['palette_purpose']!='return_to_origin':continue
             direction='central' if central and r['destination_hub_id']==central else 'destination' if central and r['source_hub_id']==central else 'inter_hub'
             p['transit_direction']=direction;p['transit_destination']=r['destination']
     return rows

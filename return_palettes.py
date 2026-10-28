@@ -90,7 +90,7 @@ def register_return_palettes(app,s):
         c.execute('INSERT INTO ops_audit(document_id,actor_id,action,details,created_at) VALUES(?,?,?,?,?)',(did,u['id'],action,json.dumps(details,ensure_ascii=False),now()))
     def lockcheck(c,p,cid,hid,did=None):
         if p['client_id']!=cid:raise Error('Colis inaccessible pour ce vendeur.',404)
-        if p['status'] not in ('Refusé','Retourné'):
+        if p['status'] not in ('Refusé','Retourné','Échange Réceptionné'):
             raise Error('Palette retour : uniquement des colis Refusé ou Retourné.',409)
         if p['current_hub_id']!=hid:raise Error('Colis physiquement hors du hub choisi.',409)
         if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1 AND document_id<>?',(p['id'],did or -1)).fetchone():raise Error('Colis déjà réservé dans un document actif.',409)
@@ -120,7 +120,7 @@ def register_return_palettes(app,s):
                 hubs=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 AND h.id=?',(hub_id,)).fetchall()
                 clients=c.execute('''SELECT DISTINCT u.id,u.name,u.company,u.client_type FROM users u
                     JOIN parcels p ON p.client_id=u.id WHERE u.role='client' AND u.active=1
-                    AND p.current_hub_id=? AND p.status IN ('Refusé','Retourné')
+                    AND p.current_hub_id=? AND p.status IN ('Refusé','Retourné','Échange Réceptionné')
                     AND NOT EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.parcel_id=p.id AND l.active=1)
                     ORDER BY u.company,u.name''',(hub_id,)).fetchall()
             else:
@@ -134,7 +134,7 @@ def register_return_palettes(app,s):
         u=user();access(u)
         with conn() as c:
             h=hub(c,request.args.get('hub_id'),u)
-            rows=c.execute('''SELECT p.client_id,COUNT(*) n FROM parcels p WHERE p.status IN ('Refusé','Retourné') AND p.current_hub_id=? AND NOT EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.parcel_id=p.id AND l.active=1) GROUP BY p.client_id''',(h['id'],)).fetchall()
+            rows=c.execute('''SELECT p.client_id,COUNT(*) n FROM parcels p WHERE p.status IN ('Refusé','Retourné','Échange Réceptionné') AND p.current_hub_id=? AND NOT EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.parcel_id=p.id AND l.active=1) GROUP BY p.client_id''',(h['id'],)).fetchall()
             return jsonify(counts={str(r['client_id']):r['n'] for r in rows})
 
     @app.get('/api/return-palettes/candidates')
@@ -143,7 +143,7 @@ def register_return_palettes(app,s):
         u=user();access(u)
         with conn() as c:
             cl=client(c,request.args.get('client_id'));h=hub(c,request.args.get('hub_id'),u);rows=[]
-            for p in c.execute("SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE p.client_id=? AND p.status IN ('Refusé','Retourné') AND p.current_hub_id=? ORDER BY p.updated_at DESC",(cl['id'],h['id'])).fetchall():
+            for p in c.execute("SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE p.client_id=? AND p.status IN ('Refusé','Retourné','Échange Réceptionné') AND p.current_hub_id=? ORDER BY p.updated_at DESC",(cl['id'],h['id'])).fetchall():
                 try:lockcheck(c,p,cl['id'],h['id'])
                 except Error:continue
                 rows.append({k:p[k] for k in ['id','tracking','recipient','city','phone','status']})

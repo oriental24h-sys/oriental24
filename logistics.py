@@ -11,6 +11,7 @@ from notification_retention import purge_read_notifications
 from client_profile_extras import notification_enabled
 from claims import prepare_claim
 from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES, DRIVER_HUB_ONLY_STATUSES, DRIVER_TRANSITIONS
+import exchange_flow
 from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
 from hub_schema import migrate_city_hub_id, assign_cities_to_hub
 from hub_cod import resolve_cod_hub
@@ -600,7 +601,8 @@ def register_logistics(app, services):
             prior=c.execute('SELECT * FROM ops_attempts WHERE request_key=?',(key,)).fetchone()
             if prior:
                 if prior['payload_hash']!=hashed or prior['parcel_id']!=pid or prior['actor_id']!=u['id']:raise Error('Clé déjà utilisée pour une autre saisie.',409)
-                return jsonify(ok=True,id=prior['id'],already_recorded=True)
+                replay=exchange_flow.existing(c,pid)
+                return jsonify(ok=True,id=prior['id'],already_recorded=True,exchange=exchange_flow.summary(c,replay) if replay else None)
             revision(p,d)
             if u['role']=='livreur':
                 if p['status']=='Livré':raise Error('Commande Livré : état définitivement verrouillé pour le livreur.',409)
@@ -637,7 +639,10 @@ def register_logistics(app, services):
                     new_value={'cod_cents':cents,'cod_hub_id':cod_hub_id},metadata={'attempt_id':aid},created_at=now())
             c.execute('UPDATE parcels SET status=?,note=?,updated_at=? WHERE id=?',(outcome,note or p['note'],now(),pid))
             event(c,pid,outcome,('Tentative : '+(reason['label'] if reason else 'livraison déclarée'))+(' · Rendez-vous '+next_at if next_at else '')+(' · '+note if note else ''),u)
-            return jsonify(ok=True,id=aid,already_recorded=False)
+            exchange=None
+            if outcome=='Livré':
+                exchange=exchange_flow.create_for_delivery(c,pid,u,event,now,append_audit_log)
+            return jsonify(ok=True,id=aid,already_recorded=False,exchange=exchange)
 
     @app.get(P+'/documents')
     @auth()
@@ -715,7 +720,7 @@ def register_logistics(app, services):
                 if u['role']!='admin':raise Error('Cette revue est réservée à Admin.',403)
                 candidates=c.execute('''SELECT p.id,p.tracking,p.recipient,p.status,p.current_hub_id,p.origin_hub_id,ci.name city
                     FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id
-                    WHERE p.current_hub_id=? AND p.origin_hub_id IS NULL AND p.status IN ('Retourné','Refusé')
+                    WHERE p.current_hub_id=? AND p.origin_hub_id IS NULL AND p.status IN ('Retourné','Refusé','Échange Réceptionné')
                       AND NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)
                       AND EXISTS(SELECT 1 FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
                         WHERE l.parcel_id=p.id AND l.received_at IS NOT NULL AND d.kind='transfer'
@@ -765,7 +770,7 @@ def register_logistics(app, services):
                 rows=c.execute('''SELECT p.id,p.tracking,p.recipient,p.status,p.origin_hub_id,ci.name city,
                     oh.name origin_hub FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id
                     LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id
-                    WHERE p.current_hub_id=? AND p.origin_hub_id=? AND p.status IN ('Retourné','Refusé')
+                    WHERE p.current_hub_id=? AND p.origin_hub_id=? AND p.status IN ('Retourné','Refusé','Échange Réceptionné')
                       AND NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)
                       AND EXISTS(SELECT 1 FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
                         WHERE l.parcel_id=p.id AND l.received_at IS NOT NULL AND d.kind='transfer'
@@ -778,7 +783,7 @@ def register_logistics(app, services):
             if mode=='return_to_central':
                 if source_id==central_id:raise Error('Le Hub Central ne peut pas envoyer un retour vers lui-même.')
                 dest_id=central_id
-                sql="p.current_hub_id=? AND p.status IN ('Retourné','Refusé')"
+                sql="p.current_hub_id=? AND p.status IN ('Retourné','Refusé','Échange Réceptionné')"
             else:
                 dest_id=integer(request.args.get('destination_hub_id'),'Hub de destination')
                 dest=hub(c,dest_id)
@@ -814,7 +819,7 @@ def register_logistics(app, services):
             p=c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone()
             if not p:raise Error('Colis introuvable.',404)
             if p['origin_hub_id'] is not None:raise Error('L’origine du colis est déjà enregistrée; toute correction exige une procédure distincte.',409)
-            if p['current_hub_id']!=central_id or p['status'] not in ('Retourné','Refusé'):
+            if p['current_hub_id']!=central_id or p['status'] not in ('Retourné','Refusé','Échange Réceptionné'):
                 raise Error('Seul un retour physiquement reçu au Hub Central peut être revu.',409)
             if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(pid,)).fetchone():
                 raise Error('Terminez ou annulez le document actif avant la revue.',409)
@@ -913,11 +918,11 @@ def register_logistics(app, services):
                             raise Error('Palette standard : sélectionnez uniquement des colis reçus physiquement au Hub.')
                         check_transfer_city(c,{'kind':'transfer','palette_purpose':'standard','destination_hub_id':dest['id']},p)
                     elif purpose=='return_to_central':
-                        if p['status'] not in ('Retourné','Refusé'):
+                        if p['status'] not in ('Retourné','Refusé','Échange Réceptionné'):
                             raise Error('Un retour au Hub Central ne contient que des colis non livrés (Retourné/Refusé).')
                         line_return_status[pid]=p['status']
                     else:
-                        if p['origin_hub_id']!=dest['id'] or p['status'] not in ('Retourné','Refusé'):
+                        if p['origin_hub_id']!=dest['id'] or p['status'] not in ('Retourné','Refusé','Échange Réceptionné'):
                             raise Error('Ce colis ne correspond pas au Hub d’origine sélectionné.',409)
                         returned=c.execute('''SELECT 1 FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
                             WHERE l.parcel_id=? AND l.received_at IS NOT NULL AND d.kind='transfer'
@@ -929,11 +934,11 @@ def register_logistics(app, services):
                               AND l.received_at IS NOT NULL AND d.destination_hub_id=?
                             ORDER BY l.received_at DESC,l.id DESC LIMIT 1''',(pid,src['id'])).fetchone()
                         prior_status=prior_status['return_status'] if prior_status else None
-                        if prior_status not in ('Retourné','Refusé'):raise Error('Statut initial du retour non confirmé; révision Admin requise.',409)
+                        if prior_status not in ('Retourné','Refusé','Échange Réceptionné'):raise Error('Statut initial du retour non confirmé; révision Admin requise.',409)
                         line_return_status[pid]=p['status']
                 else:
                     if kind=='return':
-                        if p['status'] not in ['Retourné','Refusé']:raise Error('Un bon de retour ne contient que des colis retournés/refusés.')
+                        if p['status'] not in ['Retourné','Refusé','Échange Réceptionné']:raise Error('Un bon de retour ne contient que des colis retournés/refusés.')
                     else:
                         guard(c,p)
                         if kind=='pickup' and p['status'] not in ['Créé','Ramassé']:raise Error('Ramassage : sélectionnez des colis créés ou ramassés.')
@@ -1046,7 +1051,7 @@ def register_logistics(app, services):
         p=parcel(c,line['parcel_id'],u)
         special_return=doc.get('palette_purpose') in ('return_to_central','return_to_origin')
         if special_return:
-            if line.get('return_status') not in ('Retourné','Refusé') or p['status']!=line['return_status']:
+            if line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné') or p['status']!=line['return_status']:
                 raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
         else:guard(c,p,False)
         if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
@@ -1105,7 +1110,7 @@ def register_logistics(app, services):
                 p=parcel(c,line['parcel_id'],u)
                 special_return=doc.get('palette_purpose') in ('return_to_central','return_to_origin')
                 if special_return:
-                    if line.get('return_status') not in ('Retourné','Refusé') or p['status']!=line['return_status']:
+                    if line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné') or p['status']!=line['return_status']:
                         raise Error('Le statut de retour a changé; aucune réconciliation automatique.',409)
                 else:guard(c,p,False)
                 if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
@@ -1156,7 +1161,7 @@ def register_logistics(app, services):
             if doc['status'] not in ['En transit','Partiellement reçu','Départ partiel']:
                 raise Error(unavailable,404)
             expected_status=(line.get('return_transit_status') or line.get('return_status')) if special_return else 'Transit'
-            if p['current_hub_id'] is not None or (special_return and line.get('return_status') not in ('Retourné','Refusé')) or p['status']!=expected_status:
+            if p['current_hub_id'] is not None or (special_return and line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné')) or p['status']!=expected_status:
                 raise Error(unavailable,404)
             if doc['departure_scan_required'] and not line['departure_scanned_at']:
                 raise Error(unavailable,404)
@@ -1178,7 +1183,7 @@ def register_logistics(app, services):
                 try:guard(c,p,False)
                 except Error:raise Error('Colis non disponible pour réception à ce Hub.',404)
             else:guard(c,p,False)
-        if special_return and (line.get('return_status') not in ('Retourné','Refusé') or p['status']!=(line.get('return_transit_status') or line.get('return_status'))):
+        if special_return and (line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné') or p['status']!=(line.get('return_transit_status') or line.get('return_status'))):
             raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
         received_at=now()
         c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(received_at,u['id'],line['id']))
@@ -1664,7 +1669,7 @@ def register_logistics(app, services):
         p=parcel(c,line['parcel_id'],u)
         if p['tracking']!=line['tracking'] or not line['active']:raise Error('Contenu du manifeste modifié.',409)
         if doc.get('palette_purpose') in ('return_to_central','return_to_origin'):
-            if line.get('return_status') not in ('Retourné','Refusé') or p['status']!=line['return_status']:raise Error('Statut de retour modifié.',409)
+            if line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné') or p['status']!=line['return_status']:raise Error('Statut de retour modifié.',409)
         else:guard(c,p,False)
         if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):raise Error('Colis physiquement hors du Hub de départ.',409)
         check_transfer_city(c,doc,p)
