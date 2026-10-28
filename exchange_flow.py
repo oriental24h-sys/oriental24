@@ -5,9 +5,10 @@ Règle métier :
   (mêmes informations) dont le tracking devient **EC + tracking livré** ;
 - cette reprise est immédiatement comptée sur le livreur qui vient de livrer : il doit
   récupérer l'ancien article chez le destinataire (alerte sonore « Récupère échange ») ;
-- le responsable de Hub la réceptionne ensuite (`Échange Réceptionné`) : elle quitte
-  le livreur et devient un colis du Hub, disponible pour une palette retour vers le
-  vendeur, exactement comme un retour classique.
+- au retour du livreur au Hub, le responsable de Hub **scanne** les colis remis : la
+  reprise passe **automatiquement** à `Échange Réceptionné` (aucune saisie manuelle),
+  quitte le livreur et devient un colis du Hub, disponible pour une palette retour
+  vers le vendeur, exactement comme un retour classique.
 
 Aucun COD n'est encaissé sur la reprise : elle n'est jamais « Livré ».
 """
@@ -110,6 +111,27 @@ def create_for_delivery(c, pid, actor, event, now, audit=None):
             pass
     row = c.execute('SELECT * FROM parcels WHERE id=?', (eid,)).fetchone()
     return summary(c, row)
+
+
+def receive_on_scan(c, p, hub_id, now):
+    """Réception automatique d'une reprise échange au scan de descente du livreur.
+
+    Le responsable de Hub scanne les colis remis par le livreur à son retour :
+    la reprise (tracking `EC…`) passe immédiatement à « Échange Réceptionné »,
+    sans aucune saisie manuelle de statut, et quitte la tournée du livreur.
+    Idempotent : déjà réceptionnée → rien à faire.
+    """
+    if not p:
+        return False
+    is_exchange = bool(p.get('exchange_of_id')) or str(p.get('tracking') or '').upper().startswith('EC')
+    if not is_exchange:
+        return False
+    if p.get('status') != EXCHANGE_TO_RECOVER:
+        return False
+    t = now()
+    c.execute('UPDATE parcels SET status=?,driver_id=NULL,current_hub_id=?,exchange_received_at=?,updated_at=? WHERE id=?',
+              (EXCHANGE_RECEIVED, hub_id, t, t, p['id']))
+    return True
 
 
 def mark_received(c, pid, actor, event, now):

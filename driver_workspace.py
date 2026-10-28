@@ -4,6 +4,8 @@ from flask import request,jsonify
 from audit_guard import install_driver_workspace_audit_guards
 from hub_access import driver_dispatch_allowed, local_driver_parcel_scope
 from hub_analytics import install_driver_receipt_arrival_trigger
+import exchange_flow
+from parcel_statuses import EXCHANGE_TO_RECOVER, EXCHANGE_RECEIVED
 from werkzeug.security import generate_password_hash
 
 CLOSED=['Livré','Refusé','Retourné']
@@ -144,7 +146,11 @@ def register_driver_workspace(app,s):
             if not rows:raise Error('Référence introuvable.',404)
             if len(rows)>1:raise Error('Référence identique chez plusieurs sociétés ('+', '.join(sorted({r['company'] or '—' for r in rows[:6]}))+') : ouvrez le bon colis via la recherche avant la remise.',409)
             p=custody_parcel(c,rows[0]['id'],u);already=check(c,dr,p,mode);p=s['parcel_contact_info'](c,p)
-            return jsonify(parcel=p,already=already)
+            # Reprise échange : le scan de descente déclenche la réception au Hub, sans saisie de statut.
+            exchange_auto=bool(mode=='receive' and not already and
+                (p.get('exchange_of_id') or str(p.get('tracking') or '').upper().startswith('EC'))
+                and p.get('status')==EXCHANGE_TO_RECOVER)
+            return jsonify(parcel=p,already=already,exchange_auto=exchange_auto)
     @app.post('/api/drivers-workspace/<int:uid>/scan')
     @auth('admin')
     def driver_custody_scan(uid):
@@ -159,6 +165,7 @@ def register_driver_workspace(app,s):
             if prior:
                 if prior['fingerprint']!=fp:raise Error('Clé déjà utilisée pour une autre opération.',409)
                 return jsonify(**json.loads(prior['result']),replayed=True)
+            exchange_done=[]
             p=parcel(c,d['parcel_id'],u);already=check(c,dr,p,d['mode']);rev(d,p['ops_revision']);hub=d['hub_id']
             if hub is not None and (type(hub) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub,)).fetchone()):raise Error('Hub invalide.')
             if d['mode']=='assign' and hub is not None:raise Error('Le départ remet le colis au livreur, pas à un hub.')
@@ -175,8 +182,13 @@ def register_driver_workspace(app,s):
                     # notes and historical courier/financial attribution for every status.
                     c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1 WHERE id=?',(hub,p['id']))
                     c.execute('INSERT INTO driver_receipts(parcel_id,driver_id,received_at,hub_id) VALUES(?,?,?,?) ON CONFLICT(parcel_id) DO UPDATE SET driver_id=excluded.driver_id,received_at=excluded.received_at,hub_id=excluded.hub_id',(p['id'],uid,now(),hub));note='Récupéré physiquement à l’agence auprès de '+dr['name']+' · retiré de sa tournée'
-                record(c,uid,u,d['mode'],{'before':previous,'hub_id':hub,'financial_attribution_preserved':p['status'] in CLOSED},p['id']);event(c,p['id'],status,note,u)
-            result=dict(ok=True,already=bool(already),parcel_id=p['id'],mode=d['mode']);c.execute('INSERT INTO driver_scan_keys VALUES(?,?,?,?)',(u['id'],key,fp,json.dumps(result)));return jsonify(**result)
+                    # Reprise échange (EC…) : la réception au Hub est automatique au scan.
+                    if exchange_flow.receive_on_scan(c,p,hub,now):
+                        status=EXCHANGE_RECEIVED
+                        note='Reprise échange réceptionnée automatiquement au scan de descente · retirée de la tournée de '+dr['name']+' · prête pour une palette retour vers le vendeur'
+                        exchange_done.append(p['id'])
+                record(c,uid,u,d['mode'],{'before':previous,'hub_id':hub,'financial_attribution_preserved':p['status'] in CLOSED,'exchange_auto_received':p['id'] in exchange_done},p['id']);event(c,p['id'],status,note,u)
+            result=dict(ok=True,already=bool(already),parcel_id=p['id'],mode=d['mode'],exchange_received=p['id'] in exchange_done);c.execute('INSERT INTO driver_scan_keys VALUES(?,?,?,?)',(u['id'],key,fp,json.dumps(result)));return jsonify(**result)
 
     @app.post('/api/drivers-workspace/<int:uid>/scan-batch')
     @auth('admin','agent')
@@ -231,7 +243,7 @@ def register_driver_workspace(app,s):
                 already=check(c,dr,p,mode)
                 rev({'revision':item['revision']},p['ops_revision'])
                 checked.append((p,already))
-            applied=[];already_ids=[]
+            applied=[];already_ids=[];exchange_done=[]
             for p,already in checked:
                 if already:
                     already_ids.append(p['id'])
@@ -251,10 +263,16 @@ def register_driver_workspace(app,s):
                     c.execute('UPDATE parcels SET current_hub_id=?,ops_revision=ops_revision+1 WHERE id=?',(hub,p['id']))
                     c.execute('INSERT INTO driver_receipts(parcel_id,driver_id,received_at,hub_id) VALUES(?,?,?,?) ON CONFLICT(parcel_id) DO UPDATE SET driver_id=excluded.driver_id,received_at=excluded.received_at,hub_id=excluded.hub_id',(p['id'],uid,now(),hub))
                     note='Récupéré physiquement à l’agence auprès de '+dr['name']+' · retiré de sa tournée'
-                record(c,uid,u,mode,{'before':previous,'hub_id':hub,'financial_attribution_preserved':p['status'] in CLOSED},p['id'])
+                    # Reprise échange (EC…) : la réception au Hub est automatique au scan.
+                    if exchange_flow.receive_on_scan(c,p,hub,now):
+                        status=EXCHANGE_RECEIVED
+                        note='Reprise échange réceptionnée automatiquement au scan de descente · retirée de la tournée de '+dr['name']+' · prête pour une palette retour vers le vendeur'
+                        exchange_done.append(p['id'])
+                record(c,uid,u,mode,{'before':previous,'hub_id':hub,'financial_attribution_preserved':p['status'] in CLOSED,'exchange_auto_received':p['id'] in exchange_done},p['id'])
                 event(c,p['id'],status,note,u)
                 applied.append(p['id'])
             result={'ok':True,'mode':mode,'driver_id':uid,'count':len(applied),'parcel_ids':applied,
-                    'already':len(already_ids),'already_ids':already_ids}
+                    'already':len(already_ids),'already_ids':already_ids,
+                    'exchange_received':exchange_done,'exchange_received_count':len(exchange_done)}
             c.execute('INSERT INTO driver_scan_keys VALUES(?,?,?,?)',(u['id'],key,fingerprint,json.dumps(result)))
             return jsonify(**result)

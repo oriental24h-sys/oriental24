@@ -506,8 +506,9 @@ def update_parcel(pid):
                 raise APIError('Le responsable de Hub peut uniquement modifier la situation avec sa version.',403)
             if p['status']=='Livré':
                 raise APIError('Commande Livré : situation définitivement verrouillée pour le responsable de Hub.',409)
-            if p.get('exchange_of_id') and d['status'] not in (EXCHANGE_RECEIVED,):
-                raise APIError('Reprise échange : état verrouillé. Seule la réception au Hub est autorisée.',409)
+            if p.get('exchange_of_id'):
+                # Reprise échange : la réception est automatique au scan de descente du livreur.
+                raise APIError('Reprise échange : la réception « Échange Réceptionné » est automatique. Scannez le colis remis par le livreur à la descente au Hub (espace livreur → Récupérer). Aucune saisie manuelle.',409)
             if d['status'] not in STATUSES:raise APIError('Statut invalide.')
             if p['invoice_id'] or p['financial_locked'] or p['operations_locked']:
                 raise APIError('Commande verrouillée dans un relevé financier ou un document actif.',409)

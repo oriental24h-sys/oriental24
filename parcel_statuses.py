@@ -22,7 +22,7 @@ STATUS_HELP = {
  'Ramassé':'Ramassage déclaré.', 'Au hub':'Ancien état conservé : colis au hub.',
  'En livraison':'Tournée de livraison au destinataire.', 'Retourné':'Retour déclaré ; les règles financières existantes sont conservées.',
  EXCHANGE_TO_RECOVER:'Commande de reprise créée automatiquement après une livraison avec échange. Le livreur doit récupérer l’ancien article chez le destinataire et le remettre au Hub. Aucun COD.',
- EXCHANGE_RECEIVED:'Colis de reprise physiquement réceptionné au Hub par le responsable. Il ne dépend plus du livreur et repart par le circuit retour vers le vendeur.',
+ EXCHANGE_RECEIVED:'Colis de reprise réceptionné au Hub automatiquement quand le responsable scanne le colis remis par le livreur à la descente. Rien à saisir à la main : il ne dépend plus du livreur et repart par le circuit retour vers le vendeur.',
  'Annulé':'Annulation déclarée avec motif (livreur ou admin). Aucun encaissement ; le colis n’entre dans aucun relevé tant qu’il reste annulé. Le livreur peut reprendre cette commande et choisir un autre état autorisé.'}
 DRIVER_HUB_ONLY_STATUSES = ('Réceptionné','Retourné')
 # Courier choices are independent of the previous state. Delivered alone is terminal.

@@ -10,6 +10,7 @@ from ramassage_tracking import sync_central_receipts
 from notification_retention import purge_read_notifications
 from client_profile_extras import notification_enabled
 from claims import prepare_claim
+import return_scan
 from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES, DRIVER_HUB_ONLY_STATUSES, DRIVER_TRANSITIONS, EXCHANGE_RECEIVED
 import exchange_flow
 from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
@@ -804,6 +805,76 @@ def register_logistics(app, services):
                 ORDER BY p.id DESC LIMIT 500''',candidate_args).fetchall()
             return jsonify(mode=mode,source_hub_id=source_id,destination_hub_id=dest_id,rows=[dict(r) for r in rows])
 
+    @app.get(P+'/palette-scan')
+    @auth('admin','agent')
+    def ops_palette_scan():
+        """Scan direct d'un colis pour une palette (retour au Central, retour origine, standard).
+
+        Remplace la case à cocher : le responsable scanne les colis qu'il renvoie et le
+        serveur vérifie en direct la présence physique au Hub de départ et l'admissibilité.
+        """
+        u=user();mode=request.args.get('mode','return_to_central')
+        if mode not in ('standard','return_to_central','return_to_origin'):raise Error('Mode de palette invalide.')
+        tracking=str(request.args.get('tracking') or '').strip().upper()
+        if not tracking or len(tracking)>80:raise Error('Scannez ou saisissez un numéro de suivi (80 caractères maximum).')
+        with conn() as c:
+            central_id,central=current_central_hub(c)
+            if not central or not central.get('active'):raise Error('Aucun Hub Central actif.',409)
+            source_id=integer(request.args.get('source_hub_id'),'Hub de départ')
+            if u['role']=='agent':
+                local=local_manager_hub(c,u)
+                if source_id!=local['id']:raise Error('La palette doit partir de votre Hub.',403)
+            if not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(source_id,)).fetchone():
+                raise Error('Hub de départ actif requis.')
+            if mode=='return_to_central':
+                if source_id==central_id:raise Error('Le Hub Central ne peut pas envoyer un retour vers lui-même.')
+                dest_id=central_id
+                # Le statut est arbitré par la décision ci-dessous (pas de filtre SQL) :
+                # il faut pouvoir expliquer pourquoi un colis ne peut pas partir.
+                condition='1=1'
+                args=[source_id]
+            elif mode=='return_to_origin':
+                dest_id=integer(request.args.get('destination_hub_id'),'Hub d’origine')
+                if not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(dest_id,)).fetchone() or dest_id==central_id:
+                    raise Error('Choisissez un Hub d’origine actif.')
+                condition="p.origin_hub_id=? AND p.status IN ('Retourné','Refusé','Échange Réceptionné')"
+                args=[source_id,dest_id]
+            else:
+                dest_id=integer(request.args.get('destination_hub_id'),'Hub de destination')
+                if not central_hub_transfer_allowed(source_id,dest_id,central_id,True):
+                    raise Error('Le trajet doit relier le Hub Central à un Hub secondaire actif.',409)
+                condition="p.status IN ('Ramassé','Au hub','Réceptionné') AND p.invoice_id IS NULL AND NOT EXISTS(SELECT 1 FROM driver_statement_lines st WHERE st.parcel_id=p.id AND st.active=1)"
+                args=[source_id]
+            args.append(tracking)
+            row=c.execute('''SELECT p.id,p.tracking,p.recipient,p.phone,p.status,p.current_hub_id,p.origin_hub_id,
+                    p.next_attempt_at,p.is_exchange,p.exchange_of_id,ci.name city,oh.name origin_hub
+                FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id
+                WHERE p.current_hub_id=? AND '''+condition+''' AND upper(p.tracking)=?
+                  AND NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)''',args).fetchone()
+            if row:
+                decision=return_scan.decide_policy(c,dict(row),source_id,now)
+                return jsonify(found=True,mode=mode,source_hub_id=source_id,destination_hub_id=dest_id,
+                               parcel=dict(row),decision=decision,
+                               direct=decision['code'] in ('accept','double'))
+
+            # Diagnostic précis : on explique pourquoi le colis ne peut pas partir.
+            seen=c.execute('''SELECT p.tracking,p.status,p.current_hub_id,p.origin_hub_id,
+                    (SELECT name FROM ops_hubs WHERE id=p.current_hub_id) current_hub_name,
+                    EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1) busy
+                FROM parcels p WHERE upper(p.tracking)=? ORDER BY p.id DESC LIMIT 1''',(tracking,)).fetchone()
+            if not seen:raise Error('Référence « '+tracking+' » introuvable.',404)
+            if seen['busy']:raise Error('Ce colis appartient déjà à un document actif.',409)
+            if seen['current_hub_id']!=source_id:
+                where='le Hub de départ' if mode!='return_to_origin' else 'le Hub Central'
+                raise Error('Ce colis n’est pas physiquement enregistré à '+where+' (emplacement : '+(seen['current_hub_name'] or 'aucun Hub')+').',409)
+            if mode=='return_to_origin' and seen['origin_hub_id']!=integer(request.args.get('destination_hub_id'),'Hub d’origine'):
+                raise Error('Ce colis ne correspond pas au Hub d’origine sélectionné.',409)
+            if mode=='return_to_central':
+                # La décision explique précisément pourquoi le colis ne peut pas partir.
+                decision=return_scan.decide_policy(c,dict(seen),source_id,now)
+                raise Error(decision['message'],409)
+            raise Error('Statut « '+str(seen['status'])+' » : ce colis n’est pas admissible dans cette palette.',409)
+
     @app.post(P+'/parcels/<int:pid>/origin-review')
     @auth('admin')
     def ops_review_return_origin(pid):
@@ -907,7 +978,7 @@ def register_logistics(app, services):
                 src=hub(c,d.get('source_hub_id')) if kind!='pickup' else None
                 dest=hub(c,d.get('destination_hub_id')) if kind!='return' else None
                 if src and dest and src['id']==dest['id']:raise Error('Choisissez deux hubs différents.')
-            parcels=[];line_return_status={}
+            parcels=[];line_return_status={};audit_note=[]
             for pid in pids:
                 p=parcel(c,pid,u)
                 if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(pid,)).fetchone():
@@ -922,8 +993,18 @@ def register_logistics(app, services):
                             raise Error('Palette standard : sélectionnez uniquement des colis reçus physiquement au Hub.')
                         check_transfer_city(c,{'kind':'transfer','palette_purpose':'standard','destination_hub_id':dest['id']},p)
                     elif purpose=='return_to_central':
-                        if p['status'] not in ('Retourné','Refusé','Échange Réceptionné'):
-                            raise Error('Un retour au Hub Central ne contient que des colis non livrés (Retourné/Refusé).')
+                        # Décision de scan revalidée côté serveur (aucune confiance au client).
+                        confirmed_ids=d.get('confirmed_ids') if isinstance(d.get('confirmed_ids'),list) else []
+                        overridden_ids=d.get('overridden_ids') if isinstance(d.get('overridden_ids'),list) else []
+                        try:
+                            decision=return_scan.assert_allowed(c,p,src['id'],now,
+                                confirmed=pid in confirmed_ids,overridden=pid in overridden_ids)
+                        except return_scan._Blocked as blocked:
+                            raise Error(blocked.message,409)
+                        if decision.get('validated')=='overridden_by_hub':
+                            audit_note.append((pid,decision))
+                            event(c,pid,p['status'],'Retour forcé vers le Hub Central par '+(u['name'] or 'le Hub')+
+                                  ' · motif : '+decision['message'],u)
                         line_return_status[pid]=p['status']
                     else:
                         if p['origin_hub_id']!=dest['id'] or p['status'] not in ('Retourné','Refusé','Échange Réceptionné'):
