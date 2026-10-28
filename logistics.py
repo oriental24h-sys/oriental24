@@ -10,7 +10,7 @@ from ramassage_tracking import sync_central_receipts
 from notification_retention import purge_read_notifications
 from client_profile_extras import notification_enabled
 from claims import prepare_claim
-from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES, DRIVER_HUB_ONLY_STATUSES, DRIVER_TRANSITIONS
+from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES, DRIVER_HUB_ONLY_STATUSES, DRIVER_TRANSITIONS, EXCHANGE_RECEIVED
 import exchange_flow
 from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
 from hub_schema import migrate_city_hub_id, assign_cities_to_hub
@@ -253,6 +253,9 @@ def register_logistics(app, services):
         if type(d.get('revision')) is not int or d['revision']!=p['ops_revision']:raise Error('Le colis a changé. Rechargez sa fiche.',409)
     def change(c,p,d,u):
         # Called by the existing PATCH endpoint as well: no bypass of document or scheduling locks.
+        # Reprise échange : état verrouillé, seule la réception au Hub fait avancer la commande.
+        if p.get('exchange_of_id') and d.get('status') and d['status']!=EXCHANGE_RECEIVED:
+            raise Error('Reprise échange : état verrouillé. Seule la réception au Hub est autorisée.',409)
         if u['role']=='livreur' and 'status' in d:
             if p['status']=='Livré':raise Error('Commande Livré : état définitivement verrouillé pour le livreur.',409)
             if d['status'] not in DRIVER_TRANSITIONS.get(p['status'],[]):raise Error('État non autorisé pour le livreur.',403)

@@ -471,6 +471,8 @@ def update_parcel(pid):
                 raise APIError('Le responsable de Hub peut uniquement modifier la situation avec sa version.',403)
             if p['status']=='Livré':
                 raise APIError('Commande Livré : situation définitivement verrouillée pour le responsable de Hub.',409)
+            if p.get('exchange_of_id') and d['status'] not in (EXCHANGE_RECEIVED,):
+                raise APIError('Reprise échange : état verrouillé. Seule la réception au Hub est autorisée.',409)
             if d['status'] not in STATUSES:raise APIError('Statut invalide.')
             if p['invoice_id'] or p['financial_locked'] or p['operations_locked']:
                 raise APIError('Commande verrouillée dans un relevé financier ou un document actif.',409)
@@ -491,6 +493,8 @@ def update_parcel(pid):
         exchange_created=None
         ops_change(c,p,d,u)
         if 'driver_id' in d:
+            if p.get('exchange_of_id'):
+                raise APIError('Reprise échange : elle reste affectée au livreur qui a livré, elle ne peut pas être réaffectée.',409)
             if u['role']=='livreur':
                 team=[u['id']]+team_member_ids(c,u['id'])
                 if len(team)<2: raise APIError('Action réservée à l’administration.',403)
@@ -520,6 +524,8 @@ def update_parcel(pid):
                     raise APIError('La situation « échange » est réservée à la commande de reprise créée après une livraison avec échange.',409)
                 if u['role']=='livreur':
                     raise APIError('La reprise échange est réceptionnée par le responsable de Hub.',403)
+            elif p.get('exchange_of_id'):
+                raise APIError('Reprise échange : état verrouillé, aucune autre situation ne peut être appliquée.',409)
             if u['role']=='livreur':
                 transitions=DRIVER_TRANSITIONS
                 if s not in transitions.get(p['status'],[]): raise APIError('Transition non autorisée pour ce colis.')
