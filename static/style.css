@@ -2543,3 +2543,24 @@ td strong {
 /* Saisie libre de la ville : retour de reconnaissance */
 .city-free small.ok{color:#15803d;font-weight:600}
 .city-free small.bad{color:#b91c1c;font-weight:600}
+
+/* Reprise échange : réception automatique annoncée dans le scan de descente. */
+.driver-scan-row-main .exchange-auto{color:#b45309}
+
+/* Palette retour : scan direct des colis remis (sans case à cocher). */
+.hub-palette-scan{margin:10px 0 4px}
+.hub-palette-scan-row{display:flex;gap:8px;align-items:center}
+.hub-palette-scan-row input{flex:1;min-width:0}
+.hub-palette-scan-feedback{margin-top:8px;font-size:13px;color:#5b6675}
+.hub-palette-scan-feedback.ok{color:#15803d;font-weight:600}
+.hub-palette-scan-feedback.warn{color:#b45309;font-weight:600}
+.hub-palette-scan-feedback.error{color:#b91c1c;font-weight:600}
+.hub-palette-candidate.hub-palette-scanned{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.hub-palette-scanned .hp-scanned-main{display:flex;flex-direction:column}
+
+/* Palette retour : décision de scan (rendez-vous futur / dérogation 7 jours). */
+.hub-palette-scan-feedback.hub-palette-decision{background:#fff7ed;border:1px solid #fdba74;border-radius:10px;padding:10px 12px}
+.hp-decision strong{display:block;color:#b45309;font-size:13px;margin-bottom:4px}
+.hp-decision p{margin:0 0 6px;color:#4b5563;font-size:13px}
+.hp-decision-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.hub-palette-scanned .hp-forced{color:#b45309}

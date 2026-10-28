@@ -43,8 +43,8 @@ window.addEventListener('resize',()=>activeReasonMenu?.place?.());
 function parcelStatusChoices(p){
  if(S.user.role==='client')return clientInterestedEligible(p)?['Intéressé']:[];
  if(p.exchange_of_id){
-  // Reprise échange : état verrouillé. Le Hub peut seulement la réceptionner.
-  return S.user.role==='agent'&&p.status==='Échange à récupérer'&&!p.invoice_id&&!p.financial_locked&&!p.operations_locked?['Échange Réceptionné']:[];
+  // Reprise échange : réception automatique au scan de descente du livreur, jamais manuelle.
+  return [];
  }
  if(['admin','agent'].includes(S.user.role))return S.user.role==='agent'&&!hubParcelStatusEditable(p)?[]:S.statuses.filter(s=>s!=='Vers Hub Central');
  const next=S.status_policy.driver_transitions;
@@ -62,7 +62,7 @@ async function openParcelState(id,anchor){
 }
 function statusMenuHeader(state,title){return `<header><div><strong>${esc(title)}</strong><small>${esc(state.parcel.tracking)} · ${esc(state.parcel.status)}</small></div><button class="icon-btn" aria-label="Fermer les états" onclick="closeParcelReason()">${icon('close')}</button></header>`}
 function renderStatusOptions(state){
- if(activeReasonMenu!==state)return;state.confirming=false;const footer=S.user.role==='client'?'Vous pouvez uniquement marquer cette commande comme intéressée. Cela ne confirme ni livraison ni paiement.':'Choisissez un état. Les étapes sensibles demandent une confirmation. Le motif précédent est réinitialisé.';state.node.innerHTML=statusMenuHeader(state,'Changer l’état')+'<div class="reason-options status-options"></div><p class="reason-error" role="alert" hidden></p><footer>'+footer+'</footer>';
+ if(activeReasonMenu!==state)return;state.confirming=false;const footer=S.user.role==='client'?'Vous pouvez uniquement marquer cette commande comme intéressée. Cela ne confirme ni livraison ni paiement.':state.parcel.exchange_of_id?'Reprise échange : « Échange Réceptionné » est appliqué automatiquement quand le responsable de Hub scanne le colis remis par le livreur à la descente (espace livreur → Récupérer). Aucune saisie manuelle.':'Choisissez un état. Les étapes sensibles demandent une confirmation. Le motif précédent est réinitialisé.';state.node.innerHTML=statusMenuHeader(state,'Changer l’état')+'<div class="reason-options status-options"></div><p class="reason-error" role="alert" hidden></p><footer>'+footer+'</footer>';
  const list=state.node.querySelector('.status-options');for(const label of parcelStatusChoices(state.parcel)){const b=document.createElement('button');b.type='button';b.className='reason-option';b.dataset.status=label;b.textContent=label+(label===state.parcel.status?' · actuel':'');b.title=S.status_policy.help[label]||'';b.disabled=label===state.parcel.status;b.setAttribute('aria-pressed',String(b.disabled));b.onclick=()=>selectParcelStatus(state,label);list.append(b)}
  list.onkeydown=e=>{const buttons=[...list.querySelectorAll('button:not(:disabled)')],index=buttons.indexOf(document.activeElement);if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();buttons[e.key==='Home'?0:e.key==='End'?buttons.length-1:(index+(e.key==='ArrowDown'?1:buttons.length-1))%buttons.length]?.focus()}};
  state.place();list.querySelector('button:not(:disabled)')?.focus();

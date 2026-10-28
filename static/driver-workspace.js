@@ -53,7 +53,7 @@ async function openDriverScan(id,mode,anchor){
    <div class="driver-scan-progress"><b id="driver-scan-count">0 colis scanné</b><span>${isReceive?'Les colis Livré sont refusés et restent associés au livreur pour le suivi financier.':'Aucun colis n’est affecté avant la validation du lot.'}</span></div>
    <div id="driver-scan-list" class="driver-scan-list"></div>
    <div class="driver-scan-confirm"><div><strong id="driver-scan-confirm-label">${isReceive?'Récupérer':'Affecter'} 0 colis</strong><span>${isReceive?'Les colis valides seront retirés de la tournée du livreur.':'Les colis valides apparaîtront dans l’application du livreur.'}</span></div><button type="button" class="btn primary" id="driver-scan-commit" disabled>${isReceive?'Confirmer la réception':'Confirmer l’affectation'}</button></div>
-   <p class="form-hint driver-scan-hint">${isReceive?'Les commandes récupérées quittent la tournée du livreur et reviennent au Hub. Leur état, motif, notes et rendez-vous restent inchangés.':'Après validation, l’état passe à « Reçu par le livreur ». Aucun COD n’est encaissé automatiquement.'}</p>`;
+   <p class="form-hint driver-scan-hint">${isReceive?'Les commandes récupérées quittent la tournée du livreur et reviennent au Hub. Leur état, motif, notes et rendez-vous restent inchangés. Les reprises échange (EC…) passent automatiquement à « Échange Réceptionné ».':'Après validation, l’état passe à « Reçu par le livreur ». Aucun COD n’est encaissé automatiquement.'}</p>`;
   const formNode=node.querySelector('#driver-scan-form'),code=node.querySelector('#driver-code'),err=formNode.querySelector('.form-error');
   const feedback=node.querySelector('#driver-scan-result'),list=node.querySelector('#driver-scan-list'),count=node.querySelector('#driver-scan-count'),confirmLabel=node.querySelector('#driver-scan-confirm-label'),commit=node.querySelector('#driver-scan-commit'),hub=node.querySelector('#f-hub_id');
   const show=(kind,message)=>{if(!ctx.current())return;feedback.className='driver-scan-result'+(kind?' '+kind:'');feedback.setAttribute('role',kind==='error'?'alert':'status');feedback.textContent=message};
@@ -63,7 +63,7 @@ async function openDriverScan(id,mode,anchor){
    count.textContent=`${n} colis scanné${n===1?'':'s'}`;
    confirmLabel.textContent=`${isReceive?'Récupérer':'Affecter'} ${n} colis`;
    commit.disabled=ctx.busy||n===0;
-   list.innerHTML=n?ctx.scans.map(p=>`<div class="driver-scan-row"><span class="driver-scan-row-code">${esc(p.tracking)}</span><span class="driver-scan-row-main"><strong>${esc(p.recipient||'Destinataire')}</strong><small>${esc(p.city||'')} · ${esc(p.status||'')}</small></span><button type="button" class="icon-btn" data-driver-scan-remove="${p.parcel_id}" aria-label="Retirer ${esc(p.tracking)} du lot" title="Retirer du lot">×</button></div>`).join(''):'<p class="sub driver-scan-empty">Aucun colis scanné pour le moment.</p>';
+   list.innerHTML=n?ctx.scans.map(p=>`<div class="driver-scan-row"><span class="driver-scan-row-code">${esc(p.tracking)}</span><span class="driver-scan-row-main"><strong>${esc(p.recipient||'Destinataire')}</strong><small>${esc(p.city||'')} · ${esc(p.status||'')}${p.exchange_auto?' · <b class="exchange-auto">reprise échange → réception automatique</b>':''}</small></span><button type="button" class="icon-btn" data-driver-scan-remove="${p.parcel_id}" aria-label="Retirer ${esc(p.tracking)} du lot" title="Retirer du lot">×</button></div>`).join(''):'<p class="sub driver-scan-empty">Aucun colis scanné pour le moment.</p>';
   };
   const queued=id=>ctx.scans.some(p=>p.parcel_id===id);
   ctx.addScan=async raw=>{
@@ -84,8 +84,9 @@ async function openDriverScan(id,mode,anchor){
     if(result.already||queued(p.id)){
      driverScanSignal('dup');show('duplicate',`${p.tracking} · déjà ${isReceive?'récupéré':'remis à ce livreur'} ; non ajouté au lot.`);return;
     }
-    ctx.scans.push({parcel_id:p.id,revision:p.ops_revision,tracking:p.tracking,recipient:p.recipient,city:p.city,status:p.status,amount:p.amount});
-    driverScanSignal('ok');show('ok',`✓ Ajouté : ${p.tracking} · ${p.recipient} (${ctx.scans.length} dans le lot).`);
+    ctx.scans.push({parcel_id:p.id,revision:p.ops_revision,tracking:p.tracking,recipient:p.recipient,city:p.city,status:p.status,amount:p.amount,exchange_auto:!!result.exchange_auto});
+    driverScanSignal('ok');
+    show('ok',`✓ Ajouté : ${p.tracking} · ${p.recipient} (${ctx.scans.length} dans le lot).${result.exchange_auto?' · reprise échange → « Échange Réceptionné » automatique.':''}`);
    }catch(e){
     if(!ctx.current())return;
     driverScanSignal('err');show('error',`${tracking} · ${e.message||'Colis refusé.'} Non ajouté au lot.`);
@@ -106,7 +107,9 @@ async function openDriverScan(id,mode,anchor){
     if(!ctx.current())return;
     ctx.pendingPayload=null;driverScanSignal(result.count?'done':'dup');
     const plural=result.count===1?'':'s';
-    const message=isReceive?`Réception validée : ${result.count} colis récupéré${plural} et retiré${plural} de la tournée.`:`Affectation confirmée : ${result.count} colis remis au livreur.`;
+    const exchangeCount=Number(result.exchange_received_count||0);
+    const exchangeNote=exchangeCount?` ${exchangeCount} reprise${exchangeCount===1?'':'s'} échange réceptionnée${exchangeCount===1?'':'s'} automatiquement.`:'';
+    const message=(isReceive?`Réception validée : ${result.count} colis récupéré${plural} et retiré${plural} de la tournée.`:`Affectation confirmée : ${result.count} colis remis au livreur.`)+exchangeNote;
     const alreadyPlural=result.already===1?'':'s';
     const extra=result.already?` ${result.already} colis déjà traité${alreadyPlural}, ignoré${alreadyPlural}.`:'';
     closeModal();try{await refresh();await renderView()}catch(e){}toast(message+extra);

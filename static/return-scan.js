@@ -142,15 +142,26 @@ async function rpScanCode(raw,fromCam){
  if(v&&v.week_days)rpSc.week_days=v.week_days;
  const p=v.parcel||{};
  if(v.verdict==='ok'){
+  // Départ direct (Annulé / Refusé / Retourné / Échange, ou semaine + passages livreur atteints).
   rpScSound('ok');rpFlash('ok');
-  rpAdd({parcel_id:p.id,tracking:p.tracking,recipient:p.recipient,city:p.city,days:p.days,status:p.status,confirmed:false});
+  rpAdd({parcel_id:p.id,tracking:p.tracking,recipient:p.recipient,city:p.city,days:p.days,status:p.status,confirmed:false,decision:'accept'});
   rpMsg('ok','✓ Ajouté : <b>'+esc(p.tracking)+'</b> · '+esc(p.recipient||'')+' · '+(p.days||0)+' j · '+esc(p.status||''));
   rpFocus();return;
  }
- if(v.verdict==='too_recent'){
+ if(v.verdict==='double'){
+  // Colis déjà Livré : le scan passe quand même (double scanné par erreur), signalé.
+  rpScSound('dup');rpFlash('dup');
+  rpAdd({parcel_id:p.id,tracking:p.tracking,recipient:p.recipient,city:p.city,days:p.days,status:p.status,confirmed:false,decision:'double'});
+  rpMsg('dup','⚠ <b>'+esc(p.tracking)+'</b> déjà Livré — double scanné par erreur, ajouté quand même.');
+  rpFocus();return;
+ }
+ if(v.verdict==='needs_confirm'){
+  // Reporté / Programmé (rendez-vous futur) ou état hors liste : alerte + OUI / NON.
   rpScSound('err');rpFlash('err');
-  rpSc.pending={parcel_id:p.id,tracking:p.tracking,recipient:p.recipient,city:p.city,days:p.days,status:p.status,confirmed:true};
-  rpMsg('err','✗ '+v.message+'<div class="rp-sc-choice"><button class="btn sm primary" type="button" onclick="rpScanAcceptTooRecent()">OUI — ajouter au lot</button><button class="btn sm" type="button" onclick="rpScanRejectTooRecent()">NON — ne pas ajouter</button></div>');
+  const det=(v.decision&&v.decision.details)||{};
+  const facts=[Vdet('Rendez-vous',det.appointment),Vdet('Jours au Hub',det.days_at_hub),Vdet('Passages livreur',det.handovers)].filter(Boolean).join(' · ');
+  rpSc.pending={parcel_id:p.id,tracking:p.tracking,recipient:p.recipient,city:p.city,days:p.days,status:p.status,confirmed:true,decision:(v.decision&&v.decision.code)||'blocked'};
+  rpMsg('err','✗ '+v.message+(facts?'<div class="sub" style="margin-top:4px">'+facts+'</div>':'')+'<div class="rp-sc-choice"><button class="btn sm primary" type="button" onclick="rpScanAcceptTooRecent()">OUI — envoyer en retour</button><button class="btn sm" type="button" onclick="rpScanRejectTooRecent()">NON — laisser à l’agence</button></div>');
   rpFocus();return;
  }
  rpScSound('err');rpFlash('err');
@@ -158,16 +169,18 @@ async function rpScanCode(raw,fromCam){
  rpFocus();
 }
 
+function Vdet(label,value){return (value===undefined||value===null||value==='')?'':esc(label)+' : <b>'+esc(String(value))+'</b>'}
 window.rpScanAcceptTooRecent=function(){
  if(!rpSc.pending)return;
  rpAdd(rpSc.pending);
  rpScSound('ok');rpFlash('ok');
- rpMsg('ok','✓ Ajouté quand même : <b>'+esc(rpSc.pending.tracking)+'</b> · '+(rpSc.pending.days||0)+' j — ajout confirmé par l’opérateur.');
+ const forced=rpSc.pending.decision==='blocked';
+ rpMsg('ok','✓ Ajouté '+(forced?'avec validation (dérogation tracée)':'avec confirmation')+' : <b>'+esc(rpSc.pending.tracking)+'</b> · '+(rpSc.pending.days||0)+' j · '+esc(rpSc.pending.status||''));
  rpSc.pending=null;rpFocus();
 };
 window.rpScanRejectTooRecent=function(){
  if(!rpSc.pending)return;
- rpMsg('dup','Non ajouté : <b>'+esc(rpSc.pending.tracking)+'</b> (la semaine n’est pas passée).');
+ rpMsg('dup','Non ajouté : <b>'+esc(rpSc.pending.tracking)+'</b> — reste à l’agence.');
  rpSc.pending=null;rpFocus();
 };
 
@@ -272,10 +285,12 @@ function o24RpScanOfflineLookup(cid,hid,code){
   info.client_name=other.company||other.name||'';
   return {verdict:'other_client',message:'Ce colis appartient à <b>'+esc(info.client_name||'un autre vendeur')+'</b> — pas au vendeur choisi.',parcel:info,week_days:week};
  }
- if(p.status==='Livré')return {verdict:'delivered',message:'Colis <b>'+esc(p.tracking)+'</b> déjà <b>Livré</b> : aucun retour possible.',parcel:info,week_days:week};
+ const direct=['Annulé','Refusé','Retourné'].includes(p.status)||String(p.tracking||'').toUpperCase().startsWith('EC');
+ if(p.status==='Livré')return {verdict:'double',message:'⚠ Colis <b>'+esc(p.tracking)+'</b> déjà <b>Livré</b> : double scanné par erreur — il passe quand même.',parcel:info,week_days:week};
+ if(direct)return {verdict:'ok',message:'✓ <b>'+esc(p.tracking)+'</b> · '+esc(p.status)+' : départ direct.',parcel:info,week_days:week};
  const busy=[...localDemo.partner_palettes,...localDemo.return_palettes].find(d=>(d.lines||[]).some(l=>l.parcel_id===p.id&&l.active&&!l.received_at&&!l.missing_at));
  if(busy){info.reserved_in=busy.reference;return {verdict:'reserved',message:'Colis <b>'+esc(p.tracking)+'</b> déjà réservé dans <b>'+esc(busy.reference)+'</b>.',parcel:info,week_days:week}}
- if(days<week)return {verdict:'too_recent',message:'Colis <b>'+esc(p.tracking)+'</b> : seulement <b>'+days+' jour(s)</b> chez nous — la semaine n’est pas encore passée (état : '+esc(p.status)+').',parcel:info,week_days:week};
+ if(days<week)return {verdict:'needs_confirm',message:'<b>'+esc(p.tracking)+'</b> · Statut « '+esc(p.status)+' » : seulement '+days+' jour(s) au Hub sur les '+week+' exigés. OUI pour l’envoyer en retour, NON pour le laisser à l’agence.',parcel:info,week_days:week,decision:{code:'blocked',details:{days_at_hub:days}}};
  return {verdict:'ok',message:'Colis <b>'+esc(p.tracking)+'</b> · '+days+' jours · état '+esc(p.status)+'.',parcel:info,week_days:week};
 }
 function o24RpScanOfflineSend(d){
@@ -291,8 +306,8 @@ function o24RpScanOfflineSend(d){
   const p=localDemo.parcels.find(x=>x.id===pid&&x.client_id===cl.id);
   if(!p)throw Error('Colis inaccessible pour ce vendeur.');
   const v=o24RpScanOfflineLookup(cl.id,h.id,p.tracking);
-  if(v.verdict==='too_recent'&&!confirmed.includes(pid))throw Error('Colis '+p.tracking+' : la semaine n’est pas encore passée — confirmez son ajout.');
-  if(v.verdict!=='ok'&&v.verdict!=='too_recent')throw Error(String(v.message).replace(/<[^>]+>/g,''));
+  if(v.verdict==='needs_confirm'&&!confirmed.includes(pid))throw Error('Colis '+p.tracking+' : confirmez son envoi en retour (OUI) ou laissez-le à l’agence.');
+  if(!['ok','double','needs_confirm'].includes(v.verdict))throw Error(String(v.message).replace(/<[^>]+>/g,''));
   ps.push(p);
  }
  const prior=(localDemo.rp_scan_keys||[]).find(x=>x.key===d.request_key&&x.actor===localUser.id);
