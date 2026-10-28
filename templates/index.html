@@ -8,12 +8,12 @@
     <link rel="icon" href="/static/favicon.ico?v=transparent-2026-10-20" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png?v=transparent-2026-10-20" />
     <link rel="icon" type="image/png" sizes="192x192" href="/static/favicon-192.png?v=transparent-2026-10-20" />
-    <link rel="stylesheet" href="/static/style.css?v=menu-epure-2026-10-21" />
-    <link rel="stylesheet" href="/static/operations.css?v=client-type-import-templates-2026-10-12" />
+    <link rel="stylesheet" href="/static/style.css?v={{ ui_versions['style.css'] }}" />
+    <link rel="stylesheet" href="/static/operations.css?v=stock-label-a6-shape-2026-10-26" />
     <link rel="stylesheet" href="/static/driver-finance.css" />
     <link rel="stylesheet" href="/static/pilotage.css" />
     <link rel="stylesheet" href="/static/ramassage-map.css?v=ramassage-tower-2026-10-13-mapfullscreen1" />
-    <link rel="stylesheet" href="/static/logistics.css" />
+    <link rel="stylesheet" href="/static/logistics.css?v=hub-destination-transit-2026-10-23" />
     <link rel="stylesheet" href="/static/parcel-contacts.css?v=client-parcel-inline-chronology-2026-10-08" />
     <link rel="stylesheet" href="/static/parcel-state.css" />
     <link rel="stylesheet" href="/static/parcel-city.css" />
@@ -21,7 +21,7 @@
     <link rel="stylesheet" href="/static/workspace-ui.css" />
     <link rel="stylesheet" href="/static/driver-workspace.css?v=driver-scan-batch-2026-10-12" />
     <link rel="stylesheet" href="/static/billing.css?v=invoice-tracking-search-2026-10-13" />
-    <link rel="stylesheet" href="/static/partner-palettes.css?v=client-draft-actions-2026-10-18" />
+    <link rel="stylesheet" href="/static/partner-palettes.css?v=ramassage-collect-double-2026-10-23" />
     <link rel="stylesheet" href="/static/sidebar-scroll.css" />
     <link rel="stylesheet" href="/static/ui-pro.css?v=menu-epure-2026-10-21" />
     <link rel="stylesheet" href="/static/i18n-ui.css?v=languages-help-2026-10-09" />
@@ -31,7 +31,10 @@
     <link rel="stylesheet" href="/static/contact-log.css" />
     <link rel="stylesheet" href="/static/return-scan.css" />
     <link rel="stylesheet" href="/static/support-workspace.css" />
-  </head>
+    <link rel="stylesheet" href="/static/hub-manager-analytics.css?v=reference-layout-2026-10-25" />
+    <link rel="stylesheet" href="/static/sidebar-counts.css?v=pending-2026-10-25">
+  <link rel="stylesheet" href="/static/list-pagination.css?v=2026-10-23">
+</head>
   <body>
     <div id="root">
       <div class="boot">
@@ -43,44 +46,52 @@
     <div id="print-root"></div>
     <script>const ORIENTAL24_RUNTIME = {{ runtime_config|tojson }};</script>
     <script src="/static/tour-control.js?v=ramassage-tower-2026-10-13"></script>
-    <script src="/static/ramassage-map.js?v=ramassage-tower-2026-10-13-mapfullscreen2"></script>
+    <script src="/static/ramassage-map.js?v=casablanca-date-filters-2026-10-26"></script>
     <script src="/static/i18n-catalog.js?v=menu-epure-2026-10-21"></script>
-    <script src="/static/i18n.js?v=client-profile-complete-2026-10-18"></script>
-    <script src="/static/app.js?v=menu-epure-2026-10-21"></script>
-    <script src="/static/ramassage-bon.js?v=ramassage-bon-confirme-2026-10-20"></script>
+    <script src="/static/i18n.js?v=hub-destination-transit-2026-10-23"></script>
+    <script src="/static/list-pagination.js?v=2026-10-23"></script>
+    <script src="/static/app.js?v={{ ui_versions['app.js'] }}"></script>
+    <script src="/static/temporary-passwords.js?v=credentials-2026-10-23"></script>
+    <script src="/static/ramassage-bon.js?v=cmd-ramassees-2026-10-23"></script>
     <script src="/static/client-profile-extras.js?v=client-profile-complete-2026-10-18"></script>
     <script src="/static/company-order.js?v=company-order-actions-2026-10-18"></script>
-    <script src="/static/operations.js?v=client-type-import-templates-2026-10-12"></script>
-    <script src="/static/driver-finance.js"></script>
-    <script src="/static/pilotage.js?v=vendeur-filtres-2026-10-21"></script>
-    <script src="/static/logistics.js?v=menu-epure-2026-10-21"></script>
-    <script src="/static/parcel-contacts.js?v=hub-status-permissions-2026-10-17"></script>
+    <script src="/static/operations.js?v=stock-label-a6-shape-2026-10-26"></script>
+    <script src="/static/driver-finance.js?v=hub-manager-driver-cash-2026-10-26"></script>
+    <script src="/static/pilotage.js?v=page-size-2026-10-23"></script>
+    <script src="/static/logistics.js?v={{ ui_versions['logistics.js'] }}"></script>
+    <script src="/static/parcel-contacts.js?v=stock-initial-history-2026-10-27"></script>
     <script src="/static/contact-log.js"></script>
-    <script src="/static/parcel-state.js?v=central-return-scan-2026-10-17"></script>
+    <script src="/static/parcel-state.js?v={{ ui_versions['parcel-state.js'] }}"></script>
+    <script src="/static/exchange.js?v=echange-2026-10-28"></script>
     <script src="/static/parcel-copy.js"></script>
     <script src="/static/parcel-city.js?v=parcel-policy-refresh-city-fees-2026-10-09"></script>
     <script src="/static/parcel-claim.js"></script>
     <script src="/static/workspace-ui.js?v=client-template-notice-2026-10-12"></script>
-    <script src="/static/driver-workspace.js?v=phase2-driver-hub-2026-10-14-v1"></script>
-    <script src="/static/driver-invoice.js"></script>
+    <script src="/static/driver-workspace.js?v=hub-recovery-preserve-state-2026-10-25"></script>
+    <script src="/static/driver-invoice.js?v=unified-invoice-pdf-2026-10-25"></script>
     <script src="/static/driver-invoice-print.js"></script>
-    <script src="/static/billing.js?v=invoice-tracking-search-2026-10-13"></script>
-    <script src="/static/security.js?v=user-menu-2026-10-21"></script>
-    <script src="/static/partner-palettes.js?v=client-bon-envoi-2026-10-18"></script>
-    <script src="/static/palette-scan.js?v=transfer-city-scan-2026-10-17"></script>
-    <script src="/static/return-palettes.js?v=client-mes-retours-2026-10-18"></script>
-    <script src="/static/return-scan.js"></script>
+    <script src="/static/billing.js?v=billing-filters-morocco-2026-10-26"></script>
+    <script src="/static/security.js?v=admin-hub-sections-2026-10-23"></script>
+    <script src="/static/partner-palettes.js?v={{ ui_versions['partner-palettes.js'] }}"></script>
+    <script src="/static/palette-scan.js?v=reception-unified-2026-10-23"></script>
+    <script src="/static/return-palettes.js?v=page-size-2026-10-23"></script>
+    <script src="/static/return-scan.js?v=dispatch-collection-2026-10-23"></script>
     <script src="/static/qrcode-gen.js"></script>
     <script src="/static/bon-print.js?v=bon-layout-recipient-hubs-2026-10-12"></script>
-    <script src="/static/palette-console.js?v=hub-manager-isolation-2026-10-13"></script>
-    <script src="/static/reception-extras.js?v=hub-manager-role-2026-10-13"></script>
+    <script src="/static/palette-console.js?v=page-size-2026-10-23"></script>
+    <script src="/static/reception-collection.js?v=stock-palette-return-2026-10-26"></script>
+    <script src="/static/reception-extras.js?v=credentials-2026-10-23"></script>
     <script src="/static/sidebar-scroll.js?v=menu-epure-2026-10-21"></script>
     <script src="/static/ui-pro.js?v=company-profile-bank-logo-2026-10-18"></script>
     <script src="/static/landing.js"></script>
-    <script src="/static/daily-palette.js?v=client-draft-actions-2026-10-18"></script>
-  <script src="/static/driver-app.js?v=phase2-driver-hub-2026-10-14-v1"></script>
+    <script src="/static/daily-palette.js?v=pending-2026-10-25"></script>
+  <script src="/static/driver-app.js?v={{ ui_versions['driver-app.js'] }}"></script>
   <script src="/static/advanced.js"></script>
   <script src="/static/warehouse.js"></script>
   <script src="/static/connected-ops.js"></script>
+    <script src="/static/hub-billing.js?v=hub-manual-targeted-2026-10-26"></script>
+    <script src="/static/admin-hub-analytics.js?v=admin-hubs-2026-10-25"></script>
+    <script src="/static/hub-manager-analytics.js?v=analytics-net-scans-2026-10-25"></script>
+    <script src="/static/sidebar-counts.js?v=pending-2026-10-25"></script>
   </body>
 </html>
