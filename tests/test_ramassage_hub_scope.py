@@ -55,7 +55,7 @@ class RamassageHubScopeTests(unittest.TestCase):
             raw_hub = request.headers.get('X-Hub')
             g.actor = {
                 'id': int(request.headers.get('X-Actor', '900')),
-                'role': request.headers.get('X-Role', 'agent'),
+                'role': request.headers.get('X-Role', 'hub_manager'),
                 'agent_hub_id': int(raw_hub) if raw_hub else None,
                 'name': 'Test actor',
             }
@@ -107,8 +107,8 @@ class RamassageHubScopeTests(unittest.TestCase):
                 INSERT INTO users(id,name,phone,role,active,driver_hub_id,driver_city_id,agent_hub_id) VALUES
                     (101,'Livreur Oujda','0600000001','livreur',1,10,1,NULL),
                     (202,'Livreur Berkane','0600000002','livreur',1,20,2,NULL),
-                    (910,'Manager Oujda','0600000010','agent',1,NULL,NULL,10),
-                    (920,'Manager Berkane','0600000020','agent',1,NULL,NULL,20);
+                    (910,'Manager Oujda','0600000010','hub_manager',1,NULL,NULL,10),
+                    (920,'Manager Berkane','0600000020','hub_manager',1,NULL,NULL,20);
                 INSERT INTO vehicles(id,driver_id,label,type,state,active) VALUES
                     (1,101,'Moto Oujda','moto','available',1),(2,202,'Moto Berkane','moto','available',1);
             ''')
@@ -151,7 +151,7 @@ class RamassageHubScopeTests(unittest.TestCase):
         return self.client.post(
             '/api/control-tower/ramassage',
             json=self.pickup_body(city_id, maps_url),
-            headers=self.request_as('agent', hub_id, actor_id=900 + hub_id),
+            headers=self.request_as('hub_manager', hub_id, actor_id=900 + hub_id),
         )
 
     def test_manager_tower_payload_exposes_only_own_hub_zone_and_drivers(self):
@@ -160,7 +160,7 @@ class RamassageHubScopeTests(unittest.TestCase):
         self.assertEqual(local.status_code, 200, local.get_json())
         self.assertEqual(remote.status_code, 200, remote.get_json())
 
-        response = self.client.get('/api/control-tower', headers=self.request_as('agent', 10))
+        response = self.client.get('/api/control-tower', headers=self.request_as('hub_manager', 10))
         self.assertEqual(response.status_code, 200, response.get_json())
         payload = response.get_json()
         self.assertEqual(payload['manager_hub']['id'], 10)
@@ -171,7 +171,7 @@ class RamassageHubScopeTests(unittest.TestCase):
         self.assertNotIn('parcels', payload)
         self.assertEqual(payload['drivers'], [])
 
-        map_response = self.client.get('/api/control-tower/map-data', headers=self.request_as('agent', 10))
+        map_response = self.client.get('/api/control-tower/map-data', headers=self.request_as('hub_manager', 10))
         self.assertEqual(map_response.status_code, 200, map_response.get_json())
         self.assertEqual({d['id'] for d in map_response.get_json()['map_drivers']}, {101})
 
@@ -185,13 +185,13 @@ class RamassageHubScopeTests(unittest.TestCase):
 
         candidates = self.client.get(
             f'/api/control-tower/ramassage/{job_id}/candidates',
-            headers=self.request_as('agent', 10),
+            headers=self.request_as('hub_manager', 10),
         )
         self.assertEqual(candidates.status_code, 404)
         assign = self.client.post(
             f'/api/control-tower/ramassage/{job_id}/assign',
             json={'driver_id': 101},
-            headers=self.request_as('agent', 10),
+            headers=self.request_as('hub_manager', 10),
         )
         self.assertEqual(assign.status_code, 404)
 
@@ -212,9 +212,9 @@ class RamassageHubScopeTests(unittest.TestCase):
         self.assertEqual(job['hub_id'], 10)
 
     def test_manager_cannot_read_another_hubs_driver_route_history(self):
-        denied = self.client.get('/api/control-tower/route-history/202', headers=self.request_as('agent', 10))
+        denied = self.client.get('/api/control-tower/route-history/202', headers=self.request_as('hub_manager', 10))
         self.assertEqual(denied.status_code, 404)
-        allowed = self.client.get('/api/control-tower/route-history/101', headers=self.request_as('agent', 10))
+        allowed = self.client.get('/api/control-tower/route-history/101', headers=self.request_as('hub_manager', 10))
         self.assertEqual(allowed.status_code, 200, allowed.get_json())
         self.assertGreaterEqual(allowed.get_json()['count'], 1)
 
