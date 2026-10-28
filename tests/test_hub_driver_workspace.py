@@ -787,29 +787,31 @@ class HubDriverWorkspaceTests(unittest.TestCase):
                     p=c.execute('SELECT status,ops_revision FROM parcels WHERE id=?',(pid,)).fetchone()
                     self.assertEqual(tuple(p),(final,0))
 
-    def test_manager_can_close_open_parcel_but_not_reopen(self):
+    def test_manager_cannot_close_delivery_or_return_via_generic_patch(self):
         for target in ('Livré','Retourné'):
             with self.subTest(target=target):
                 pid,_=self.parcel(self.hub,'En livraison',self.driver,self.hub)
                 r=self.status_patch(pid,target)
-                self.assertEqual(r.status_code,200,r.json)
-                self.assertEqual(self.status_patch(pid,'En livraison',revision=1).status_code,409 if target=='Livré' else 200)
-        # Refusé is not one of the two immutable statuses requested.
+                self.assertEqual(r.status_code,409,r.json)
+                with self.m.conn() as c:
+                    row=c.execute('SELECT status,ops_revision FROM parcels WHERE id=?',(pid,)).fetchone()
+                    self.assertEqual(tuple(row),('En livraison',0))
+        # Ordinary non-final corrections remain available with the existing reason checks.
         pid,_=self.parcel(self.hub,'Refusé',self.driver,self.hub)
         self.assertEqual(self.status_patch(pid,'Reporté').status_code,200)
 
-    def test_manager_changes_driver_tour_status_and_locks_only_delivered(self):
+    def test_manager_changes_driver_tour_status_without_bypassing_final_workflows(self):
         pid,_=self.parcel(self.hub)
         self.assertEqual(self.scan('assign',[(pid,0)]).status_code,200)
         row=next(p for p in self.client.get('/api/bootstrap').json['parcels'] if p['id']==pid)
         self.assertTrue(row['hub_status_editable'])
         r=self.status_patch(pid,'Reporté',revision=1);self.assertEqual(r.status_code,200,r.json)
-        r=self.status_patch(pid,'Retourné',revision=2);self.assertEqual(r.status_code,200,r.json)
-        r=self.status_patch(pid,'En livraison',revision=3);self.assertEqual(r.status_code,200,r.json)
-        r=self.status_patch(pid,'Livré',revision=4);self.assertEqual(r.status_code,200,r.json)
-        self.assertEqual(self.status_patch(pid,'Reporté',revision=5).status_code,409)
+        self.assertEqual(self.status_patch(pid,'Retourné',revision=2).status_code,409)
+        r=self.status_patch(pid,'En livraison',revision=2);self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.status_patch(pid,'Livré',revision=3).status_code,409)
         row=self.client.get(f'/api/parcels/{pid}').json['parcel']
-        self.assertFalse(row['hub_status_editable'])
+        self.assertTrue(row['hub_status_editable'])
+        self.assertEqual(row['status'],'En livraison')
         with self.m.conn() as c:
             self.assertEqual(c.execute("SELECT count(*) FROM audit_log WHERE entity_id=? AND action='hub_parcel_status_changed'",(str(pid),)).fetchone()[0],4)
 
