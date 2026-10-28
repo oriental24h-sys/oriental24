@@ -424,7 +424,7 @@ def register_ramassage_tower(app, s):
     @auth('admin','hub_manager')
     def ramassage_map_data():
         actor=user()
-        with conn() as c:hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+        with conn() as c:hub_id=local_hub_id(c,actor) if actor['role']=='hub_manager' else None
         return jsonify(**tower_payload(hub_id))
 
     @app.patch('/api/control-tower/settings')
@@ -504,7 +504,7 @@ def register_ramassage_tower(app, s):
         actor = user()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
-            manager_hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+            manager_hub_id=local_hub_id(c,actor) if actor['role']=='hub_manager' else None
             if manager_hub_id is not None:
                 zone=zone_for_hub_point(c,manager_hub_id,lat,lng,requested_city)
             else:zone = zone_by_id(c, requested_city) if requested_city else zone_for_point(c, lat, lng)
@@ -549,7 +549,7 @@ def register_ramassage_tower(app, s):
     def ramassage_candidates(job_id):
         actor=user()
         with conn() as c:
-            manager_hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+            manager_hub_id=local_hub_id(c,actor) if actor['role']=='hub_manager' else None
             job = c.execute('''SELECT j.id,j.city_id,j.hub_id,ci.hub_id city_hub_id,rc.lat,rc.lng FROM ramassage_jobs j
                                JOIN ramassage_clients rc ON rc.id=j.client_id LEFT JOIN cities ci ON ci.id=j.city_id WHERE j.id=?''', (job_id,)).fetchone()
             if not job or (manager_hub_id is not None and (job['hub_id'] or job['city_hub_id'])!=manager_hub_id):
@@ -568,7 +568,7 @@ def register_ramassage_tower(app, s):
         actor=user()
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
-            manager_hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+            manager_hub_id=local_hub_id(c,actor) if actor['role']=='hub_manager' else None
             assignment = assign_job(c, job_id, driver_id,hub_id=manager_hub_id)
         return jsonify(ok=True, job_id=job_id, assignment=assignment)
 
@@ -660,7 +660,7 @@ def register_ramassage_tower(app, s):
             raise Error('Date invalide; utilisez AAAA-MM-JJ.')
         actor=user()
         with conn() as c:
-            manager_hub_id=local_hub_id(c,actor) if actor['role']=='agent' else None
+            manager_hub_id=local_hub_id(c,actor) if actor['role']=='hub_manager' else None
             if manager_hub_id is None:
                 driver_ok=c.execute("SELECT 1 FROM users WHERE id=? AND role='livreur'",(driver_id,)).fetchone()
             else:
