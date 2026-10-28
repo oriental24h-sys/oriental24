@@ -14,6 +14,7 @@ from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, DRIVER_HUB_ONLY_STATUS
 import exchange_flow
 from billing import driver_paid_sql
 import client_types
+import city_resolve
 from company_order_edit import company_order_flags, register_company_order_edit
 from hub_access import hub_read_parcel_scope, hub_tracking_parcel_scope, hub_manager_route_allowed, hub_manager_requires_active_hub, hub_parcel_scope, driver_dispatch_allowed, driver_team_member_ids
 from temporary_passwords import generate_temporary_password, credential_response, register_temporary_passwords
@@ -82,6 +83,7 @@ def init_db():
         if 'open_allowed' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN open_allowed INTEGER NOT NULL DEFAULT 1')
         if 'is_exchange' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN is_exchange INTEGER NOT NULL DEFAULT 0')
         if 'is_fragile' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN is_fragile INTEGER NOT NULL DEFAULT 0')
+        if 'name_ar' not in {r['name'] for r in c.execute('PRAGMA table_info(cities)')}:c.execute("ALTER TABLE cities ADD COLUMN name_ar TEXT DEFAULT ''")
         exchange_flow.migrate(c)
         client_types.migrate(c)
         if 'support_id' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN support_id INTEGER REFERENCES users(id)')
@@ -338,6 +340,26 @@ def index():
 @app.route('/healthz')
 def healthz(): return {'status':'ok','version':'1.12.0','production':app.config['PRODUCTION_MODE']}
 PUBLIC_CONTACT_KEYS=('public_whatsapp','public_phone','public_email','public_address','public_hours')   # v1.4.20 · page publique
+@app.get('/api/cities/resolve')
+@auth()
+def cities_resolve():
+    """Reconnaît une ville saisie librement (faute, arabe, translittération).
+
+    Lecture seule : renvoie la ville ouverte la plus proche et le score, sans rien créer.
+    """
+    query=(request.args.get('q') or '').strip()
+    if not query:
+        raise APIError('Indiquez une ville.')
+    with conn() as c:
+        candidates=[dict(r) for r in c.execute('SELECT * FROM cities WHERE delivery=1 ORDER BY name')]
+    match,score,method=city_resolve.resolve(candidates,query)
+    if not match:
+        return jsonify(found=False,reason=method,query=query,
+                       suggestions=[dict(id=x['id'],name=x['name']) for x in candidates
+                                    if city_resolve.similarity(city_resolve.key(query),city_resolve.key(x['name']))>=0.5][:3])
+    return jsonify(found=True,query=query,id=match['id'],name=match['name'],score=round(score,2),
+                   method=method,note=city_resolve.explain(query,match,method))
+
 @app.get('/api/public')
 def public():
     with conn() as c:
@@ -438,6 +460,14 @@ def create_parcel():
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         city=c.execute('SELECT * FROM cities WHERE id=? AND delivery=1',(d.get('city_id'),)).fetchone()
+        city_note=''
+        if not city and isinstance(d.get('city_name'),str) and d['city_name'].strip():
+            # Saisie libre : on reconnaît la ville malgré une faute, l'arabe ou une translittération.
+            candidates=[dict(r) for r in c.execute('SELECT * FROM cities WHERE delivery=1')]
+            match,score,method=city_resolve.resolve(candidates,d['city_name'])
+            if match:
+                city=c.execute('SELECT * FROM cities WHERE id=? AND delivery=1',(match['id'],)).fetchone()
+                city_note=city_resolve.explain(d['city_name'],match,method)
         if not city: raise APIError('Choisissez une ville ouverte à la livraison.')
         cid=u['id'] if u['role']=='client' else d.get('client_id')
         if not c.execute("SELECT id FROM users WHERE id=? AND role='client' AND active=1",(cid,)).fetchone(): raise APIError('Client invalide.')
@@ -456,7 +486,7 @@ def create_parcel():
         event(c,cur.lastrowid,'Créé',event_note,u)
         assigned=c.execute('SELECT su.id,su.name,su.phone FROM parcels p LEFT JOIN users su ON su.id=p.support_id WHERE p.id=?',(cur.lastrowid,)).fetchone()
         city_support=dict(assigned) if assigned and assigned['id'] else None
-    return jsonify(ok=True,tracking=track,city_support=city_support)
+    return jsonify(ok=True,tracking=track,city_support=city_support,city=city['name'],city_note=city_note)
 @app.patch('/api/parcels/<int:pid>')
 @auth('admin','livreur','client','agent')
 def update_parcel(pid):
@@ -699,12 +729,14 @@ def add_city(): return save_city(None)
 def edit_city(cid): return save_city(cid)
 def save_city(cid):
     d=request.get_json() or {}
-    vals=(text(d,'name'),text(d,'region'),int(bool(d.get('delivery'))),int(bool(d.get('pickup'))),number(d,'fee',maximum=10000),number(d,'return_fee',maximum=10000))
+    # Nom arabe facultatif : il permet de reconnaître la ville quelle que soit la graphie.
+    name_ar=text(d,'name_ar',False,maxlen=120) if d.get('name_ar') else ''
+    vals=(text(d,'name'),text(d,'region'),int(bool(d.get('delivery'))),int(bool(d.get('pickup'))),number(d,'fee',maximum=10000),number(d,'return_fee',maximum=10000),name_ar)
     with conn() as c:
         if cid:
             if not c.execute('SELECT id FROM cities WHERE id=?',(cid,)).fetchone():raise APIError('Ville introuvable.',404)
-            c.execute('UPDATE cities SET name=?,region=?,delivery=?,pickup=?,fee=?,return_fee=? WHERE id=?',vals+(cid,))
-        else:c.execute('INSERT INTO cities(name,region,delivery,pickup,fee,return_fee) VALUES(?,?,?,?,?,?)',vals)
+            c.execute('UPDATE cities SET name=?,region=?,delivery=?,pickup=?,fee=?,return_fee=?,name_ar=? WHERE id=?',vals+(cid,))
+        else:c.execute('INSERT INTO cities(name,region,delivery,pickup,fee,return_fee,name_ar) VALUES(?,?,?,?,?,?,?)',vals)
     return jsonify(ok=True)
 @app.patch('/api/settings')
 @auth('admin')

@@ -4,6 +4,7 @@ from fulfillment_history import record_stock_initial_events
 import json,re,secrets,hashlib
 from datetime import datetime,timedelta
 from flask import jsonify,request
+import city_resolve
 
 def register_fulfillment(app, services):
     conn,auth,user,now,text,number,Error,event=(services[k] for k in ['conn','auth','user','now','text','number','APIError','event'])
@@ -90,7 +91,16 @@ def register_fulfillment(app, services):
         items=d.get('items')
         if not isinstance(items,list) or not 1<=len(items)<=30:raise Error('Ajoutez de 1 à 30 références produit.')
         shipping={k:text(d,k,maxlen=300) for k in ['recipient','phone','address']}
-        shipping.update(amount=number(d,'amount'),city_id=number(d,'city_id',1,1000000000,True),note=text(d,'note',False,600))
+        shipping.update(amount=number(d,'amount'),note=text(d,'note',False,600))
+        # Saisie libre tolérée : faute de frappe, arabe, translittération.
+        if d.get('city_id') in (None,'',0):
+            city_row=None
+            with conn() as c:
+                city_row=city_resolve.resolve([dict(r) for r in c.execute('SELECT * FROM cities WHERE delivery=1')],text(d,'city_name',False,maxlen=120))[0]
+            if not city_row:raise Error('Choisissez une ville ouverte à la livraison.')
+            shipping['city_id']=city_row['id']
+        else:
+            shipping['city_id']=number(d,'city_id',1,1000000000,True)
         shipping.update(open_allowed=int(not d.get('not_allowed_to_open',False)),is_exchange=int(d.get('is_exchange',False)),
                         is_fragile=int(d.get('is_fragile',False)))
         if not re.fullmatch(r'\+?[\d\s-]{9,18}',shipping['phone']):raise Error('Téléphone invalide.')

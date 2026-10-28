@@ -31,6 +31,9 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('POST', r'/api/driver-finance/preview/[a-f0-9]{32}/confirm'),
     ('GET', r'/api/driver-finance/statements/\d+'),
     ('GET', r'/api/sidebar-counts'), ('GET', r'/api/bootstrap'), ('GET', r'/api/parcels/\d+'),
+    ('GET', r'/api/cities/resolve'),
+    # Étiquettes : impression en lecture seule, bornée aux colis du Hub par parcel().
+    ('POST', r'/api/labels'),
     ('PATCH', r'/api/parcels/\d+'),
     ('POST', r'/api/logout'), ('PATCH', r'/api/profile'),
     # Réclamations : création et suivi limités aux propres tickets du compte.

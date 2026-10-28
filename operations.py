@@ -35,6 +35,9 @@ MAX_ROWS = 500
 MAX_FILE = 2 * 1024 * 1024
 
 
+import city_resolve
+
+
 def normalize(value):
     value = unicodedata.normalize('NFKD', str(value or '').strip().casefold())
     return ''.join(c for c in value if not unicodedata.combining(c))
@@ -210,9 +213,12 @@ def register_operations(app, services):
         if isinstance(raw.get('telephone'), (int, float)) or not re.fullmatch(r'(?:0[5-8]\d{8}|\+212[5-8]\d{8})', telephone):
             errors.append('Téléphone marocain invalide : format texte 06… / 07… ou +212… (conservez le zéro).')
         clean['telephone'] = telephone
-        city = cities.get(normalize(clean['ville']))
+        city, city_score, city_method = city_resolve.resolve(cities, clean['ville'])
+        city_note = ''
         if not city:
             errors.append('Ville inconnue ou fermée à la livraison. Consultez la feuille Villes / les paramètres.')
+        elif city_method != 'exacte':
+            city_note = city_resolve.explain(clean['ville'], city, city_method)
         try:
             amount_text = clean['montant'].replace('\u202f', '').replace('\xa0', '').replace(' ', '').replace(',', '.')
             amount = number({'montant': amount_text}, 'montant')
@@ -220,7 +226,8 @@ def register_operations(app, services):
             amount = None
             errors.append('Montant invalide : nombre entre 0 et 1 000 000 MAD.')
         return {'line': rownum, 'reference': ref, 'recipient': clean['destinataire'], 'phone': telephone,
-                'address': clean['adresse'], 'city': city['name'] if city else clean['ville'],
+                'address': clean['adresse'], 'city_input': clean['ville'], 'city_note': city_note,
+                'city': city['name'] if city else clean['ville'],
                 'city_id': city['id'] if city else None, 'amount': amount,
                 'fee': city['fee'] if city else None, 'return_fee': city['return_fee'] if city else None,
                 'product': clean['produit'], 'note': clean['note'], 'errors': errors,
@@ -309,7 +316,7 @@ def register_operations(app, services):
         with conn() as c:
             client = client_for(c, u, client_fields)
             parsed = read_import(raw, filename, Error, client['client_type'])
-            cities = {normalize(r['name']): dict(r) for r in c.execute('SELECT * FROM cities WHERE delivery=1')}
+            cities = [dict(r) for r in c.execute('SELECT * FROM cities WHERE delivery=1')]
             seen = set()
             rows = [validate_record(c, n, r, cities, client['id'], seen, client['client_type']) for n, r in parsed]
             invalid = sum(bool(r['errors']) for r in rows)
@@ -414,7 +421,9 @@ def register_operations(app, services):
         u = user(); result = []
         with conn() as c:
             for pid in dict.fromkeys(ids):
-                p = parcel(c, pid, u)
+                # Lecture seule : le Responsable Hub imprime les colis de son Hub,
+                # y compris ceux déjà confiés à ses livreurs (même périmètre que sa liste).
+                p = parcel(c, pid, u, follow_drivers=True, include_sent=True)
                 extras = c.execute('SELECT ci.name city,u.name client,u.company company FROM cities ci JOIN users u ON u.id=? WHERE ci.id=?', (p['client_id'], p['city_id'])).fetchone()
                 stock_lines=[]
                 if p.get('stock_order_id'):
