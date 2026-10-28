@@ -563,19 +563,19 @@ def register_hub_cod(app, services):
         return value
 
     def manager_hub(actor, requested=None):
-        hub_id=actor.get('agent_hub_id') if actor['role']=='agent' else requested
+        hub_id=actor.get('agent_hub_id') if actor['role']=='hub_manager' else requested
         if type(hub_id) is not int or hub_id<=0:
             raise Error('Hub invalide.')
         with conn() as c:
             row=c.execute('SELECT id,active FROM ops_hubs WHERE id=?',(hub_id,)).fetchone()
         if not row or not row['active']:
             raise Error('Hub actif introuvable.',403)
-        if actor['role']=='agent' and hub_id!=actor.get('agent_hub_id'):
+        if actor['role']=='hub_manager' and hub_id!=actor.get('agent_hub_id'):
             raise Error('Accès refusé à un autre Hub.',403)
         return hub_id
 
     @app.get(_PREFIX+'/hub')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def hub_cod_overview():
         actor=user()
         requested=request.args.get('hub_id',type=int) if actor['role']=='admin' else None
@@ -587,7 +587,7 @@ def register_hub_cod(app, services):
             return jsonify(result)
 
     @app.post(_PREFIX+'/hub/handoffs')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def hub_cod_handoff_create():
         d=request.get_json(silent=True);actor=user()
         if not isinstance(d,dict):raise Error('Objet JSON requis.')
