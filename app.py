@@ -468,6 +468,21 @@ def update_parcel(pid):
             if p['status']=='Livré':
                 raise APIError('Commande Livré : situation définitivement verrouillée pour le responsable de Hub.',409)
             if d['status'] not in STATUSES:raise APIError('Statut invalide.')
+            # Tracking access is not custody: only parcels physically handled by this Hub
+            # may be changed here. Sent/foreign parcels remain visible but read-only.
+            if not p.get('hub_status_editable'):
+                raise APIError('Ce colis est hors du stock physique modifiable de votre Hub.',409)
+            # Delivery outcomes must use the dedicated attempt/return workflows so reason,
+            # COD, OTP and idempotency controls cannot be bypassed by a generic PATCH.
+            if d['status'] in ATTEMPT_OUTCOMES:
+                raise APIError('Utilisez la procédure logistique dédiée pour enregistrer un résultat de livraison ou un retour.',409)
+            hub_transitions = {
+                'Transit': {'Réceptionné'},
+                'Au hub': {'Reçu par le livreur'},
+                'Réceptionné': {'Reçu par le livreur'},
+            }
+            if d['status'] not in hub_transitions.get(p['status'], set()):
+                raise APIError('Transition non autorisée pour le Hub : utilisez la réception ou la remise physique prévue.',409)
             if p['invoice_id'] or p['financial_locked'] or p['operations_locked']:
                 raise APIError('Commande verrouillée dans un relevé financier ou un document actif.',409)
         if u['role']=='client':
