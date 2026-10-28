@@ -824,18 +824,24 @@ def edit_user(uid):
         c.execute('BEGIN IMMEDIATE')
         v=c.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
         if not v or v['role']=='admin':raise APIError('Ce compte ne peut pas être modifié ici.')
+        # PATCH requests are partial: omitted active must preserve the current state.
+        # Accept only a real JSON boolean when callers explicitly change activation.
+        active=bool(v['active'])
+        if 'active' in d:
+            if type(d['active']) is not bool:raise APIError('Le champ active doit être un booléen.')
+            active=d['active']
         if 'client_type' in d:client_types.change_type(c,v,d['client_type'],session['uid'],APIError,now)
         support_city_ids=validate_support_cities(c,d['city_ids'],uid) if v['role']=='support' and 'city_ids' in d else None
         if v['role']=='livreur':
-            if v['driver_archived'] and d.get('active'):raise APIError('Désarchivez le livreur depuis sa fiche.',409)
-            c.execute('UPDATE users SET driver_blocked=?,driver_revision=driver_revision+1 WHERE id=?',(int(not bool(d.get('active'))),uid))
+            if v['driver_archived'] and active:raise APIError('Désarchivez le livreur depuis sa fiche.',409)
+            c.execute('UPDATE users SET driver_blocked=?,driver_revision=driver_revision+1 WHERE id=?',(int(not active),uid))
         hub_id=v['agent_hub_id']
         if v['role']=='hub_manager':
             hub_id=d.get('agent_hub_id',hub_id)
             hub_row=c.execute('SELECT active FROM ops_hubs WHERE id=?',(hub_id,)).fetchone() if type(hub_id) is int else None
-            if not hub_row or (bool(d.get('active')) and not hub_row['active']):raise APIError('Choisissez un Hub actif pour ce responsable.')
-            if bool(d.get('active')):validate_hub_manager_slot(c,hub_id,uid)
-            leaving_slot=bool(v['active']) and (not bool(d.get('active')) or hub_id!=v['agent_hub_id'])
+            if not hub_row or (active and not hub_row['active']):raise APIError('Choisissez un Hub actif pour ce responsable.')
+            if active:validate_hub_manager_slot(c,hub_id,uid)
+            leaving_slot=bool(v['active']) and (not active or hub_id!=v['agent_hub_id'])
             if leaving_slot:
                 try:ensure_hub_manager_can_leave(c,uid,v['agent_hub_id'])
                 except ValueError as exc:raise APIError(str(exc),409)
@@ -855,13 +861,13 @@ def edit_user(uid):
                 if lead:validate_driver_team_hub(c,uid,driver_hub_id,lead_id=lead)
                 if c.execute("SELECT 1 FROM users WHERE team_lead_id=? AND role='livreur' AND active=1",(uid,)).fetchone() and lead:raise APIError('Ce livreur est lui-même chef d’équipe : détachez d’abord son équipe.')
                 c.execute('UPDATE users SET team_lead_id=? WHERE id=?',(lead,uid))
-        c.execute('UPDATE users SET name=?,phone=?,company=?,active=?,agent_hub_id=?,driver_hub_id=? WHERE id=?',(text(d,'name'),text(d,'phone'),text(d,'company',False),int(bool(d.get('active'))),hub_id,driver_hub_id,uid))
+        c.execute('UPDATE users SET name=?,phone=?,company=?,active=?,agent_hub_id=?,driver_hub_id=? WHERE id=?',(text(d,'name'),text(d,'phone'),text(d,'company',False),int(active),hub_id,driver_hub_id,uid))
         if v['role']=='livreur' and driver_hub_id!=v['driver_hub_id']:
             append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='driver_hub_reassigned',
                 entity_type='driver_hub_assignment',entity_id=uid,old_value={'driver_hub_id':v['driver_hub_id']},
                 new_value={'driver_hub_id':driver_hub_id},metadata={'reason':'Admin updated courier Hub mapping'},created_at=now())
         if support_city_ids is not None:save_support_cities(c,uid,support_city_ids)
-        if not d.get('active') or d.get('password'):
+        if not active or d.get('password'):
             security_revoke_user(c,uid,'Sessions révoquées par modification administrative',session['uid'])
         if d.get('password'):
             pw=text(d,'password',maxlen=128)
