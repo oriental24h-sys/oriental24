@@ -509,11 +509,11 @@ def update_parcel(pid):
         if 'status' in d:
             s=d['status']
             if s not in STATUSES: raise APIError('Statut invalide.')
-            # Operational outcomes must be recorded through the idempotent attempts endpoint.
-            # This preserves reason, appointment, receiver/COD/OTP validation and the audit row;
-            # a direct PATCH would otherwise change the visible status without that evidence.
-            if s in ATTEMPT_OUTCOMES:
-                raise APIError('Ce résultat doit être enregistré via la procédure de tentative logistique afin de conserver le motif, la preuve opérationnelle et les contrôles COD/code client.',409)
+            # Drivers must record delivery outcomes through the idempotent attempt endpoint.
+            # Admin/Hub managers may make supervised corrections through this endpoint; those
+            # changes still generate an event and remain available in the audit/history views.
+            if u['role']=='livreur' and s in ATTEMPT_OUTCOMES:
+                raise APIError('Le livreur doit enregistrer ce résultat via la procédure de tentative logistique afin de conserver le motif et les contrôles COD/code client.',409)
             if u['role']=='livreur':
                 transitions=DRIVER_TRANSITIONS
                 if s not in transitions.get(p['status'],[]): raise APIError('Transition non autorisée pour ce colis.')
