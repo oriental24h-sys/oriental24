@@ -522,6 +522,27 @@ class HubDriverWorkspaceTests(unittest.TestCase):
     def scan(self,mode,items,hub=None,key=None,driver=None):
         return self.post(f'drivers-workspace/{driver or self.driver}/scan-batch',dict(mode=mode,scans=[dict(parcel_id=p,revision=r) for p,r in items],hub_id=hub,request_key=key or uuid.uuid4().hex,confirmed=True))
 
+    def test_driver_cannot_attempt_parcel_still_in_hub_stock(self):
+        from werkzeug.security import generate_password_hash
+        with self.m.conn() as c:
+            c.execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash('TestPassword!123'),self.driver))
+        courier=self.m.app.test_client()
+        login=courier.post('/api/login',json={'email':'driver'+self.email,'password':'TestPassword!123'})
+        self.assertEqual(login.status_code,200,login.json)
+        headers={'X-CSRF-Token':courier.get('/api/bootstrap').json['csrf']}
+        pid,_=self.parcel(self.hub,'En livraison',self.driver,self.hub)
+        response=courier.post(
+            f'/api/logistics/parcels/{pid}/attempts',
+            json={'outcome':'Reporté','revision':0,'request_key':uuid.uuid4().hex},
+            headers=headers,
+        )
+        self.assertEqual(response.status_code,409,response.json)
+        with self.m.conn() as c:
+            row=c.execute('SELECT status,current_hub_id,ops_revision FROM parcels WHERE id=?',(pid,)).fetchone()
+            attempts=c.execute('SELECT COUNT(*) FROM ops_attempts WHERE parcel_id=?',(pid,)).fetchone()[0]
+        self.assertEqual(tuple(row),('En livraison',self.hub,0))
+        self.assertEqual(attempts,0)
+
     def test_assign_receive_and_replay(self):
         pid,tracking=self.parcel(self.hub)
         preview=self.post(f'drivers-workspace/{self.driver}/scan-preview',dict(tracking=tracking,mode='assign'))
