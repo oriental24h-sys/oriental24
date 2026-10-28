@@ -33,8 +33,14 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('GET', r'/api/sidebar-counts'), ('GET', r'/api/bootstrap'), ('GET', r'/api/parcels/\d+'),
     ('PATCH', r'/api/parcels/\d+'),
     ('POST', r'/api/logout'), ('PATCH', r'/api/profile'),
+    # Réclamations : création et suivi limités aux propres tickets du compte.
+    # PATCH reste réservé à Admin par le handler lui-même (message explicite).
     ('GET', r'/api/tickets'), ('POST', r'/api/tickets'),
     ('GET', r'/api/tickets/\d+'), ('POST', r'/api/tickets/\d+'),
+    ('PATCH', r'/api/tickets/\d+'),
+    # Demandes de modification de prix : lecture filtrée sur user_id, écriture
+    # vérifiée par parcel() (donc bornée au Hub/à la traçabilité du compte).
+    ('GET', r'/api/requests'), ('POST', r'/api/requests'),
     ('GET', r'/api/announcements'),
     ('GET', r'/api/security/sessions'), ('POST', r'/api/security/sessions/revoke-others'),
     ('DELETE', r'/api/security/sessions/\d+'),

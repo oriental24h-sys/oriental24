@@ -210,7 +210,7 @@ def auth(*roles):
             if roles and u['role'] not in roles: raise APIError('Accès non autorisé.',403)
             if u.get('role_display')=='Responsable de hub':
                 if not hub_manager_route_allowed(request.method,request.path):
-                    raise APIError('Accès refusé : cette route n’est pas encore validée pour le Hub.',403)
+                    raise APIError('Accès refusé : cette route n’est pas encore validée pour le Hub ('+request.method+' '+request.path+').',403)
                 if hub_manager_requires_active_hub(request.path):
                     with conn() as hc:
                         active_hub=hc.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone()
