@@ -147,7 +147,7 @@ def register_ramassage_bon(app, services):
         # Un client ne voit que ses bons ; un agent que ceux destinés à son Hub (vu via la file dédiée).
         if u['role'] == 'client' and bon['client_id'] != u['id']:
             raise Error('Bon de ramassage introuvable.', 404)
-        if u['role'] == 'agent' and bon['hub_id'] != u.get('agent_hub_id'):
+        if u['role'] == 'hub_manager' and bon['hub_id'] != u.get('agent_hub_id'):
             raise Error('Bon de ramassage introuvable.', 404)
         return bon
 
@@ -191,14 +191,14 @@ def register_ramassage_bon(app, services):
 
     # ------------------------------------------------------------------ Liste / détail
     @app.get('/api/ramassage-bons')
-    @auth('admin', 'client', 'agent')
+    @auth('admin', 'client', 'hub_manager')
     def ramassage_bon_list():
         u = user()
         with conn() as c:
             where, args = '', []
             if u['role'] == 'client':
                 where, args = 'WHERE b.client_id=?', [u['id']]
-            elif u['role'] == 'agent':
+            elif u['role'] == 'hub_manager':
                 where, args = 'WHERE b.hub_id=?', [u.get('agent_hub_id')]
             rows = c.execute(
                 'SELECT * FROM ramassage_bons b %s ORDER BY b.id DESC LIMIT 500' % where, args).fetchall()
@@ -221,11 +221,11 @@ def register_ramassage_bon(app, services):
             return jsonify([dict(r) for r in rows])
 
     @app.get('/api/ramassage-bons/hub/queue')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def ramassage_bon_hub_queue():
         u = user()
         with conn() as c:
-            if u['role'] == 'agent':
+            if u['role'] == 'hub_manager':
                 hub_id = u.get('agent_hub_id')
                 active_hub(c, hub_id)
                 rows = c.execute(
@@ -242,7 +242,7 @@ def register_ramassage_bon(app, services):
             return jsonify([serialize(c, r) for r in rows])
 
     @app.get('/api/ramassage-bons/<int:bon_id>')
-    @auth('admin', 'client', 'agent')
+    @auth('admin', 'client', 'hub_manager')
     def ramassage_bon_detail(bon_id):
         u = user()
         with conn() as c:
@@ -356,7 +356,7 @@ def register_ramassage_bon(app, services):
 
     # ------------------------------------------------------------------ Réception au Hub
     @app.post('/api/ramassage-bons/<int:bon_id>/receive')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def ramassage_bon_receive(bon_id):
         u = user()
         d = body()
@@ -364,7 +364,7 @@ def register_ramassage_bon(app, services):
         with conn() as c:
             c.execute('BEGIN IMMEDIATE')
             bon = load_bon(c, bon_id, u)
-            if u['role'] == 'agent':
+            if u['role'] == 'hub_manager':
                 if bon['hub_id'] != u.get('agent_hub_id'):
                     raise Error('Ce bon n’est pas destiné à votre Hub.', 404)
                 active_hub(c, u.get('agent_hub_id'))
@@ -406,7 +406,7 @@ def register_ramassage_bon(app, services):
             return jsonify(ok=True, status=next_status, remaining=remaining)
 
     @app.post('/api/ramassage-bons/<int:bon_id>/receive-batch')
-    @auth('admin','agent')
+    @auth('admin','hub_manager')
     def ramassage_receive_batch(bon_id):
         u=user();d=body()
         if d.get('confirmed') is not True:raise Error('Confirmez la réception physique de tous les colis scannés.')
@@ -445,7 +445,7 @@ def register_ramassage_bon(app, services):
             return jsonify(result)
 
     @app.get('/api/ramassage-bons/hub/collected')
-    @auth('admin', 'agent')
+    @auth('admin', 'hub_manager')
     def ramassage_collected():
         u = user()
         page = integer(request.args.get('page', 1), 'Page')
@@ -456,8 +456,8 @@ def register_ramassage_bon(app, services):
             raise Error('Filtre invalide.')
         with conn() as c:
             cid = central_id(c)
-            hub_id = u.get('agent_hub_id') if u['role']=='agent' else request.args.get('hub_id')
-            if u['role']=='agent':
+            hub_id = u.get('agent_hub_id') if u['role']=='hub_manager' else request.args.get('hub_id')
+            if u['role']=='hub_manager':
                 active_hub(c, hub_id)
                 if request.args.get('hub_id') and integer(request.args['hub_id'], 'Hub')!=hub_id:
                     raise Error('Hub introuvable.', 404)
@@ -521,5 +521,5 @@ def register_ramassage_bon(app, services):
             selected_args = args+([state] if state else [])
             total = counts.get(state,0) if state else sum(counts.values())
             rows = [dict(r) for r in c.execute(sql+'SELECT * FROM classified'+clause+' ORDER BY status_recency DESC,parcel_id DESC,receipt_line_id DESC LIMIT ? OFFSET ?',selected_args+[size,(page-1)*size])]
-            hubs = [dict(r) for r in c.execute('SELECT id,name FROM ops_hubs WHERE active=1'+(' AND id=?' if u['role']=='agent' else '')+' ORDER BY name', [hub_id] if u['role']=='agent' else [])]
+            hubs = [dict(r) for r in c.execute('SELECT id,name FROM ops_hubs WHERE active=1'+(' AND id=?' if u['role']=='hub_manager' else '')+' ORDER BY name', [hub_id] if u['role']=='hub_manager' else [])]
             return jsonify(rows=rows,total=total,counts=counts,page=page,size=size,hubs=hubs,central_hub_id=cid)
