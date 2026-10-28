@@ -1,6 +1,8 @@
 import sqlite3
 import unittest
 
+from reception_extras import migrate_legacy_hub_manager_role
+
 from hub_schema import (
     migrate_city_hub_id,
     assign_cities_to_hub,
@@ -8,6 +10,24 @@ from hub_schema import (
     ensure_hub_manager_can_leave,
     migrate_driver_hub_id,
 )
+
+
+
+class LegacyHubManagerRoleMigrationTests(unittest.TestCase):
+    def test_legacy_agent_role_is_converted_without_touching_canonical_roles(self):
+        db=sqlite3.connect(':memory:')
+        try:
+            db.execute('CREATE TABLE users(id INTEGER PRIMARY KEY, role TEXT NOT NULL, agent_hub_id INTEGER)')
+            db.executemany('INSERT INTO users(id,role,agent_hub_id) VALUES(?,?,?)',[
+                (1,'agent',10),(2,'hub_manager',20),(3,'livreur',None)
+            ])
+            self.assertEqual(migrate_legacy_hub_manager_role(db),1)
+            self.assertEqual(db.execute('SELECT id,role,agent_hub_id FROM users ORDER BY id').fetchall(),[
+                (1,'hub_manager',10),(2,'hub_manager',20),(3,'livreur',None)
+            ])
+            self.assertEqual(migrate_legacy_hub_manager_role(db),0)
+        finally:
+            db.close()
 
 
 class CityHubMigrationTests(unittest.TestCase):
