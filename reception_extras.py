@@ -24,10 +24,10 @@ def register_reception_extras(app, s):
     with conn() as c:
         if 'agent_hub_id' not in {r[1] for r in c.execute('PRAGMA table_info(users)')}:
             c.execute('ALTER TABLE users ADD COLUMN agent_hub_id INTEGER REFERENCES ops_hubs(id)')
-        # One-time idempotent conversion. Keep the legacy column name during this rollout so
-        # currently deployed palette/receipt modules do not lose hub assignments.
-        migrate_legacy_hub_manager_role(c)
+        # Install/upgrade the migration-aware guard before normalizing old role values.
+        # Existing duplicate rows are preserved for explicit Admin cleanup, not blocked at startup.
         install_one_active_hub_manager_guards(c)
+        migrate_legacy_hub_manager_role(c)
         migrate_driver_hub_id(c,created_at=now(),append_audit=s['append_audit_log'])
         if 'missing_at' not in {r[1] for r in c.execute('PRAGMA table_info(ops_document_lines)')}:
             c.execute('ALTER TABLE ops_document_lines ADD COLUMN missing_at TEXT')
