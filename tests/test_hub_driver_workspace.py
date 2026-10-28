@@ -835,7 +835,8 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         self.assertFalse(row['hub_status_editable'])
         self.assertEqual(row['status'],'Reçu par le livreur')
         with self.m.conn() as c:
-            self.assertEqual(c.execute("SELECT count(*) FROM audit_log WHERE entity_id=? AND action='hub_parcel_status_changed'",(str(pid),)).fetchone()[0],4)
+            # Rejected status edits must not create successful-change audit entries.
+            self.assertEqual(c.execute("SELECT count(*) FROM audit_log WHERE entity_id=? AND action='hub_parcel_status_changed'",(str(pid),)).fetchone()[0],0)
 
     def test_foreign_driver_tour_cannot_be_changed(self):
         pid,_=self.parcel(None,'En livraison',self.other_driver,self.foreign)
