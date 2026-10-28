@@ -800,18 +800,19 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         pid,_=self.parcel(self.hub,'Refusé',self.driver,self.hub)
         self.assertEqual(self.status_patch(pid,'Reporté').status_code,200)
 
-    def test_manager_changes_driver_tour_status_without_bypassing_final_workflows(self):
+    def test_manager_cannot_edit_parcel_after_physical_handoff_to_driver(self):
         pid,_=self.parcel(self.hub)
         self.assertEqual(self.scan('assign',[(pid,0)]).status_code,200)
         row=next(p for p in self.client.get('/api/bootstrap').json['parcels'] if p['id']==pid)
-        self.assertTrue(row['hub_status_editable'])
-        r=self.status_patch(pid,'Reporté',revision=1);self.assertEqual(r.status_code,200,r.json)
-        self.assertEqual(self.status_patch(pid,'Retourné',revision=2).status_code,409)
-        r=self.status_patch(pid,'En livraison',revision=2);self.assertEqual(r.status_code,200,r.json)
-        self.assertEqual(self.status_patch(pid,'Livré',revision=3).status_code,409)
+        self.assertFalse(row['hub_status_editable'])
+        # The Hub may track its dispatched parcel, but cannot alter it after custody passed to the driver.
+        r=self.status_patch(pid,'Reporté',revision=1)
+        self.assertEqual(r.status_code,409,r.json)
+        self.assertEqual(self.status_patch(pid,'Retourné',revision=1).status_code,409)
+        self.assertEqual(self.status_patch(pid,'Livré',revision=1).status_code,409)
         row=self.client.get(f'/api/parcels/{pid}').json['parcel']
-        self.assertTrue(row['hub_status_editable'])
-        self.assertEqual(row['status'],'En livraison')
+        self.assertFalse(row['hub_status_editable'])
+        self.assertEqual(row['status'],'Reçu par le livreur')
         with self.m.conn() as c:
             self.assertEqual(c.execute("SELECT count(*) FROM audit_log WHERE entity_id=? AND action='hub_parcel_status_changed'",(str(pid),)).fetchone()[0],4)
 
