@@ -1177,4 +1177,32 @@ class HubDriverWorkspaceTests(unittest.TestCase):
             r=self.client.patch('/api/profile',json={'name':'Manager','phone':'0600000000','company':'Test',**fields},headers=self.headers)
             self.assertEqual(r.status_code,403,r.json)
 
+    def test_admin_partial_account_edit_preserves_activation_and_skips_unrelated_hub_validation(self):
+        admin=self.m.app.test_client()
+        login=admin.post('/api/login',json={'email':'admin@oriental24.ma','password':'Oriental24!Demo'})
+        self.assertEqual(login.status_code,200,login.json)
+        csrf=admin.get('/api/bootstrap').json['csrf']
+        headers={'X-CSRF-Token':csrf}
+
+        # Editing ordinary profile fields must not silently deactivate an active driver.
+        response=admin.patch(f'/api/users/{self.driver}',json={
+            'name':'Driver renamed','phone':'0612345678','company':'ORIENTAL24'
+        },headers=headers)
+        self.assertEqual(response.status_code,200,response.json)
+        with self.m.conn() as c:
+            driver=c.execute('SELECT active,driver_blocked,name FROM users WHERE id=?',(self.driver,)).fetchone()
+            self.assertEqual((driver['active'],driver['driver_blocked'],driver['name']),(1,0,'Driver renamed'))
+
+        # A name/phone edit should still work if the manager's Hub is inactive;
+        # only an explicit activation or Hub reassignment should validate that Hub.
+        with self.m.conn() as c:
+            c.execute('UPDATE ops_hubs SET active=0 WHERE id=?',(self.hub,))
+        response=admin.patch(f'/api/users/{self.manager}',json={
+            'name':'Manager renamed','phone':'0698765432','company':'ORIENTAL24'
+        },headers=headers)
+        self.assertEqual(response.status_code,200,response.json)
+        with self.m.conn() as c:
+            manager=c.execute('SELECT active,agent_hub_id,name FROM users WHERE id=?',(self.manager,)).fetchone()
+            self.assertEqual((manager['active'],manager['agent_hub_id'],manager['name']),(1,self.hub,'Manager renamed'))
+
 if __name__=='__main__': unittest.main()
