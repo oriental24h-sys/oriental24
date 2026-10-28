@@ -41,7 +41,28 @@ class LegacyHubManagerRoleMigrationTests(unittest.TestCase):
             db.executemany('INSERT INTO users(id,role,active,agent_hub_id) VALUES(?,?,?,?)',[
                 (1,'agent',1,10),(2,'agent',1,10)
             ])
+            # Simulate the update trigger already installed by the older release.
+            db.execute("""
+                CREATE TRIGGER users_one_active_hub_manager_update
+                BEFORE UPDATE OF role,active,agent_hub_id ON users
+                WHEN NEW.role IN ('hub_manager','agent')
+                  AND COALESCE(NEW.active,0)=1
+                  AND NEW.agent_hub_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM users u
+                    WHERE u.agent_hub_id=NEW.agent_hub_id
+                      AND u.active=1
+                      AND u.role IN ('hub_manager','agent')
+                      AND u.id IS NOT NEW.id
+                  )
+                BEGIN
+                  SELECT RAISE(ABORT, 'Hub already has an active manager');
+                END
+            """)
             install_one_active_hub_manager_guards(db)
+            self.assertIn('legacy_role_migration_v1', db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='users_one_active_hub_manager_update'"
+            ).fetchone()[0])
             self.assertEqual(migrate_legacy_hub_manager_role(db),2)
             self.assertEqual(db.execute(
                 'SELECT id,role,active,agent_hub_id FROM users ORDER BY id'
