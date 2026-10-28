@@ -1,4 +1,4 @@
-import os, sqlite3, secrets, csv, io, re, base64
+import os, sqlite3, secrets, csv, io, re, base64, hashlib
 from datetime import datetime, timedelta
 from functools import wraps
 from contextlib import contextmanager
@@ -10,10 +10,18 @@ BASE = os.path.dirname(__file__)
 app = Flask(__name__)
 from runtime import configure
 DB = configure(app, BASE)
-from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, policy as status_policy
+from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, DRIVER_HUB_ONLY_STATUSES, EXCHANGE_RECEIVED, EXCHANGE_STATUSES, policy as status_policy
+import exchange_flow
 from billing import driver_paid_sql
 import client_types
-from hub_access import hub_manager_route_allowed, hub_manager_requires_active_hub, hub_parcel_scope
+from company_order_edit import company_order_flags, register_company_order_edit
+from hub_access import hub_read_parcel_scope, hub_tracking_parcel_scope, hub_manager_route_allowed, hub_manager_requires_active_hub, hub_parcel_scope, driver_dispatch_allowed, driver_team_member_ids
+from temporary_passwords import generate_temporary_password, credential_response, register_temporary_passwords
+from parcel_transit import annotate_parcel_transit
+from fulfillment_history import complete_stock_timeline
+from hub_schema import ensure_hub_manager_can_leave
+from audit_guard import install_audit_log_guards
+from audit_log import append_audit_log
 
 def now(): return datetime.now().isoformat(timespec='seconds')
 @contextmanager
@@ -48,7 +56,23 @@ def init_db():
         CREATE TABLE IF NOT EXISTS pod_media(id INTEGER PRIMARY KEY,parcel_id INTEGER NOT NULL REFERENCES parcels(id),kind TEXT NOT NULL,mime TEXT NOT NULL,content BLOB NOT NULL,actor_id INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS pallets(id INTEGER PRIMARY KEY,code TEXT UNIQUE,source TEXT,destination TEXT,transport TEXT,count INTEGER,status TEXT DEFAULT 'En transit',created_at TEXT);
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+        CREATE TABLE IF NOT EXISTS audit_log(
+            id INTEGER PRIMARY KEY,
+            actor_id INTEGER,
+            actor_name TEXT NOT NULL,
+            action TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            old_value TEXT NOT NULL,
+            new_value TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS audit_log_entity_idx ON audit_log(entity_type,entity_id,id);
+        CREATE INDEX IF NOT EXISTS audit_log_actor_idx ON audit_log(actor_id,id);
+        CREATE INDEX IF NOT EXISTS audit_log_created_idx ON audit_log(created_at,id);
         ''')
+        install_audit_log_guards(c)
         if 'team_lead_id' not in {r['name'] for r in c.execute('PRAGMA table_info(users)')}:c.execute('ALTER TABLE users ADD COLUMN team_lead_id INTEGER REFERENCES users(id)')
         if 'portal_token' not in {r['name'] for r in c.execute('PRAGMA table_info(users)')}:c.execute('ALTER TABLE users ADD COLUMN portal_token TEXT')
         if 'time_window' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute("ALTER TABLE parcels ADD COLUMN time_window TEXT DEFAULT ''")
@@ -57,8 +81,16 @@ def init_db():
         if 'status_updated_at' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN status_updated_at TEXT')
         if 'open_allowed' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN open_allowed INTEGER NOT NULL DEFAULT 1')
         if 'is_exchange' not in parcel_columns:c.execute('ALTER TABLE parcels ADD COLUMN is_exchange INTEGER NOT NULL DEFAULT 0')
+        exchange_flow.migrate(c)
         client_types.migrate(c)
         if 'support_id' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN support_id INTEGER REFERENCES users(id)')
+        # Return tracking is a dimension separate from the delivery status: a return
+        # keeps the command's delivery status untouched and only sets this state.
+        if 'return_state' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute("ALTER TABLE parcels ADD COLUMN return_state TEXT")
+        # In-transit returns previously used the 'Vers Hub Central' status; carry them over
+        # to the return state. (The 'recu_entrepot' backfill runs in logistics.migrate, after
+        # the ops tables exist.)
+        c.execute("UPDATE parcels SET return_state='envoye' WHERE status='Vers Hub Central' AND (return_state IS NULL OR return_state='')")
         # Every new command (web, import, partner API, fulfillment) is routed by its city.
         # A city has one support owner; this snapshot stays on the parcel if mappings change.
         c.executescript('''
@@ -75,10 +107,11 @@ def init_db():
           UPDATE parcels SET support_id=(SELECT sc.support_id FROM support_cities sc JOIN users su ON su.id=sc.support_id
             WHERE sc.city_id=NEW.city_id AND su.role='support' AND su.active=1) WHERE id=NEW.id;
         END;
-        CREATE TRIGGER IF NOT EXISTS parcels_status_updated_at AFTER UPDATE OF status ON parcels
+        DROP TRIGGER IF EXISTS parcels_status_updated_at;
+        CREATE TRIGGER parcels_status_updated_at AFTER UPDATE OF status ON parcels
         WHEN NEW.status IS NOT OLD.status
         BEGIN
-          UPDATE parcels SET status_updated_at=COALESCE(NULLIF(NEW.updated_at,''),strftime('%Y-%m-%dT%H:%M:%S','now')) WHERE id=NEW.id;
+          UPDATE parcels SET status_updated_at=CASE WHEN NEW.updated_at IS NOT OLD.updated_at AND NULLIF(NEW.updated_at,'') IS NOT NULL THEN NEW.updated_at ELSE strftime('%Y-%m-%dT%H:%M:%f','now','localtime') END WHERE id=NEW.id;
         END;
         ''')
         c.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',('dataset_kind','demo' if app.config['DEMO_MODE'] else 'production'))
@@ -131,6 +164,11 @@ def init_db():
         seed_client_invoice(2,2,20);seed_client_invoice(2,2,45);seed_client_invoice(2,2,75);seed_client_invoice(2,3,105)
         seed_client_invoice(4,2,75,False);seed_client_invoice(4,3,105,False)
 init_db()
+from company_profile import ensure_schema as ensure_company_profile_schema, eligible as company_profile_eligible, own_profile as own_company_profile, save_profile as save_company_profile
+from client_profile_extras import ensure_schema as ensure_client_extras_schema
+with conn() as c:
+    ensure_company_profile_schema(c)
+    ensure_client_extras_schema(c)
 
 class APIError(Exception):
     def __init__(self,msg,code=400): self.msg,self.code=msg,code
@@ -142,16 +180,20 @@ def integrity(e): return jsonify(error='Cette valeur existe déjà ou une réfé
 def headers(r):
     r.headers['X-Content-Type-Options']='nosniff'
     r.headers['Referrer-Policy']='same-origin'
-    if request.path.startswith('/api/'): r.headers['Cache-Control']='no-store'
+    if request.path.startswith(('/api/','/google/')): r.headers['Cache-Control']='no-store'
     return r
 
 def user():
     with conn() as c:
-        u=c.execute('SELECT id,name,email,role,company,phone,active,client_type,agent_hub_id FROM users WHERE id=?',(session.get('uid',-1),)).fetchone()
+        u=c.execute('SELECT id,name,email,role,company,phone,active,client_type,agent_hub_id,driver_hub_id FROM users WHERE id=?',(session.get('uid',-1),)).fetchone()
         if not u or not u['active']:
             session.clear();raise APIError('Connectez-vous pour continuer.',401)
         security_check_session(c,u['id'])
         result=dict(u)
+        if company_profile_eligible(result):
+            result.update(own_company_profile(c,result['id']))
+            pref=c.execute('SELECT language FROM client_profile_extras WHERE user_id=?',(result['id'],)).fetchone()
+            result['profile_language']=pref['language'] if pref else ''
         # Persist hub_manager while retaining the old internal alias for legacy module checks.
         # New route scopes still need to be migrated to explicit Hub Manager policies.
         if result['role'] in ('agent','hub_manager'):
@@ -168,7 +210,7 @@ def auth(*roles):
             if roles and u['role'] not in roles: raise APIError('Accès non autorisé.',403)
             if u.get('role_display')=='Responsable de hub':
                 if not hub_manager_route_allowed(request.method,request.path):
-                    raise APIError('Accès refusé : cette route n’est pas encore validée pour le Hub.',403)
+                    raise APIError('Accès refusé : cette route n’est pas encore validée pour le Hub ('+request.method+' '+request.path+').',403)
                 if hub_manager_requires_active_hub(request.path):
                     with conn() as hc:
                         active_hub=hc.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone()
@@ -176,7 +218,7 @@ def auth(*roles):
             if u['role']=='support':
                 path=request.path
                 read_only=(request.method in ('GET','HEAD') and (
-                    path in ('/api/bootstrap','/api/announcements') or
+                    path in ('/api/bootstrap','/api/announcements','/api/sidebar-counts') or
                     re.fullmatch(r'/api/parcels/\d+',path) or
                     re.fullmatch(r'/api/parcels/\d+/media/\d+',path)))
                 own_profile=request.method=='PATCH' and path=='/api/profile'
@@ -205,39 +247,59 @@ def number(d,k,minimum=0,maximum=1000000,integer=False):
     except (ValueError,TypeError,OverflowError): raise APIError('Valeur invalide : '+k)
 
 def team_member_ids(c,lead_id):
-    return [r[0] for r in c.execute("SELECT id FROM users WHERE team_lead_id=? AND role='livreur' AND active=1",(lead_id,))]
-def scope(u,alias='p',c=None):
+    """Expose team members only within their active lead's explicitly assigned Hub."""
+    return driver_team_member_ids(c,lead_id)
+def scope(u,alias='p',c=None,follow_drivers=False,include_sent=False):
     if u['role']=='support': return f'{alias}.support_id=?',[u['id']]
-    if u['role']=='agent': return hub_parcel_scope(c,alias,u.get('agent_hub_id')) if c is not None else ('1=0',[])
-    if u['role']=='client': return f'{alias}.client_id=?',[u['id']]
+    if u['role']=='agent': return (hub_read_parcel_scope if include_sent else hub_tracking_parcel_scope if follow_drivers else hub_parcel_scope)(c,alias,u.get('agent_hub_id')) if c is not None else ('1=0',[])
+    if u['role']=='client': return f'{alias}.client_id=? AND NOT EXISTS(SELECT 1 FROM company_deleted_orders cd WHERE cd.parcel_id={alias}.id)',[u['id']]
     if u['role']=='livreur':
-        # v1.5.0 : un chef d'équipe voit (et pilote via les transitions livreur) les colis de ses livreurs actifs.
+        # Un compte sans Hub reste en revue Admin : aucune tâche colis avant rattachement explicite.
+        if type(u.get('driver_hub_id')) is not int or u['driver_hub_id']<=0:return '1=0',[]
+        # v1.5.0 : un chef d'équipe voit (et pilote via les transitions livreur) les colis actifs de son Hub.
         ids=[u['id']]+(team_member_ids(c,u['id']) if c is not None else [])
         inlist=','.join('?'*len(ids))
-        return f'{alias}.driver_id IN ({inlist}) AND NOT EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id={alias}.id AND dw.driver_id={alias}.driver_id) AND NOT ({driver_paid_sql(alias)})',ids
+        return f'{alias}.driver_id IN ({inlist}) AND ({alias}.current_hub_id IS NULL OR {alias}.current_hub_id=?) AND NOT EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id={alias}.id AND dw.driver_id={alias}.driver_id) AND NOT ({driver_paid_sql(alias)})',ids+[u['driver_hub_id']]
     return '1=1',[]
 
-def parcel(c,pid,u):
-    cond,args=scope(u,c=c)
-    p=c.execute(f'''SELECT p.*,su.name city_support_name,su.phone city_support_phone,su.active city_support_active,
+def hub_status_capabilities(c,rows,u):
+    if u['role']!='agent' or not rows:return rows
+    # Tracking rights do not grant status-editing rights after an inter-Hub send.
+    condition,args=hub_tracking_parcel_scope(c,'p',u.get('agent_hub_id'))
+    editable=set()
+    for offset in range(0,len(rows),800):
+        ids=[p['id'] for p in rows[offset:offset+800]]
+        editable.update(r['id'] for r in c.execute(
+            'SELECT p.id FROM parcels p WHERE ('+condition+') AND p.id IN ('+','.join('?'*len(ids))+')',args+ids))
+    for p in rows:
+        p['hub_read_only']=p['id'] not in editable
+        p['hub_status_editable']=not p['hub_read_only'] and p['status']!='Livré' and not any(p.get(k) for k in ('invoice_id','financial_locked','operations_locked'))
+    return rows
+
+def parcel(c,pid,u,follow_drivers=False,include_sent=False):
+    cond,args=scope(u,c=c,follow_drivers=follow_drivers,include_sent=include_sent)
+    p=c.execute(f'''SELECT p.*,(SELECT name FROM ops_hubs WHERE id=p.current_hub_id) current_hub_name,su.name city_support_name,su.phone city_support_phone,su.active city_support_active,
         i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,
+        fo.id stock_order_id,fo.status stock_order_status,EXISTS(SELECT 1 FROM fulfillment_orders fo2 WHERE fo2.parcel_id=p.id) stock_return_required,
         EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,
         EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,
         EXISTS(SELECT 1 FROM driver_statement_lines dl WHERE dl.parcel_id=p.id AND dl.active=1) financial_locked
         FROM parcels p LEFT JOIN users su ON su.id=p.support_id LEFT JOIN invoices i ON i.id=p.invoice_id
+        LEFT JOIN fulfillment_orders fo ON fo.parcel_id=p.id
         WHERE p.id=? AND {cond}''',[pid]+args).fetchone()
     if not p: raise APIError('Colis introuvable.',404)
-    return dict(p)
+    return hub_status_capabilities(c,company_order_flags(c,annotate_parcel_transit(c,[dict(p)]),u),u)[0]
 def event(c,pid,status,note,u):
     c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(pid,u['id'],status,note,now()))
     if 'ops_notify_event' in globals(): ops_notify_event(c,pid,status,u)
     if 'tech_notify_event' in globals(): tech_notify_event(c,pid,status,u)
 def list_parcels(c,u):
-    cond,args=scope(u,c=c)
-    return [dict(r) for r in c.execute(f'''SELECT p.*,
+    cond,args=scope(u,c=c,follow_drivers=True,include_sent=True)
+    rows = [dict(r) for r in c.execute(f'''SELECT p.*,(SELECT name FROM ops_hubs WHERE id=p.current_hub_id) current_hub_name,
     COALESCE(sc.name,su.name) city_support_name,COALESCE(sc.phone,su.phone) city_support_phone,
     COALESCE(sc.active,su.active) city_support_active,
     i.status invoice_status,i.paid_at invoice_paid_at,printf('FAC-%04d',i.id) invoice_reference,
+    fo.id stock_order_id,fo.status stock_order_status,EXISTS(SELECT 1 FROM fulfillment_orders fo2 WHERE fo2.parcel_id=p.id) stock_return_required,
     EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) driver_returned,
     EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,
     EXISTS(SELECT 1 FROM driver_statement_lines dl WHERE dl.parcel_id=p.id AND dl.active=1) financial_locked,
@@ -256,13 +318,21 @@ def list_parcels(c,u):
     FROM parcels p JOIN cities ci ON ci.id=p.city_id JOIN users cl ON cl.id=p.client_id
     LEFT JOIN users dr ON dr.id=p.driver_id LEFT JOIN users su ON su.id=p.support_id
     LEFT JOIN parcel_support ps ON ps.parcel_id=p.id LEFT JOIN support_contacts sc ON sc.id=ps.contact_id
-    LEFT JOIN invoices i ON i.id=p.invoice_id
-    WHERE {cond} ORDER BY p.created_at DESC,p.id DESC''',args)]
+    LEFT JOIN invoices i ON i.id=p.invoice_id LEFT JOIN fulfillment_orders fo ON fo.parcel_id=p.id
+    WHERE {cond} ORDER BY COALESCE(julianday(p.status_updated_at),julianday(p.created_at),0) DESC,p.id DESC''',args)]
+    return hub_status_capabilities(c,company_order_flags(c,annotate_parcel_transit(c,rows),u),u)
 
 @app.route('/')
 @app.route('/login')
 @app.route('/app')
-def index(): return render_template('index.html',runtime_config={'demo':app.config['DEMO_MODE'],'registration':app.config['PUBLIC_REGISTRATION'],'version':'1.12.0'})
+def index():
+    # Content-based URLs prevent a previously cached UI bundle from hiding deployed fixes.
+    ui_versions={name:hashlib.sha256((Path(BASE)/'static'/name).read_bytes()).hexdigest()[:16]
+                 for name in ('app.js','style.css','partner-palettes.js','driver-app.js','parcel-state.js','logistics.js')}
+    response=app.make_response(render_template('index.html',ui_versions=ui_versions,
+        runtime_config={'demo':app.config['DEMO_MODE'],'registration':app.config['PUBLIC_REGISTRATION'],'version':'1.12.0','google':__import__('google_profile').configuration()['configured']}))
+    response.headers['Cache-Control']='no-store'
+    return response
 
 @app.route('/healthz')
 def healthz(): return {'status':'ok','version':'1.12.0','production':app.config['PRODUCTION_MODE']}
@@ -309,9 +379,11 @@ def bootstrap():
     u=user()
     with conn() as c:
         if u['role']=='admin':
-            users=[dict(r) for r in c.execute("SELECT id,name,email,role,company,phone,active,client_type,agent_hub_id,team_lead_id FROM users ORDER BY id")]
-        elif u['role']=='livreur':
-            users=[dict(r) for r in c.execute("SELECT id,name,email,role,phone,active,team_lead_id FROM users WHERE team_lead_id=? AND role='livreur' ORDER BY name",(u['id'],))]
+            users=[dict(r) for r in c.execute("SELECT id,name,email,role,company,phone,active,client_type,agent_hub_id,driver_hub_id,team_lead_id FROM users ORDER BY id")]
+        elif u['role']=='agent' and type(u.get('agent_hub_id')) is int:
+            users=[dict(r) for r in c.execute("SELECT id,name,email,role,company,phone,active,driver_hub_id,team_lead_id FROM users WHERE role='livreur' AND driver_hub_id=? AND EXISTS(SELECT 1 FROM ops_hubs h WHERE h.id=users.driver_hub_id AND h.active=1) ORDER BY name",(u['agent_hub_id'],))]
+        elif u['role']=='livreur' and type(u.get('driver_hub_id')) is int and u['driver_hub_id']>0:
+            users=[dict(r) for r in c.execute("SELECT id,name,email,role,phone,active,driver_hub_id,team_lead_id FROM users WHERE team_lead_id=? AND role='livreur' AND active=1 AND driver_hub_id=? AND EXISTS(SELECT 1 FROM ops_hubs h WHERE h.id=users.driver_hub_id AND h.active=1) ORDER BY name",(u['id'],u['driver_hub_id']))]
         else:users=[]
         for account in users:
             if account.get('role')=='support':
@@ -322,7 +394,7 @@ def bootstrap():
         elif u['role']=='agent':
             active_hub=c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone()
             if active_hub:
-                assigned={r['city_id'] for r in c.execute('SELECT city_id FROM hub_cities WHERE hub_id=? AND active=1',(u.get('agent_hub_id'),))}
+                assigned={r['id'] for r in c.execute('SELECT id FROM cities WHERE hub_id=?',(u.get('agent_hub_id'),))}
                 cities=[city for city in cities if city['id'] in assigned]
             else:
                 cities=[]
@@ -331,10 +403,15 @@ def bootstrap():
             settings={r['key']:r['value'] for r in c.execute('SELECT * FROM settings')}
         else:
             settings={r['key']:r['value'] for r in c.execute('SELECT key,value FROM settings WHERE key IN (%s)'%','.join('?'*len(safe_setting_keys)),safe_setting_keys)}
+            if u['role']=='agent':
+                central_setting=c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
+                if central_setting:settings['central_hub_id']=central_setting['value']
         if u['role']=='admin':
             hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id ORDER BY h.name')]
         elif u['role']=='agent' and u.get('agent_hub_id'):
             hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.id=? AND h.active=1',(u['agent_hub_id'],))]
+        elif u['role']=='client':
+            hubs=[dict(r) for r in c.execute('SELECT h.id,h.name,h.active,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 ORDER BY h.name')]
         else:hubs=[]
         return jsonify(user=u,csrf=session['csrf'],cities=cities,users=users,parcels=list_parcels(c,u),statuses=STATUSES,status_policy=status_policy(),settings=settings,hubs=hubs)
 @app.get('/api/parcels/<int:pid>')
@@ -342,8 +419,9 @@ def bootstrap():
 def detail(pid):
     with conn() as c:
         c.execute('BEGIN')
-        p=parcel(c,pid,user())
+        p=parcel(c,pid,user(),follow_drivers=True,include_sent=True)
         ev=[dict(r) for r in c.execute('SELECT e.*,u.name actor FROM events e JOIN users u ON u.id=e.actor_id WHERE parcel_id=? ORDER BY e.id DESC',(pid,))]
+        ev=complete_stock_timeline(c,pid,ev)
         media=[dict(r) for r in c.execute('SELECT pm.id,pm.kind,pm.mime,pm.created_at,u.name actor FROM pod_media pm JOIN users u ON u.id=pm.actor_id WHERE parcel_id=? ORDER BY pm.id DESC',(pid,))]
         return jsonify(parcel=parcel_contact_info(c,p),events=ev,media=media)
 @app.post('/api/parcels')
@@ -375,12 +453,27 @@ def create_parcel():
         city_support=dict(assigned) if assigned and assigned['id'] else None
     return jsonify(ok=True,tracking=track,city_support=city_support)
 @app.patch('/api/parcels/<int:pid>')
-@auth('admin','livreur','client')
+@auth('admin','livreur','client','agent')
 def update_parcel(pid):
     d=request.get_json() or {};u=user()
+    if u['role']=='livreur' and isinstance(d,dict) and d.get('status') in DRIVER_HUB_ONLY_STATUSES:
+        raise APIError('Cette opération est réservée au Hub ou à l’administration.',403)
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
-        p=parcel(c,pid,u)
+        p=parcel(c,pid,u,follow_drivers=u['role']=='agent')
+        if isinstance(d,dict) and d.get('status')=='Vers Hub Central':
+            raise APIError('Cet état de transit est géré automatiquement (obsolète) ; il ne peut pas être fixé manuellement.',409)
+        if u['role']=='agent':
+            # Scoped to physical stock or a courier handoff recorded by this Hub.
+            # Status-only permission: no generic parcel or assignment editing rights.
+            allowed={'status','revision','note','reason_code','next_attempt_at','otp'}
+            if not isinstance(d,dict) or set(d)-allowed or 'status' not in d or type(d.get('revision')) is not int:
+                raise APIError('Le responsable de Hub peut uniquement modifier la situation avec sa version.',403)
+            if p['status']=='Livré':
+                raise APIError('Commande Livré : situation définitivement verrouillée pour le responsable de Hub.',409)
+            if d['status'] not in STATUSES:raise APIError('Statut invalide.')
+            if p['invoice_id'] or p['financial_locked'] or p['operations_locked']:
+                raise APIError('Commande verrouillée dans un relevé financier ou un document actif.',409)
         if u['role']=='client':
             # Clients may only flag their own still-open, non-invoiced parcel as interested.
             # Delivery, returns, refusals, cancellations and all financial/operations locks stay immutable.
@@ -395,6 +488,7 @@ def update_parcel(pid):
         if c.execute('SELECT 1 FROM driver_statement_lines WHERE parcel_id=? AND active=1',(pid,)).fetchone():
             raise APIError('Ce colis est figé dans un relevé livreur. Annulez le relevé avant toute correction.',409)
         if p['invoice_id']: raise APIError('Ce colis est facturé et ne peut plus être modifié.')
+        exchange_created=None
         ops_change(c,p,d,u)
         if 'driver_id' in d:
             if u['role']=='livreur':
@@ -407,12 +501,25 @@ def update_parcel(pid):
             if d['driver_id'] and 'damage_hold_open' in globals() and globals()['damage_hold_open'](c,pid):
                 raise APIError('Colis réceptionné endommagé : Admin doit traiter l’incident avant toute affectation.',409)
             did=d['driver_id'] or None
-            if did and not c.execute("SELECT id FROM users WHERE id=? AND role='livreur' AND active=1",(did,)).fetchone(): raise APIError('Livreur invalide.')
+            if did:
+                if type(did) is not int:raise APIError('Livreur invalide.')
+                target=c.execute("SELECT id,driver_hub_id FROM users WHERE id=? AND role='livreur' AND active=1",(did,)).fetchone()
+                if not target:raise APIError('Livreur invalide.')
+                if type(target['driver_hub_id']) is not int or target['driver_hub_id']<=0 or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(target['driver_hub_id'],)).fetchone():
+                    raise APIError('Le livreur doit être rattaché à un Hub actif avant toute affectation.',409)
+                if did!=p['driver_id'] and not driver_dispatch_allowed(c,p.get('current_hub_id'),target['driver_hub_id']):
+                    raise APIError('Le colis doit être physiquement enregistré au Hub du livreur. Rattachez le livreur au Hub ou réceptionnez le colis avant l’affectation.',409)
             c.execute('UPDATE parcels SET driver_id=?,updated_at=? WHERE id=?',(did,now(),pid))
             event(c,pid,p['status'],'Affectation du livreur mise à jour',u)
         if 'status' in d:
             s=d['status']
             if s not in STATUSES: raise APIError('Statut invalide.')
+            if s in EXCHANGE_STATUSES:
+                # Reprise échange : uniquement sur la commande jumelle créée automatiquement.
+                if not p.get('exchange_of_id'):
+                    raise APIError('La situation « échange » est réservée à la commande de reprise créée après une livraison avec échange.',409)
+                if u['role']=='livreur':
+                    raise APIError('La reprise échange est réceptionnée par le responsable de Hub.',403)
             if u['role']=='livreur':
                 transitions=DRIVER_TRANSITIONS
                 if s not in transitions.get(p['status'],[]): raise APIError('Transition non autorisée pour ce colis.')
@@ -424,7 +531,15 @@ def update_parcel(pid):
             if s=='Livré' and p.get('otp_required'):c.execute('UPDATE parcels SET otp_verified_at=? WHERE id=?',(now(),pid))
             c.execute('UPDATE parcels SET status=?,note=?,updated_at=? WHERE id=?',(s,note or p['note'],now(),pid))
             event(c,pid,s,note or 'Statut mis à jour',u)
-    return jsonify(ok=True)
+            if s=='Livré':
+                exchange_created=exchange_flow.create_for_delivery(c,pid,u,event,now,append_audit_log)
+            elif s==EXCHANGE_RECEIVED:
+                exchange_flow.mark_received(c,pid,u,event,now)
+            if u['role']=='agent':
+                append_audit_log(c,actor_id=u['id'],actor_name=u['name'],action='hub_parcel_status_changed',
+                    entity_type='parcel',entity_id=pid,old_value={'status':p['status']},new_value={'status':s},
+                    metadata={'hub_id':u['agent_hub_id'],'note':note},created_at=now())
+    return jsonify(ok=True, exchange=exchange_created)
 @app.post('/api/parcels/bulk-assign')
 @auth('admin','livreur')
 def bulk_assign_parcels():
@@ -444,8 +559,10 @@ def bulk_assign_parcels():
         c.execute('BEGIN IMMEDIATE')
         target=None
         if did is not None:
-            target=c.execute("SELECT id,name FROM users WHERE id=? AND role='livreur' AND active=1",(did,)).fetchone()
+            target=c.execute("SELECT id,name,driver_hub_id FROM users WHERE id=? AND role='livreur' AND active=1",(did,)).fetchone()
             if not target: raise APIError('Livreur invalide ou inactif.')
+            if type(target['driver_hub_id']) is not int or target['driver_hub_id']<=0 or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(target['driver_hub_id'],)).fetchone():
+                raise APIError('Le livreur doit être rattaché à un Hub actif avant toute affectation.',409)
         team=None
         if u['role']=='livreur':
             team=[u['id']]+team_member_ids(c,u['id'])
@@ -460,12 +577,17 @@ def bulk_assign_parcels():
                 skipped.append(dict(id=p['id'],tracking=p['tracking'],reason='Hors de votre équipe'));continue
             if c.execute('SELECT 1 FROM driver_statement_lines WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():
                 skipped.append(dict(id=p['id'],tracking=p['tracking'],reason='Figé dans un relevé livreur'));continue
+            if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():
+                skipped.append(dict(id=p['id'],tracking=p['tracking'],reason='Lié à un document logistique actif'));continue
             if p['invoice_id']:
                 skipped.append(dict(id=p['id'],tracking=p['tracking'],reason='Facturé'));continue
             if 'damage_hold_open' in globals() and globals()['damage_hold_open'](c,p['id']):
                 skipped.append(dict(id=p['id'],tracking=p['tracking'],reason='Incident endommagé ouvert'));continue
             if p['status']=='Reçu par le livreur' and p['driver_id']!=(did or None):
                 skipped.append(dict(id=p['id'],tracking=p['tracking'],reason='Reçu par le livreur : indiquez d’abord l’état réel de remise'));continue
+            if did is not None and did!=p['driver_id'] and not driver_dispatch_allowed(c,p['current_hub_id'],target['driver_hub_id']):
+                skipped.append(dict(id=p['id'],tracking=p['tracking'],reason='Affectation refusée : le colis n’est pas physiquement au Hub du livreur'));continue
+            if 'ops_change' in globals():ops_change(c,p,{'driver_id':did},u)
             c.execute('UPDATE parcels SET driver_id=?,updated_at=?,time_window=? WHERE id=?',(did,now(),tw if did is not None else '',p['id']))
             event(c,p['id'],p['status'],f"Affectation en masse{' → '+target['name'] if target else ' (désaffecté)'}{(' · RDV '+tw+'h-'+str(int(tw)+1)+'h') if tw else ''}",u)
             assigned.append(p['id'])
@@ -617,13 +739,58 @@ def save_support_cities(c,support_id,ids):
     c.execute('DELETE FROM support_cities WHERE support_id=?',(support_id,))
     for city_id in ids:c.execute('INSERT INTO support_cities(city_id,support_id,assigned_at) VALUES(?,?,?)',(city_id,support_id,now()))
 
+def validate_hub_manager_slot(c,hub_id,exclude_user_id=None):
+    sql="SELECT id,name FROM users WHERE agent_hub_id=? AND active=1 AND role IN ('hub_manager','agent')"
+    args=[hub_id]
+    if exclude_user_id is not None:
+        sql+=' AND id!=?';args.append(exclude_user_id)
+    existing=c.execute(sql+' ORDER BY id LIMIT 1',args).fetchone()
+    if existing:
+        raise APIError('Ce Hub possède déjà un responsable actif ('+existing['name']+'). Désactivez ou réaffectez ce compte avant d’en créer un autre.',409)
+
+def driver_hub_value(c,raw,*,required=False,allow_existing_inactive=None):
+    if raw in (None,''):
+        if required and c.execute('SELECT 1 FROM ops_hubs WHERE active=1 LIMIT 1').fetchone():
+            raise APIError('Choisissez le Hub actif auquel rattacher ce livreur.')
+        return None
+    if type(raw) is not int or raw<=0:
+        raise APIError('Choisissez un Hub actif valide.')
+    hub=c.execute('SELECT active FROM ops_hubs WHERE id=?',(raw,)).fetchone()
+    if hub and hub['active']:
+        return raw
+    if raw==allow_existing_inactive and hub:
+        return raw
+    raise APIError('Choisissez un Hub actif valide.')
+
+def validate_driver_hub_mapping(c,driver_id,hub_id):
+    """Do not move an assigned driver away from the Hub implied by open parcel custody."""
+    parcels=c.execute('''SELECT p.tracking,p.current_hub_id,ci.hub_id city_hub_id
+        FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id
+        WHERE p.driver_id=? AND p.status NOT IN ('Livré','Retourné','Refusé','Annulé') ORDER BY p.id''',(driver_id,)).fetchall()
+    if parcels and hub_id is None:
+        raise APIError('Ce livreur a des colis ouverts. Réaffectez-les ou résolvez leur Hub avant de le désassocier.',409)
+    for parcel_row in parcels:
+        resolved=parcel_row['current_hub_id'] if parcel_row['current_hub_id'] is not None else parcel_row['city_hub_id']
+        if resolved!=hub_id:
+            raise APIError('Colis '+str(parcel_row['tracking'])+' : Hub physique/ville incompatible. Réaffectez le colis avant de déplacer le livreur.',409)
+
+def validate_driver_team_hub(c,driver_id,hub_id,lead_id=None):
+    if lead_id:
+        lead=c.execute("SELECT id,driver_hub_id FROM users WHERE id=? AND role='livreur' AND active=1 AND team_lead_id IS NULL",(lead_id,)).fetchone()
+        if not lead or type(hub_id) is not int or hub_id<=0 or lead['driver_hub_id']!=hub_id:
+            raise APIError('Chef d’équipe et livreur doivent appartenir au même Hub actif.')
+    members=c.execute("SELECT driver_hub_id FROM users WHERE team_lead_id=? AND role='livreur' AND active=1 AND id<>?",(driver_id,driver_id)).fetchall()
+    if any(row['driver_hub_id'] is not None and row['driver_hub_id']!=hub_id for row in members):
+        raise APIError('Les membres déjà rattachés à un autre Hub doivent être détachés ou réaffectés avant ce changement.',409)
+
 @app.route('/api/users',methods=['POST'])
 @auth('admin')
 def add_user():
-    d=request.get_json() or {}; role=d.get('role')
+    d=request.get_json() or {}; role=d.get('role');actor=user()
     if role=='agent':role='hub_manager'  # compatibility for an old admin screen during rollout
     if role not in ['client','livreur','hub_manager','support']:raise APIError('Rôle invalide.')
-    pw=text(d,'password',maxlen=128)
+    generated=d.get('generate_password') is True
+    pw=generate_temporary_password() if generated else text(d,'password',maxlen=128)
     if len(pw)<10:raise APIError('10 caractères minimum pour le mot de passe.')
     email=text(d,'email').lower()
     if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email):raise APIError('Adresse e-mail invalide.')
@@ -631,23 +798,32 @@ def add_user():
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         city_ids=validate_support_cities(c,d.get('city_ids')) if role=='support' else []
-        hub_id=None
+        hub_id=None;driver_hub_id=None
         if role=='hub_manager':
             hub_id=d.get('agent_hub_id')
             if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez le Hub actif de ce responsable.')
+            validate_hub_manager_slot(c,hub_id)
         lead=None
         if role=='livreur':
-            lead=d.get('team_lead_id')
-            if lead:
-                if type(lead) is not int or lead<=0 or not c.execute("SELECT 1 FROM users WHERE id=? AND role='livreur' AND active=1 AND team_lead_id IS NULL",(lead,)).fetchone():raise APIError('Chef d’équipe invalide : choisissez un livreur actif non rattaché.')
-        uid=c.execute('INSERT INTO users(name,email,password,role,company,phone,created_at,client_type,agent_hub_id,team_lead_id) VALUES(?,?,?,?,?,?,?,?,?,?)',(text(d,'name'),email,generate_password_hash(pw),role,text(d,'company',False),text(d,'phone'),now(),kind,hub_id,lead)).lastrowid
+            driver_hub_id=driver_hub_value(c,d.get('driver_hub_id'),required=True)
+            lead=d.get('team_lead_id') or None
+            if lead is not None:
+                if type(lead) is not int or lead<=0:raise APIError('Chef d’équipe invalide : choisissez un livreur actif non rattaché.')
+                validate_driver_team_hub(c,0,driver_hub_id,lead_id=lead)
+        uid=c.execute('INSERT INTO users(name,email,password,role,company,phone,created_at,client_type,agent_hub_id,team_lead_id,driver_hub_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(text(d,'name'),email,generate_password_hash(pw),role,text(d,'company',False),text(d,'phone'),now(),kind,hub_id,lead,driver_hub_id)).lastrowid
         if role=='support':save_support_cities(c,uid,city_ids)
         if role=='client':client_types.audit(c,uid,session['uid'],None,kind,'Création administrative',now)
+        if role=='livreur' and driver_hub_id is not None:
+            append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='driver_hub_assigned',
+                entity_type='driver_hub_assignment',entity_id=uid,old_value=None,
+                new_value={'driver_hub_id':driver_hub_id,'source':'admin_account_creation'},
+                metadata={'driver_hub_id':driver_hub_id},created_at=now())
+    if generated:return credential_response(uid,email,pw)
     return jsonify(ok=True,id=uid)
 @app.patch('/api/users/<int:uid>')
 @auth('admin')
 def edit_user(uid):
-    d=request.get_json() or {}
+    d=request.get_json() or {};actor=user()
     with conn() as c:
         c.execute('BEGIN IMMEDIATE')
         v=c.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
@@ -660,14 +836,34 @@ def edit_user(uid):
         hub_id=v['agent_hub_id']
         if v['role'] in ('agent','hub_manager'):
             hub_id=d.get('agent_hub_id',hub_id)
-            if type(hub_id) is not int or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(hub_id,)).fetchone():raise APIError('Choisissez un Hub actif pour ce responsable.')
+            hub_row=c.execute('SELECT active FROM ops_hubs WHERE id=?',(hub_id,)).fetchone() if type(hub_id) is int else None
+            if not hub_row or (bool(d.get('active')) and not hub_row['active']):raise APIError('Choisissez un Hub actif pour ce responsable.')
+            if bool(d.get('active')):validate_hub_manager_slot(c,hub_id,uid)
+            leaving_slot=bool(v['active']) and (not bool(d.get('active')) or hub_id!=v['agent_hub_id'])
+            if leaving_slot:
+                try:ensure_hub_manager_can_leave(c,uid,v['agent_hub_id'])
+                except ValueError as exc:raise APIError(str(exc),409)
+        driver_hub_id=v['driver_hub_id'] if v['role']=='livreur' else None
+        if v['role']=='livreur' and 'driver_hub_id' in d:
+            driver_hub_id=driver_hub_value(c,d.get('driver_hub_id'),allow_existing_inactive=v['driver_hub_id'])
+            if driver_hub_id!=v['driver_hub_id']:
+                validate_driver_hub_mapping(c,uid,driver_hub_id)
+                effective_lead=d.get('team_lead_id',v['team_lead_id']) or None
+                if effective_lead is not None and (type(effective_lead) is not int or effective_lead<=0):raise APIError('Chef d’équipe invalide.')
+                validate_driver_team_hub(c,uid,driver_hub_id,lead_id=effective_lead)
         if v['role']=='livreur' and 'team_lead_id' in d:
             lead=d['team_lead_id'] or None
             if lead==uid:raise APIError('Un livreur ne peut pas être son propre chef d’équipe.')
-            if lead and not c.execute("SELECT 1 FROM users WHERE id=? AND role='livreur' AND active=1 AND team_lead_id IS NULL",(lead,)).fetchone():raise APIError('Chef d’équipe invalide : livreur actif non rattaché.')
-            if c.execute('SELECT 1 FROM users WHERE team_lead_id=? AND active=1',(uid,)).fetchone() and lead:raise APIError('Ce livreur est lui-même chef d’équipe : détachez d’abord son équipe.')
-            c.execute('UPDATE users SET team_lead_id=? WHERE id=?',(lead,uid))
-        c.execute('UPDATE users SET name=?,phone=?,company=?,active=?,agent_hub_id=? WHERE id=?',(text(d,'name'),text(d,'phone'),text(d,'company',False),int(bool(d.get('active'))),hub_id,uid))
+            if lead is not None and (type(lead) is not int or lead<=0):raise APIError('Chef d’équipe invalide : livreur actif non rattaché.')
+            if lead!=v['team_lead_id']:
+                if lead:validate_driver_team_hub(c,uid,driver_hub_id,lead_id=lead)
+                if c.execute("SELECT 1 FROM users WHERE team_lead_id=? AND role='livreur' AND active=1",(uid,)).fetchone() and lead:raise APIError('Ce livreur est lui-même chef d’équipe : détachez d’abord son équipe.')
+                c.execute('UPDATE users SET team_lead_id=? WHERE id=?',(lead,uid))
+        c.execute('UPDATE users SET name=?,phone=?,company=?,active=?,agent_hub_id=?,driver_hub_id=? WHERE id=?',(text(d,'name'),text(d,'phone'),text(d,'company',False),int(bool(d.get('active'))),hub_id,driver_hub_id,uid))
+        if v['role']=='livreur' and driver_hub_id!=v['driver_hub_id']:
+            append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='driver_hub_reassigned',
+                entity_type='driver_hub_assignment',entity_id=uid,old_value={'driver_hub_id':v['driver_hub_id']},
+                new_value={'driver_hub_id':driver_hub_id},metadata={'reason':'Admin updated courier Hub mapping'},created_at=now())
         if support_city_ids is not None:save_support_cities(c,uid,support_city_ids)
         if not d.get('active') or d.get('password'):
             security_revoke_user(c,uid,'Sessions révoquées par modification administrative',session['uid'])
@@ -680,8 +876,11 @@ def edit_user(uid):
 @auth()
 def profile():
     d=request.get_json() or {};u=user()
+    if not isinstance(d,dict):raise APIError('Objet JSON requis.')
     if 'client_type' in d:raise APIError('Le type de client se gère par l’administration.',403)
     with conn() as c:
+        c.execute('BEGIN IMMEDIATE')
+        save_company_profile(c,u,d,now,APIError)
         if u['role']=='livreur':c.execute('UPDATE users SET driver_revision=driver_revision+1 WHERE id=?',(u['id'],))
         c.execute('UPDATE users SET name=?,phone=?,company=? WHERE id=?',(text(d,'name'),text(d,'phone'),text(d,'company',False),u['id']))
         if d.get('password'):
@@ -870,14 +1069,26 @@ from driver_days import register_driver_days
 register_driver_days(app, globals())
 from logistics import register_logistics
 register_logistics(app, globals())
+from notification_retention import install_notification_retention
+install_notification_retention(app, conn, now)
+from hub_cod import register_hub_cod
+register_hub_cod(app, globals())
+from hub_invoices import register_hub_invoices
+register_hub_invoices(app, globals())
 from fulfillment import register_fulfillment
 register_fulfillment(app, globals())
+from ramassage_bon import register_ramassage_bon
+register_ramassage_bon(app, globals())
 from client_finance import register_client_finance
 register_client_finance(app, globals())
 from vendor_payables import register_vendor_payables
 register_vendor_payables(app, globals())
 from accounts import register_accounts
 register_accounts(app, globals())
+from google_profile import register_google_profile
+register_google_profile(app, globals())
+from client_profile_extras import register_client_profile_extras
+register_client_profile_extras(app, globals())
 from security import register_security
 register_security(app, globals())
 from parcel_contacts import register_parcel_contacts
@@ -902,6 +1113,7 @@ register_billing(app, globals())
 
 from partner_palettes import register_partner_palettes
 register_partner_palettes(app, globals())
+register_company_order_edit(app, globals())
 from return_palettes import register_return_palettes
 register_return_palettes(app, globals())
 
@@ -936,6 +1148,20 @@ register_mobile_app(app, globals())
 from contact_log import register_contact_log
 register_contact_log(app, globals())
 
+from reception_collection import register_reception_collection
+register_reception_collection(app, globals())
+from dispatch_collection import register_dispatch_collection
+register_dispatch_collection(app, globals())
+register_temporary_passwords(app, globals())
+from sidebar_counts import register_sidebar_counts
+register_sidebar_counts(app, globals())
+from hub_billing import register_hub_billing
+register_hub_billing(app, globals())
+from hub_manager_analytics import register_hub_manager_analytics
+register_hub_manager_analytics(app, globals())
+from admin_hub_analytics import register_admin_hub_analytics
+register_admin_hub_analytics(app, globals())
+
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.
 if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':
@@ -947,10 +1173,8 @@ if app.config['DEMO_MODE'] and os.environ.get('ORIENTAL24_DEMO_AGENT')=='1':
             city=c.execute('SELECT id FROM cities ORDER BY id LIMIT 1').fetchone()
             hid=c.execute("INSERT INTO ops_hubs(name,city_id,address,active,created_at) VALUES(?,?,?,1,?)",('Hub Oujda · démo',city['id'],'Zone logistique — données fictives',t)).lastrowid
         home_city=c.execute('SELECT city_id FROM ops_hubs WHERE id=?',(hid,)).fetchone()['city_id']
-        if not c.execute('SELECT 1 FROM hub_cities WHERE hub_id=? AND city_id=?',(hid,home_city)).fetchone():
-            # Demo coverage never auto-designates a city primary; Central Hub fallback is configured by Admin.
-            c.execute('INSERT INTO hub_cities(hub_id,city_id,active,is_primary,created_at) VALUES(?,?,1,0,?)',(hid,home_city,t))
-        if not c.execute("SELECT 1 FROM users WHERE email='agent@oriental24.ma'").fetchone():
+        c.execute('UPDATE cities SET hub_id=? WHERE id=? AND hub_id IS NULL',(hid,home_city))
+        if not c.execute("SELECT 1 FROM users WHERE lower(email)=lower(?)",('agent@oriental24.ma',)).fetchone() and not c.execute("SELECT 1 FROM users WHERE agent_hub_id=? AND role IN ('hub_manager','agent') AND active=1",(hid,)).fetchone():
             c.execute('INSERT INTO users(name,email,password,role,company,phone,active,client_type,agent_hub_id,created_at) VALUES(?,?,?,?,?,?,1,?,?,?)',('Nadia Réception','agent@oriental24.ma',generate_password_hash('Oriental24!Demo'),'hub_manager','ORIENTAL24','0600000000','vendeur',hid,t))
 
 

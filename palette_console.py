@@ -7,6 +7,7 @@ palette naît déjà « En transit ». Aucun effet financier. Les images jointes
 stocknées en base comme les preuves de colis, jamais sur disque."""
 import base64,csv,hashlib,io,json,re,datetime
 from flask import request,jsonify,Response
+from partner_intake import partner_intake_status
 from client_types import tracking_text
 
 PKIND='partner_palette'
@@ -87,7 +88,7 @@ def register_palette_console(app,s):
         dfrom=d10(request.args.get('date_from'),'Date de début');dto=d10(request.args.get('date_to'),'Date de fin')
         try:
             page=int(request.args.get('page',1));size=int(request.args.get('size',30))
-            if page<1 or size not in (30,50,100):raise ValueError()
+            if page<1 or size not in (10,20,30,50,80,100,200,500):raise ValueError()
         except (ValueError,TypeError):raise Error('Pagination invalide.')
         today=datetime.date.fromisoformat(now()[:10])
         rel=[]
@@ -201,8 +202,9 @@ def register_palette_console(app,s):
                 picked.append(l)
             if not picked:raise Error('Aucun colis à réceptionner dans cette sélection.',404)
             for l in picked:
-                c.execute("UPDATE parcels SET status='Réceptionné',current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(doc_['destination_hub_id'],at,l['parcel_id']))
-                event(c,l['parcel_id'],'Réceptionné',doc_['reference']+' · réception physique ORIENTAL24 à '+doc_['destination_name'],u)
+                received_status=partner_intake_status(c,l['parcel_id'],doc_['destination_hub_id'])
+                c.execute("UPDATE parcels SET status=?,current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(received_status,doc_['destination_hub_id'],at,l['parcel_id']))
+                event(c,l['parcel_id'],received_status,doc_['reference']+' · réception physique ORIENTAL24 à '+doc_['destination_name'],u)
                 c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
                 done.append(l['tracking'])
             pend=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND received_at IS NULL AND missing_at IS NULL',(did,)).fetchone()[0]
@@ -260,34 +262,7 @@ def register_palette_console(app,s):
                 return memo(c,u,d,fp,{'ok':True,'id':did,'tracking':line['tracking'],'already_received':True,'remaining_exceptions':remaining})
             if not line['missing_at']:raise Error('Ce colis n’est plus dans la liste des colis non réceptionnés. Actualisez.',409)
             if line['missing_at']!=expected:raise Error('L’état du colis a changé. Actualisez puis recommencez.',409)
-            p=c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
-            if not p or p['client_id']!=doc_['client_id']:raise Error('Commande introuvable pour cette palette.',404)
-            if p['status']!='Créé' or p['driver_id'] is not None or p['current_hub_id'] is not None or p['invoice_id']:
-                raise Error('État de la commande modifié depuis sa déclaration : vérifiez-la avant la réception.',409)
-            at=now();previous_missing_at=line['missing_at']
-            changed=c.execute('''UPDATE ops_document_lines SET received_at=?,received_by=?,active=0,missing_at=NULL,missing_by=NULL
-                WHERE id=? AND missing_at=? AND received_at IS NULL''',(at,u['id'],line['id'],expected)).rowcount
-            if changed!=1:raise Error('La ligne a changé. Actualisez puis recommencez.',409)
-            c.execute("UPDATE parcels SET status='Réceptionné',current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",
-                      (doc_['destination_hub_id'],at,line['parcel_id']))
-            event(c,line['parcel_id'],'Réceptionné',doc_['reference']+' · réception tardive au hub '+doc_['destination_name']+' après déclaration non réceptionnée',u)
-            received=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND received_at IS NOT NULL',(did,)).fetchone()[0]
-            pending=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND received_at IS NULL AND missing_at IS NULL',(did,)).fetchone()[0]
-            missing=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND missing_at IS NOT NULL',(did,)).fetchone()[0]
-            if pending:
-                status='Partiellement reçu' if received else 'En transit';completed=None
-            elif missing:
-                status='Clôturé (écarts)';completed=doc_['completed_at'] or at
-            else:
-                status='Reçu';completed=at
-            c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',(status,completed,did))
-            audit(c,did,u,'Réception tardive confirmée après déclaration non réceptionnée',
-                  {'tracking':line['tracking'],'trackings':[line['tracking']],'missing_at':previous_missing_at,'received_at':at,'hub_id':doc_['destination_hub_id']})
-            title='Colis retrouvé et réceptionné · '+doc_['reference']
-            c.execute('INSERT INTO ops_notifications(user_id,title,body,created_at) VALUES(?,?,?,?)',
-                      (doc_['client_id'],title,'Le colis '+line['tracking']+' déclaré non réceptionné a été retrouvé puis réceptionné au hub '+doc_['destination_name']+'. '+str(missing)+' exception(s) restante(s).',at))
-            return memo(c,u,d,fp,{'ok':True,'id':did,'tracking':line['tracking'],'received':True,
-                                  'remaining_exceptions':missing,'pending':pending,'status':status,'reference':doc_['reference']})
+            return memo(c,u,d,fp,collection_recovered_apply_line(c,doc_,line,u))
 
     # ------------------------------------------------------------------ clôture
     @app.post('/api/palette-console/<kind>/<int:did>/close')
@@ -347,7 +322,7 @@ def register_palette_console(app,s):
                 p=c.execute("SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE p.tracking=? AND p.client_id=?",(code,cl['id'])).fetchone()
                 if not p:raise Error('Colis '+code+' introuvable pour ce vendeur.',404)
                 p=dict(p)
-                if p['status'] not in ('Refusé','Retourné'):raise Error('Colis '+code+' : seuls Refusé/Retourné sont retournables.',409)
+                if p['status'] not in ('Refusé','Retourné','Échange Réceptionné'):raise Error('Colis '+code+' : seuls Refusé/Retourné sont retournables.',409)
                 if p['current_hub_id']!=h['id']:raise Error('Colis '+code+' physiquement hors du hub choisi.',409)
                 if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():raise Error('Colis '+code+' déjà réservé dans un document actif.',409)
                 ps.append(p)
@@ -401,3 +376,53 @@ def register_palette_console(app,s):
             w.writerow(['Palette','Vendeur / Société','Source','Destination','État','Nb colis','Reçus','Non réceptionnés','Lots','Transport','Suivi','Créée le','Envoyée le'])
             w.writerow([d['reference'],d['client_name'],d['source_name'],d['destination_name'],d['status'],cnt[0],cnt[1] or 0,cnt[2] or 0,d['lots'],d['transport'],d['track_ref'],d['created_at'],d['dispatched_at'] or ''])
             return Response('\ufeff'+buf.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="ORIENTAL24-'+d['reference']+'.resume.csv"','Cache-Control':'private, no-store'})
+
+    def collection_recovered_apply_line(c,doc_,line,u):
+        did=doc_['id'];expected=line['missing_at']
+        p=c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
+        if not p or p['client_id']!=doc_['client_id']:raise Error('Commande introuvable pour cette palette.',404)
+        if p['status']!='Créé' or p['driver_id'] is not None or p['current_hub_id'] is not None or p['invoice_id']:
+            raise Error('État de la commande modifié depuis sa déclaration : vérifiez-la avant la réception.',409)
+        at=now();previous_missing_at=line['missing_at']
+        changed=c.execute('''UPDATE ops_document_lines SET received_at=?,received_by=?,active=0,missing_at=NULL,missing_by=NULL
+            WHERE id=? AND missing_at=? AND received_at IS NULL''',(at,u['id'],line['id'],expected)).rowcount
+        if changed!=1:raise Error('La ligne a changé. Actualisez puis recommencez.',409)
+        received_status=partner_intake_status(c,line['parcel_id'],doc_['destination_hub_id'])
+        c.execute("UPDATE parcels SET status=?,current_hub_id=?,reason_code=NULL,next_attempt_at=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",
+                  (received_status,doc_['destination_hub_id'],at,line['parcel_id']))
+        event(c,line['parcel_id'],received_status,doc_['reference']+' · réception tardive au hub '+doc_['destination_name']+' après déclaration non réceptionnée',u)
+        received=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND received_at IS NOT NULL',(did,)).fetchone()[0]
+        pending=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND received_at IS NULL AND missing_at IS NULL',(did,)).fetchone()[0]
+        missing=c.execute('SELECT count(*) FROM ops_document_lines WHERE document_id=? AND missing_at IS NOT NULL',(did,)).fetchone()[0]
+        if pending:
+            status='Partiellement reçu' if received else 'En transit';completed=None
+        elif missing:
+            status='Clôturé (écarts)';completed=doc_['completed_at'] or at
+        else:
+            status='Reçu';completed=at
+        c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',(status,completed,did))
+        audit(c,did,u,'Réception tardive confirmée après déclaration non réceptionnée',
+              {'tracking':line['tracking'],'trackings':[line['tracking']],'missing_at':previous_missing_at,'received_at':at,'hub_id':doc_['destination_hub_id']})
+        title='Colis retrouvé et réceptionné · '+doc_['reference']
+        c.execute('INSERT INTO ops_notifications(user_id,title,body,created_at) VALUES(?,?,?,?)',
+                  (doc_['client_id'],title,'Le colis '+line['tracking']+' déclaré non réceptionné a été retrouvé puis réceptionné au hub '+doc_['destination_name']+'. '+str(missing)+' exception(s) restante(s).',at))
+        return {'ok':True,'id':did,'tracking':line['tracking'],'received':True,
+                              'remaining_exceptions':missing,'pending':pending,'status':status,'reference':doc_['reference']}
+
+    def collection_recovered_load(c,line_id,u):
+        access(u)
+        row=c.execute('SELECT document_id FROM ops_document_lines WHERE id=?',(line_id,)).fetchone()
+        if not row:raise Error('Colis introuvable.',404)
+        d=doc(c,row['document_id'],'partner',u)
+        line=next(l for l in lines(c,d['id']) if l['id']==line_id)
+        if not line['missing_at'] and not line['received_at']:raise Error('Colis non déclaré manquant.',409)
+        original=dict(d)
+        d={**d,'original':original,'status':'En transit' if d['status'] in ('En transit','Partiellement reçu','Clôturé (écarts)') else d['status']}
+        line={**line,'expected_missing_at':line['missing_at'],'missing_at':None}
+        return d,[line]
+
+    def collection_recovered_apply(c,d,ls,u):
+        for line in ls:
+            collection_recovered_apply_line(c,d['original'],{**line,'missing_at':line['expected_missing_at']},u)
+
+    s.setdefault('reception_adapters',{})['recovered']={'load':collection_recovered_load,'apply':collection_recovered_apply}

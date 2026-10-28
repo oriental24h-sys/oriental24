@@ -7,10 +7,40 @@ import re
 import sqlite3
 
 HUB_MANAGER_SCOPED_ROUTES = (
-    ('GET', r'/api/bootstrap'), ('GET', r'/api/parcels/\d+'),
+    # Fulfillment endpoints enforce an active, explicitly configured Central Hub.
+    ('GET', r'/api/fulfillment/orders'),
+    ('GET', r'/api/fulfillment/orders/\d+'),
+    ('POST', r'/api/fulfillment/orders/\d+/ship'),
+    ('GET', r'/api/hub-manager-analytics'),
+    ('GET', r'/api/billing'), ('GET', r'/api/billing/export'),
+    ('GET', r'/api/billing/livreur/\d+'),
+    ('GET', r'/api/billing/livreur/\d+/(?:pdf|csv)'),
+    ('POST', r'/api/billing/livreur/\d+/(?:settle|reopen)'),
+    ('POST', r'/api/driver-finance/statements/\d+/transactions'),
+    ('GET', r'/api/hub-billing'),
+    ('GET', r'/api/hub-billing/\d+'),
+    ('GET', r'/api/hub-billing/\d+/csv'),
+    ('GET', r'/api/hub-billing/\d+/pdf'),
+    ('GET', r'/api/drivers-workspace/\d+'),
+    ('POST', r'/api/drivers-workspace/\d+/scan-preview'),
+    ('POST', r'/api/drivers-workspace/\d+/scan-batch'),
+    ('GET', r'/api/driver-finance/terms'),
+    ('PUT', r'/api/driver-finance/terms/\d+'),
+    ('GET', r'/api/driver-finance/terms/\d+/history'),
+    ('POST', r'/api/driver-finance/preview'),
+    ('POST', r'/api/driver-finance/preview/[a-f0-9]{32}/confirm'),
+    ('GET', r'/api/driver-finance/statements/\d+'),
+    ('GET', r'/api/sidebar-counts'), ('GET', r'/api/bootstrap'), ('GET', r'/api/parcels/\d+'),
+    ('PATCH', r'/api/parcels/\d+'),
     ('POST', r'/api/logout'), ('PATCH', r'/api/profile'),
+    # Réclamations : création et suivi limités aux propres tickets du compte.
+    # PATCH reste réservé à Admin par le handler lui-même (message explicite).
     ('GET', r'/api/tickets'), ('POST', r'/api/tickets'),
     ('GET', r'/api/tickets/\d+'), ('POST', r'/api/tickets/\d+'),
+    ('PATCH', r'/api/tickets/\d+'),
+    # Demandes de modification de prix : lecture filtrée sur user_id, écriture
+    # vérifiée par parcel() (donc bornée au Hub/à la traçabilité du compte).
+    ('GET', r'/api/requests'), ('POST', r'/api/requests'),
     ('GET', r'/api/announcements'),
     ('GET', r'/api/security/sessions'), ('POST', r'/api/security/sessions/revoke-others'),
     ('DELETE', r'/api/security/sessions/\d+'),
@@ -22,7 +52,16 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('POST', r'/api/logistics/parcels/\d+/tickets'),
     ('GET', r'/api/logistics/config'),
     ('GET', r'/api/logistics/documents'), ('GET', r'/api/logistics/documents/\d+'),
+    ('POST', r'/api/logistics/documents'),
+    ('GET', r'/api/logistics/palettes'), ('GET', r'/api/logistics/palette-candidates'),
     ('GET', r'/api/logistics/hub-dashboard'),
+    ('GET', r'/api/logistics/hub/drivers'), ('POST', r'/api/logistics/hub/drivers'),
+    ('PATCH', r'/api/logistics/hub/drivers/\d+'),
+    ('POST', r'/api/logistics/hub/drivers/\d+/access'),
+    ('POST', r'/api/logistics/hub/assignments'), ('GET', r'/api/logistics/hub/invoices'),
+    ('GET', r'/api/logistics/hub/driver-statements'),
+    ('GET', r'/api/logistics/cod/hub'),
+    ('POST', r'/api/logistics/cod/hub/handoffs'),
     ('POST', r'/api/logistics/documents/\d+/departure-scan'),
     ('POST', r'/api/logistics/documents/\d+/receive'),
     ('GET', r'/api/logistics/notifications'), ('PATCH', r'/api/logistics/notifications'),
@@ -39,6 +78,12 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('POST', r'/api/partner-palettes/fusion'), ('GET', r'/api/partner-palettes/fusion/\d+'),
     ('POST', r'/api/partner-palettes/fusion/\d+/scan'),
     ('POST', r'/api/partner-palettes/fusion/\d+/close'),
+    ('GET', r'/api/control-tower'),
+    ('GET', r'/api/control-tower/map-data'),
+    ('POST', r'/api/control-tower/ramassage'),
+    ('GET', r'/api/control-tower/ramassage/\d+/candidates'),
+    ('POST', r'/api/control-tower/ramassage/\d+/assign'),
+    ('GET', r'/api/control-tower/route-history/\d+'),
     ('GET', r'/api/return-palettes/config'), ('GET', r'/api/return-palettes/vendor-counts'),
     ('GET', r'/api/return-palettes/candidates'), ('GET', r'/api/return-palettes'),
     ('POST', r'/api/return-palettes'), ('GET', r'/api/return-palettes/\d+'),
@@ -48,11 +93,29 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('POST', r'/api/return-palettes/\d+/receive'),
     ('GET', r'/api/return-palettes/scan-lookup'), ('POST', r'/api/return-palettes/scan-send'),
     ('POST', r'/api/return-palettes/\d+/refuse'),
+    ('GET', r'/api/dispatch-collection/(transfer|return)/\d+'),
+    ('GET', r'/api/dispatch-collection/(transfer|return)/\d+/check'),
+    ('POST', r'/api/dispatch-collection/(transfer|return)/\d+'),
+    ('GET', r'/api/reception-collection/(transfer|partner|return|fusion|recovered)/\d+'),
+    ('POST', r'/api/reception-collection/(transfer|partner|return|fusion|recovered)/\d+'),
+    ('GET', r'/api/ramassage-bons'),
+    ('GET', r'/api/ramassage-bons/hub/queue'),
+    ('GET', r'/api/ramassage-bons/hub/collected'),
+    ('GET', r'/api/ramassage-bons/\d+'),
+    ('POST', r'/api/ramassage-bons/\d+/receive'),
+    ('POST', r'/api/ramassage-bons/\d+/receive-batch'),
 )
 
 HUB_OPERATIONAL_PREFIXES = (
-    '/api/parcels/', '/api/logistics/parcels/', '/api/logistics/config', '/api/logistics/documents', '/api/logistics/hub-dashboard', '/api/logistics/notifications', '/api/partner-palettes',
+    '/api/fulfillment/',
+    '/api/hub-manager-analytics',
+    '/api/hub-billing',
+    '/api/billing',
+    '/api/drivers-workspace', '/api/driver-finance',
+    '/api/parcels/', '/api/logistics/parcels/', '/api/logistics/config', '/api/logistics/documents', '/api/logistics/hub-dashboard', '/api/logistics/hub/', '/api/logistics/hub/drivers', '/api/logistics/cod/', '/api/logistics/notifications', '/api/partner-palettes',
     '/api/partner-palette-incidents', '/api/return-palettes', '/api/alerts',
+    '/api/control-tower', '/api/logistics/palettes', '/api/logistics/palette-candidates',
+    '/api/sidebar-counts', '/api/ramassage-bons', '/api/reception-collection', '/api/dispatch-collection',
 )
 
 
@@ -98,11 +161,55 @@ def parcel_physically_at_hub(current_hub_id, hub_id):
     return type(current_hub_id) is int and current_hub_id>0 and type(hub_id) is int and hub_id>0 and current_hub_id==hub_id
 
 
+def driver_dispatch_allowed(connection, current_hub_id, driver_hub_id):
+    """Allow a new handoff only at the courier's explicitly assigned active Hub."""
+    if not parcel_physically_at_hub(current_hub_id,driver_hub_id):
+        return False
+    try:
+        return bool(connection.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(driver_hub_id,)).fetchone())
+    except sqlite3.Error:
+        return False
+
+
+def driver_team_member_ids(connection, lead_id):
+    """Return active team members only when lead and members share one active Hub."""
+    if type(lead_id) is not int or lead_id<=0:
+        return []
+    try:
+        lead=connection.execute('''SELECT u.driver_hub_id FROM users u JOIN ops_hubs h
+            ON h.id=u.driver_hub_id AND h.active=1
+            WHERE u.id=? AND u.role='livreur' AND u.active=1''',(lead_id,)).fetchone()
+        if not lead or type(lead[0]) is not int or lead[0]<=0:
+            return []
+        return [row[0] for row in connection.execute('''SELECT u.id FROM users u JOIN ops_hubs h
+            ON h.id=u.driver_hub_id AND h.active=1
+            WHERE u.team_lead_id=? AND u.role='livreur' AND u.active=1 AND u.driver_hub_id=? ORDER BY u.id''',
+            (lead_id,lead[0]))]
+    except sqlite3.Error:
+        return []
+
+
 def hub_document_lines_at_hub(lines, hub_id):
     """Expose document line details only while each parcel is physically at this Hub."""
     if isinstance(hub_id, bool) or not isinstance(hub_id, int) or hub_id<=0:
         return []
     return [line for line in lines if type(line.get('current_hub_id')) is int and line.get('current_hub_id')==hub_id]
+
+
+def hub_transfer_manifest_lines(lines, document, hub_id):
+    """A manifest is shipment history, not a query of current physical stock.
+
+    The source keeps its full manifest. The destination can read departed/received
+    lines, without acquiring custody or access to unsent source parcels.
+    """
+    if hub_manager_transfer_scope(document, hub_id, 'departure'):
+        return list(lines)
+    if not hub_manager_transfer_scope(document, hub_id, 'arrival'):
+        return []
+    legacy_departed = not document.get('departure_scan_required') and document.get('dispatched_at')
+    return [line for line in lines if not line.get('departure_reconciled_at')
+            and (line.get('departure_scanned_at') or line.get('received_at') or legacy_departed
+                 or line.get('current_hub_id') == hub_id)]
 
 
 def hub_manager_transfer_scope(document, hub_id, direction):
@@ -158,6 +265,38 @@ def hub_parcel_scope(conn, alias, hub_id):
     return f'{alias}.current_hub_id=?', [hub_id]
 
 
+def hub_tracking_parcel_scope(conn, alias, hub_id):
+    """Read-only visibility: physical stock plus tours handed off by this Hub.
+    Mutations must continue using hub_parcel_scope (physical custody only).
+    Never infer ownership from the courier's current Hub or the recipient city.
+    """
+    physical, args = hub_parcel_scope(conn, alias, hub_id)
+    if not args:
+        return '1=0', []
+    return f"""({physical} OR ({alias}.current_hub_id IS NULL
+        AND {alias}.driver_id IS NOT NULL AND {alias}.status NOT IN ('Transit','Vers Hub Central')
+        AND EXISTS(SELECT 1 FROM ops_assignments a
+            WHERE a.parcel_id={alias}.id AND a.new_driver_id={alias}.driver_id AND a.hub_id=?
+              AND a.id=(SELECT max(latest.id) FROM ops_assignments latest WHERE latest.parcel_id={alias}.id))))""", [hub_id, hub_id]
+
+
+def hub_read_parcel_scope(conn, alias, hub_id):
+    """Read-only tracking includes parcels actually dispatched by this Hub.
+
+    Historical departure evidence remains valid after receipt or onward delivery.
+    Never use this scope for mutations, inventory, dispatch candidates or finance.
+    """
+    current, args = hub_tracking_parcel_scope(conn, alias, hub_id)
+    if not args:
+        return '1=0', []
+    return f"""({current} OR EXISTS(
+        SELECT 1 FROM ops_document_lines sent JOIN ops_documents doc ON doc.id=sent.document_id
+        WHERE sent.parcel_id={alias}.id AND doc.kind='transfer' AND doc.source_hub_id=?
+          AND doc.status!='Annulé' AND sent.departure_reconciled_at IS NULL
+          AND (sent.departure_scanned_at IS NOT NULL
+               OR (doc.departure_scan_required=0 AND doc.dispatched_at IS NOT NULL))))""", args + [hub_id]
+
+
 def parcel_by_tracking_at_hub(conn, tracking, hub_id):
     """Fetch a parcel only when it is physically recorded at the selected Hub."""
     if isinstance(hub_id, bool) or not isinstance(hub_id, int) or hub_id <= 0:
@@ -177,3 +316,29 @@ def parcel_by_manifest_at_hub(conn, reference, hub_id):
         AND l.active=1 AND p.current_hub_id=? ORDER BY l.id LIMIT 1''',
         (reference, hub_id, hub_id),
     ).fetchone()
+
+
+def local_driver_parcel_scope(alias='p'):
+    """Custody at this Hub, or a courier tour dispatched from this Hub.
+
+    Parameters: local Hub twice. Never infer historical custody from today's
+    courier mapping alone. Latest assignment wins, including a NULL snapshot.
+    """
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', alias):
+        raise ValueError('Invalid SQL alias')
+    return f"""({alias}.current_hub_id=? OR ({alias}.current_hub_id IS NULL AND
+        (SELECT a.hub_id FROM ops_assignments a WHERE a.parcel_id={alias}.id
+         AND a.new_driver_id={alias}.driver_id ORDER BY a.id DESC LIMIT 1)=?))"""
+
+
+def driver_financial_hub_sql(alias='p'):
+    """Prefer the recorded closing attempt; otherwise the latest assignment.
+    Legacy rows with no evidence remain Admin-only.
+    """
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', alias):
+        raise ValueError('Invalid SQL alias')
+    return f"""COALESCE(
+        (SELECT a.operational_hub_id FROM ops_attempts a WHERE a.parcel_id={alias}.id
+         AND a.driver_id={alias}.driver_id AND a.outcome={alias}.status ORDER BY a.id DESC LIMIT 1),
+        (SELECT a.hub_id FROM ops_assignments a WHERE a.parcel_id={alias}.id
+         AND a.new_driver_id={alias}.driver_id ORDER BY a.id DESC LIMIT 1))"""

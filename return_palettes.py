@@ -90,7 +90,7 @@ def register_return_palettes(app,s):
         c.execute('INSERT INTO ops_audit(document_id,actor_id,action,details,created_at) VALUES(?,?,?,?,?)',(did,u['id'],action,json.dumps(details,ensure_ascii=False),now()))
     def lockcheck(c,p,cid,hid,did=None):
         if p['client_id']!=cid:raise Error('Colis inaccessible pour ce vendeur.',404)
-        if p['status'] not in ('Refusé','Retourné'):
+        if p['status'] not in ('Refusé','Retourné','Échange Réceptionné'):
             raise Error('Palette retour : uniquement des colis Refusé ou Retourné.',409)
         if p['current_hub_id']!=hid:raise Error('Colis physiquement hors du hub choisi.',409)
         if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1 AND document_id<>?',(p['id'],did or -1)).fetchone():raise Error('Colis déjà réservé dans un document actif.',409)
@@ -120,7 +120,7 @@ def register_return_palettes(app,s):
                 hubs=c.execute('SELECT h.id,h.name,h.address,ci.name city FROM ops_hubs h JOIN cities ci ON ci.id=h.city_id WHERE h.active=1 AND h.id=?',(hub_id,)).fetchall()
                 clients=c.execute('''SELECT DISTINCT u.id,u.name,u.company,u.client_type FROM users u
                     JOIN parcels p ON p.client_id=u.id WHERE u.role='client' AND u.active=1
-                    AND p.current_hub_id=? AND p.status IN ('Refusé','Retourné')
+                    AND p.current_hub_id=? AND p.status IN ('Refusé','Retourné','Échange Réceptionné')
                     AND NOT EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.parcel_id=p.id AND l.active=1)
                     ORDER BY u.company,u.name''',(hub_id,)).fetchall()
             else:
@@ -134,7 +134,7 @@ def register_return_palettes(app,s):
         u=user();access(u)
         with conn() as c:
             h=hub(c,request.args.get('hub_id'),u)
-            rows=c.execute('''SELECT p.client_id,COUNT(*) n FROM parcels p WHERE p.status IN ('Refusé','Retourné') AND p.current_hub_id=? AND NOT EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.parcel_id=p.id AND l.active=1) GROUP BY p.client_id''',(h['id'],)).fetchall()
+            rows=c.execute('''SELECT p.client_id,COUNT(*) n FROM parcels p WHERE p.status IN ('Refusé','Retourné','Échange Réceptionné') AND p.current_hub_id=? AND NOT EXISTS(SELECT 1 FROM ops_document_lines l WHERE l.parcel_id=p.id AND l.active=1) GROUP BY p.client_id''',(h['id'],)).fetchall()
             return jsonify(counts={str(r['client_id']):r['n'] for r in rows})
 
     @app.get('/api/return-palettes/candidates')
@@ -143,7 +143,7 @@ def register_return_palettes(app,s):
         u=user();access(u)
         with conn() as c:
             cl=client(c,request.args.get('client_id'));h=hub(c,request.args.get('hub_id'),u);rows=[]
-            for p in c.execute("SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE p.client_id=? AND p.status IN ('Refusé','Retourné') AND p.current_hub_id=? ORDER BY p.updated_at DESC",(cl['id'],h['id'])).fetchall():
+            for p in c.execute("SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE p.client_id=? AND p.status IN ('Refusé','Retourné','Échange Réceptionné') AND p.current_hub_id=? ORDER BY p.updated_at DESC",(cl['id'],h['id'])).fetchall():
                 try:lockcheck(c,p,cl['id'],h['id'])
                 except Error:continue
                 rows.append({k:p[k] for k in ['id','tracking','recipient','city','phone','status']})
@@ -166,7 +166,7 @@ def register_return_palettes(app,s):
                     where.append("(instr(lower(d.reference),lower(?))>0 OR instr(lower(d.client_name),lower(?))>0 OR instr(lower(COALESCE(m.tracking_code,'')),lower(?))>0 OR EXISTS(SELECT 1 FROM ops_document_lines l JOIN parcels p ON p.id=l.parcel_id WHERE l.document_id=d.id AND (instr(lower(COALESCE(l.tracking,'')),lower(?))>0 OR instr(lower(COALESCE(p.tracking,'')),lower(?))>0)))");args.extend([q]*5)
                 try:
                     page=int(request.args.get('page',1));size=int(request.args.get('size',20))
-                    if page<1 or size not in [20,50,100]:raise ValueError()
+                    if page<1 or size not in [10,20,30,50,80,100,200,500]:raise ValueError()
                 except (ValueError,TypeError):raise Error('Pagination invalide.')
                 sql=' FROM ops_documents d JOIN return_palette_meta m ON m.document_id=d.id WHERE '+' AND '.join(where)
                 total=c.execute('SELECT count(*)'+sql,args).fetchone()[0];page=min(page,max(1,(total+size-1)//size))
@@ -264,19 +264,47 @@ def register_return_palettes(app,s):
             pending=[l for l in ls if not l['received_at']]
             if action=='receive-all' and (type(d.get('expected_remaining')) is not int or d['expected_remaining']!=len(pending)):raise Error('Le nombre de colis restants a changé. Actualisez.',409)
             received=[line(d.get('tracking'))] if action=='receive' else pending
-            for l in received:
-                p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
-                if not p or p['status']=='Livré':raise Error('Colis '+l['tracking']+' : un colis « Livré » ne peut pas être confirmé comme retour.',409)
-            status_changes=[]
-            for l in received:
-                p=c.execute('SELECT status FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
-                old_status=p['status']
-                c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
-                c.execute("UPDATE parcels SET status='Retourné',current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(at,l['parcel_id']))
-                note=doc['reference']+' · retour physiquement remis au vendeur · statut '+old_status+' → Retourné'
-                event(c,l['parcel_id'],'Retourné',note,u)
-                status_changes.append({'parcel_id':l['parcel_id'],'tracking':l['tracking'],'from':old_status,'to':'Retourné'})
-            complete=len(received)==len(pending)
-            c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Remis' if complete else 'Partiellement remis',at if complete else None,did))
-            audit(c,did,u,'Retour remis au vendeur (complet)' if action=='receive-all' else 'Colis retour remis au vendeur',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'status':'Retourné','status_changes':status_changes})
+            collection_apply(c,doc,received,u,action)
             return result(c,u,d,fp,get(c,did,u),received=len(received),already_received=False)
+
+    def collection_apply(c,doc,received,u,action='receive-all'):
+        did=doc['id'];pending=[l for l in lines(c,did) if not l['received_at']];at=now()
+        for l in received:
+            p=c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
+            if not p or p['status']=='Livré':raise Error('Colis '+l['tracking']+' : un colis « Livré » ne peut pas être confirmé comme retour.',409)
+        status_changes=[]
+        for l in received:
+            p=c.execute('SELECT status FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()
+            old_status=p['status']
+            c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(at,u['id'],l['id']))
+            c.execute("UPDATE parcels SET status='Retourné',current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(at,l['parcel_id']))
+            note=doc['reference']+' · retour physiquement remis au vendeur · statut '+old_status+' → Retourné'
+            event(c,l['parcel_id'],'Retourné',note,u)
+            status_changes.append({'parcel_id':l['parcel_id'],'tracking':l['tracking'],'from':old_status,'to':'Retourné'})
+        complete=len(received)==len(pending)
+        c.execute('UPDATE ops_documents SET status=?,completed_at=?,revision=revision+1 WHERE id=?',('Remis' if complete else 'Partiellement remis',at if complete else None,did))
+        audit(c,did,u,'Retour remis au vendeur (complet)' if complete else 'Retour remis au vendeur (partiel)',{'parcel_ids':[l['parcel_id'] for l in received],'trackings':[l['tracking'] for l in received],'count':len(received),'status':'Retourné','status_changes':status_changes})
+
+    def collection_load(c,did,u):
+        access(u);doc=get(c,did,u)
+        return doc,lines(c,did)
+
+    s.setdefault('reception_adapters',{})['return']={'load':collection_load,'apply':collection_apply}
+
+    def dispatch_collection_load(c,did,u):
+        creator(u);doc=get(c,did,u)
+        doc['hub_snapshot']=hub(c,doc['destination_hub_id'],u)
+        return doc,lines(c,did)
+
+    def dispatch_collection_check(c,doc,line,u):
+        p=c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()
+        lockcheck(c,p,doc['client_id'],doc['destination_hub_id'],doc['id'])
+        if not line['active'] or line['tracking']!=p['tracking']:raise Error('Contenu du manifeste modifié.',409)
+
+    def dispatch_collection_apply(c,doc,ls,u):
+        at=now();did=doc['id']
+        c.execute("UPDATE ops_documents SET status='En transit',dispatched_at=?,revision=revision+1 WHERE id=?",(at,did))
+        audit(c,did,u,'Retour expédié après collecte des scans',{'count':len(ls),'trackings':[l['tracking'] for l in ls],'transport':doc['transport'],'tracking_code':doc['tracking_code'],'lots':doc['lots']})
+        for l in ls:event(c,l['parcel_id'],l['initial_status'],doc['reference']+' · retour expédié au vendeur, remise encore attendue',u)
+
+    s.setdefault('dispatch_adapters',{})['return']={'load':dispatch_collection_load,'check':dispatch_collection_check,'apply':dispatch_collection_apply}
