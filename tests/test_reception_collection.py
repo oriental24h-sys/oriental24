@@ -19,7 +19,7 @@ class ReceptionCollectionTests(unittest.TestCase):
         register_palette_console(a,s)
         register_reception_collection(a,s)
         self.client=self.t.client;self.conn=self.t.conn
-        self.admin=self.t.headers('admin');self.central=self.t.headers('agent',90,990);self.other=self.t.headers('agent',20,920)
+        self.admin=self.t.headers('admin');self.central=self.t.headers('hub_manager',90,990);self.other=self.t.headers('hub_manager',20,920)
         with self.conn() as c:
             c.execute("INSERT INTO users(id,name,email,role,client_type) VALUES(2,'Seller','s@test','client','vendeur')")
             c.execute("INSERT INTO users(id,name,email,role,client_type) VALUES(6,'Company','c@test','client','societe_livraison')")
@@ -35,7 +35,7 @@ class ReceptionCollectionTests(unittest.TestCase):
     def transfer(self,ids=(3,4),purpose='standard'):
         if purpose!='standard':
             with self.conn() as c:c.execute("UPDATE parcels SET status='Refusé' WHERE id IN (3,4)")
-        r=self.t.create_palette('agent',10,purpose,10,90,list(ids),910)
+        r=self.t.create_palette('hub_manager',10,purpose,10,90,list(ids),910)
         self.assertEqual(r.status_code,200,r.json);return r.json['id']
     def dispatch(self,did,ids=(3,4)):
         for pid in ids:
@@ -84,7 +84,7 @@ class ReceptionCollectionTests(unittest.TestCase):
         r=self.client.get('/api/logistics/palette-candidates?mode=standard&source_hub_id=90&destination_hub_id=20',headers=self.central)
         self.assertEqual(r.status_code,200,r.json)
         self.assertIn(3,[p['id'] for p in r.json['rows']]);self.assertNotIn(4,[p['id'] for p in r.json['rows']])
-        new=self.t.create_palette('agent',90,'standard',90,20,[3],990)
+        new=self.t.create_palette('hub_manager',90,'standard',90,20,[3],990)
         self.assertEqual(new.status_code,200,new.json)
         # Finish the first palette after its first received parcel was already forwarded.
         rest=self.body(self.manifest('transfer',did,self.central))
