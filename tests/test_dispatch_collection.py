@@ -107,6 +107,25 @@ class DispatchCollectionTests(unittest.TestCase):
         for k in ('status','amount','invoice_id'):self.assertEqual(after[k],before[k])
         self.assertTrue(self.commit('return',did,p,self.central).json['replayed'])
 
+    def test_return_dispatch_revalidates_physical_hub_after_refresh(self):
+        did=self.palette('return')
+        # The parcel was in the return Hub when the draft was prepared, but
+        # its physical custody changes before the final dispatch confirmation.
+        with self.conn() as c:
+            c.execute('UPDATE parcels SET current_hub_id=10 WHERE id=3')
+        fresh=self.manifest('return',did,self.central)
+        self.assertTrue(any(line['blocked'] for line in fresh['lines']))
+        response=self.commit('return',did,self.payload(fresh),self.central)
+        self.assertEqual(response.status_code,409,response.json)
+        with self.conn() as c:
+            doc=c.execute('SELECT status,dispatched_at FROM ops_documents WHERE id=?',(did,)).fetchone()
+            self.assertEqual(doc['status'],'Préparé')
+            self.assertIsNone(doc['dispatched_at'])
+            self.assertEqual(c.execute(
+                "SELECT count(*) FROM ops_audit WHERE document_id=? AND action='Retour expédié après collecte des scans'",
+                (did,)).fetchone()[0],0)
+        self.assertEqual(self.t.parcel_state(3)['current_hub_id'],10)
+
     def test_legacy_partial_departure_only_requires_remaining(self):
         did=self.r.transfer();self.r.dispatch(did,(3,))
         d=self.manifest('transfer',did,self.source);p=self.payload(d)
