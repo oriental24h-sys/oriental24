@@ -30,6 +30,32 @@ class LegacyHubManagerRoleMigrationTests(unittest.TestCase):
             db.close()
 
 
+    def test_legacy_duplicate_managers_migrate_without_losing_accounts(self):
+        db=sqlite3.connect(':memory:')
+        try:
+            db.execute('''CREATE TABLE users(
+                id INTEGER PRIMARY KEY, role TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1, agent_hub_id INTEGER
+            )''')
+            # Represents an older database whose duplicate rows predate these guards.
+            db.executemany('INSERT INTO users(id,role,active,agent_hub_id) VALUES(?,?,?,?)',[
+                (1,'agent',1,10),(2,'agent',1,10)
+            ])
+            install_one_active_hub_manager_guards(db)
+            self.assertEqual(migrate_legacy_hub_manager_role(db),2)
+            self.assertEqual(db.execute(
+                'SELECT id,role,active,agent_hub_id FROM users ORDER BY id'
+            ).fetchall(),[
+                (1,'hub_manager',1,10),(2,'hub_manager',1,10)
+            ])
+            # Existing duplicates remain for explicit Admin cleanup, but new conflicts
+            # are still rejected once the migration has canonicalized the old roles.
+            with self.assertRaisesRegex(sqlite3.IntegrityError,'already has an active manager'):
+                db.execute("INSERT INTO users(id,role,active,agent_hub_id) VALUES(3,'hub_manager',1,10)")
+        finally:
+            db.close()
+
+
 class CityHubMigrationTests(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(':memory:')
