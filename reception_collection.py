@@ -16,7 +16,7 @@ def register_reception_collection(app, s):
     def load(c, kind, did, u):
         adapter = registry.get(kind)
         if not adapter:raise Error('Réception inconnue.',404)
-        if u['role']=='agent':
+        if u['role']=='hub_manager':
             h=c.execute('SELECT id FROM ops_hubs WHERE id=? AND active=1',(u.get('agent_hub_id'),)).fetchone()
             if not h:raise Error('Hub actif requis.',403)
         doc, lines = adapter['load'](c,did,u)
@@ -25,7 +25,7 @@ def register_reception_collection(app, s):
         return adapter,doc,lines,snapshot
 
     @app.get('/api/reception-collection/<kind>/<int:did>')
-    @auth('admin','agent','client')
+    @auth('admin','hub_manager','client')
     def reception_collection_get(kind,did):
         u=user()
         with conn() as c:
@@ -34,7 +34,7 @@ def register_reception_collection(app, s):
             for l in lines:
                 excluded=bool(l.get('missing_at') or l.get('departure_reconciled_at'))
                 blocked=bool(doc.get('departure_scan_required') and not l.get('departure_scanned_at') and not excluded and not l.get('received_at'))
-                private=u['role']=='agent' and (not l.get('received_at') or l.get('current_hub_id')!=u.get('agent_hub_id'))
+                private=u['role']=='hub_manager' and (not l.get('received_at') or l.get('current_hub_id')!=u.get('agent_hub_id'))
                 rows.append(dict(id=l['id'],tracking=l['tracking'],received_at=l.get('received_at'),excluded=excluded,
                     blocked=blocked,recipient='' if private else l.get('recipient',''),city='' if private else l.get('city','')))
             return jsonify(id=did,reference=doc['reference'],status=doc['status'],palette_purpose=doc.get('palette_purpose'),snapshot=snapshot,lines=rows,
@@ -43,7 +43,7 @@ def register_reception_collection(app, s):
                 confirmation='Je confirme la remise physique au vendeur de tous les colis scannés.' if kind=='return' else 'Je confirme la réception physique de tous les colis scannés.')
 
     @app.post('/api/reception-collection/<kind>/<int:did>')
-    @auth('admin','agent','client')
+    @auth('admin','hub_manager','client')
     def reception_collection_commit(kind,did):
         u=user();d=request.get_json(silent=True)
         if not isinstance(d,dict) or d.get('confirmed') is not True:raise Error('Confirmation physique requise.')
