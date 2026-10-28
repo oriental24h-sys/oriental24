@@ -1048,6 +1048,13 @@ class HubDriverWorkspaceTests(unittest.TestCase):
             self.assertIn('Retour palette reçu',restocks[0]['note'])
         self.assertEqual(admin.post(f"/api/fulfillment/orders/{prep.json['id']}/restock",json={'checked':True,'reason':'manual'},headers=admin_headers).status_code,409)
 
+    def test_hub_manager_can_access_hub_invoice_list_with_canonical_role(self):
+        response=self.client.get('/api/logistics/hub/invoices')
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(response.json['hub']['id'],self.hub)
+        self.assertEqual(response.json['invoices'],[])
+        self.assertTrue(response.json['read_only'])
+
     def test_manager_finance_overview_and_export_are_own_hub_only(self):
         self.parcel(None,'Livré',self.driver,self.hub)
         preview=self.post('driver-finance/preview',dict(driver_id=self.driver))
