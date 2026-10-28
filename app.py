@@ -509,6 +509,11 @@ def update_parcel(pid):
         if 'status' in d:
             s=d['status']
             if s not in STATUSES: raise APIError('Statut invalide.')
+            # A delivery status must always have a matching recorded delivery attempt.
+            # The attempts endpoint validates receiver/COD/OTP and is idempotent; a direct
+            # PATCH would otherwise mark the parcel delivered without a COD audit record.
+            if s=='Livré':
+                raise APIError('Pour confirmer une livraison, utilisez la procédure de tentative de livraison afin de vérifier le réceptionnaire, le COD et le code client si nécessaire.',409)
             if u['role']=='livreur':
                 transitions=DRIVER_TRANSITIONS
                 if s not in transitions.get(p['status'],[]): raise APIError('Transition non autorisée pour ce colis.')
