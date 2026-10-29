@@ -14,6 +14,8 @@ function o24BonHtml(data){
  const count=Number(data.count)||0,received=Number(data.received)||0,remaining=Number(data.remaining)||0;
  const status=o24BonClean(data.status),route=o24BonClean(data.route),reference=o24BonClean(data.reference)||'—';
  const signatures=(data.signatures||['Préparé par','Transporteur','Réception par le destinataire']).map(o24BonClean).filter(Boolean);
+ const nature=o24BonClean(data.nature).toUpperCase(),natureNote=o24BonClean(data.nature_note);
+ const natureColor={'RÉCEPTION':'#0c274c','RETOUR':'#b3261e','RAMASSAGE':'#f58024'}[nature]||'#0c274c';
  return `<style>
  @page{size:A4 portrait;margin:13mm}
  .o24-bon-print{font:10.5px/1.45 Arial,Helvetica,sans-serif;color:#172d49;width:100%;max-width:184mm}
@@ -22,6 +24,9 @@ function o24BonHtml(data){
  .o24-bon-logo img{display:block;width:145px;max-height:52px;object-fit:contain;object-position:left center}
  .o24-bon-qr{width:72px;height:72px;display:grid;place-items:center}.o24-bon-qr svg{display:block;width:72px;height:72px}
  .o24-bon-company{text-align:right;display:grid;gap:2px;font-size:10.5px;line-height:1.35;overflow-wrap:anywhere}.o24-bon-company strong{font-size:12px}
+ .o24-bon-nature{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:10px 0 0;padding:9px 14px;border-radius:6px;color:#fff;background:${natureColor}}
+ .o24-bon-nature b{font-size:26px;letter-spacing:.06em;line-height:1}
+ .o24-bon-nature span{font-size:10px;opacity:.92}
  .o24-bon-title{margin:12px 0 0;padding-bottom:7px;border-bottom:1.5px solid #171717;display:flex;align-items:end;justify-content:space-between;gap:12px}
  .o24-bon-title h1{font-size:21px;line-height:1.2;font-weight:400;margin:0}
  .o24-bon-title small{font-size:9px;text-align:right;color:#53657d}
@@ -47,6 +52,7 @@ function o24BonHtml(data){
  </style>
  <article class="o24-bon-print">
   <header class="o24-bon-header"><div class="o24-bon-logo"><img src="/static/wordmark.png" alt="ORIENTAL24"></div><div class="o24-bon-qr">${qr}</div><div class="o24-bon-company"><strong>${esc(company)}</strong>${contact.map(value=>`<span>${esc(value)}</span>`).join('')}</div></header>
+  ${nature?`<div class="o24-bon-nature"><b>${esc(nature)}</b>${natureNote?`<span>${esc(natureNote)}</span>`:''}</div>`:''}
   <div class="o24-bon-title"><h1>${esc(o24BonClean(data.title)||'Bon logistique')}</h1><small>${esc(status)}</small></div>
   ${route?`<p class="o24-bon-route">${esc(route)}</p>`:''}
   <section class="o24-bon-meta"><div class="o24-bon-date"><span>Date :</span><b>${esc(o24BonClean(data.date)||'—')}</b></div><div class="o24-bon-party"><span class="o24-bon-party-label">${esc(o24BonClean(party.label)||'Destinataire')}</span><strong>${esc(o24BonClean(party.name)||'—')}</strong>${partyLines.map(line=>`<span>${esc(line)}</span>`).join('')}</div></section>

@@ -2564,3 +2564,16 @@ td strong {
 .hp-decision p{margin:0 0 6px;color:#4b5563;font-size:13px}
 .hp-decision-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .hub-palette-scanned .hp-forced{color:#b45309}
+
+/* Actions rapides de palette : ticket, CSV, ouvrir, pièces jointes, bon PDF */
+.pal-row{display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap}
+.pal-actions{display:inline-flex;gap:5px;align-items:center}
+.pal-ic{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:999px;background:#fff;color:#0c274c;cursor:pointer;text-decoration:none;line-height:1;flex:0 0 auto}
+.pal-ic svg{width:15px;height:15px}
+.pal-ic:hover{border-color:#f58024;color:#f58024;background:#fff8f1}
+.pal-ic:focus-visible{outline:2px solid #f58024;outline-offset:2px}
+.pal-attach-form{display:grid;gap:12px;padding:14px 0}
+.pal-attach-form .field span{font-size:12px;font-weight:600}
+@media(max-width:720px){.pal-row{justify-content:flex-start}.pal-ic{width:34px;height:34px}}
+
+a.pc-ibtn{text-decoration:none;display:inline-flex;align-items:center;justify-content:center}

@@ -36,7 +36,7 @@ const opsEcartChip=d=>d?.status==='Départ partiel'?`<span class="tag warn ops-e
 const opsTag=s=>`<span class="tag ${['Reçu','Livré'].includes(s)?'good':s==='Annulé'?'bad':['Partiellement reçu','Départ partiel'].includes(s)?'warn':'blue'}">${esc(s)}</span>`;
 async function opsLoadConfig(){opsConfig=await api('/logistics/config');return opsConfig}
 function opsDocsView(rows){
- const visible=rows.filter(d=>opsTab==='all'||d.kind===opsTab);return heading('Documents & transferts','Des colis identifiés, un départ déclaré, une réception contrôlée.',`${S.user.role==='admin'?`<button class="btn primary" onclick="newOpsDocument()">${icon('plus')}Préparer un document</button>`:''}<button class="btn" onclick="findOpsDocument()">${icon('scan')}Rechercher / scanner un bon</button>`)+`<div class="demo-notice">Bons internes de démonstration. Une réception ne déclenche aucun paiement. Le transporteur du document et le livreur final du colis peuvent être différents.</div><section class="stats">${stat('Documents affichés',rows.length,'','file','blue','500 derniers de votre périmètre')}${stat('Préparés',rows.filter(d=>d.status==='Préparé').length,'','box','','Prêts à déclarer au départ')}${stat('Départs / réceptions en cours',rows.filter(d=>['Départ partiel','En transit','Partiellement reçu'].includes(d.status)).length,'','truck','purple','Scans de sortie ou réception à terminer')}${stat('Reçus intégralement',rows.filter(d=>d.status==='Reçu').length,'','checkcircle','green','Tous les colis ont été scannés')}${stat('Écarts à contrôler',rows.filter(d=>['En transit','Partiellement reçu'].includes(d.status)&&d.received<d.count).reduce((n,d)=>n+(d.count-d.received),0),'','alert','bad','Colis annoncés mais pas encore physiquement scannés')}</section><section class="card"><div class="tabs">${[['all','Tous'],['pickup','Ramassages'],['return','Retours'],...(S.user.role==='client'?[]:[['transfer','Transferts']])].map(([v,t])=>`<button class="${opsTab===v?'active':''}" onclick="opsTab='${v}';renderView()">${t}</button>`).join('')}</div>${simpleTable(['Document','Parties / Trajet','Colis reçus','Écart théorique / physique','ETA','État',''],visible.map(d=>[`<button class="tracking" onclick="openOpsDocument(${d.id})">${esc(d.reference)}</button><span class="sub">${opsKinds[d.kind]} · ${date(d.created_at)}</span>`,`${esc(d.source_name)} → ${esc(d.destination_name)}<span class="sub">${esc(d.client_name||'Multi-clients')} · ${esc(d.driver_name||'Transporteur non affecté')}</span>`,`<strong>${d.received} / ${d.count}</strong>`,opsEcartChip(d),opsEtaChip(d),opsTag(d.status),`<button class="btn sm" onclick="openOpsDocument(${d.id})">Ouvrir ${icon('arrow')}</button>`]))}</section>`;
+ const visible=rows.filter(d=>opsTab==='all'||d.kind===opsTab);return heading('Documents & transferts','Des colis identifiés, un départ déclaré, une réception contrôlée.',`${S.user.role==='admin'?`<button class="btn primary" onclick="newOpsDocument()">${icon('plus')}Préparer un document</button>`:''}<button class="btn" onclick="findOpsDocument()">${icon('scan')}Rechercher / scanner un bon</button>`)+`<div class="demo-notice">Bons internes de démonstration. Une réception ne déclenche aucun paiement. Le transporteur du document et le livreur final du colis peuvent être différents.</div><section class="stats">${stat('Documents affichés',rows.length,'','file','blue','500 derniers de votre périmètre')}${stat('Préparés',rows.filter(d=>d.status==='Préparé').length,'','box','','Prêts à déclarer au départ')}${stat('Départs / réceptions en cours',rows.filter(d=>['Départ partiel','En transit','Partiellement reçu'].includes(d.status)).length,'','truck','purple','Scans de sortie ou réception à terminer')}${stat('Reçus intégralement',rows.filter(d=>d.status==='Reçu').length,'','checkcircle','green','Tous les colis ont été scannés')}${stat('Écarts à contrôler',rows.filter(d=>['En transit','Partiellement reçu'].includes(d.status)&&d.received<d.count).reduce((n,d)=>n+(d.count-d.received),0),'','alert','bad','Colis annoncés mais pas encore physiquement scannés')}</section><section class="card"><div class="tabs">${[['all','Tous'],['pickup','Ramassages'],['return','Retours'],...(S.user.role==='client'?[]:[['transfer','Transferts']])].map(([v,t])=>`<button class="${opsTab===v?'active':''}" onclick="opsTab='${v}';renderView()">${t}</button>`).join('')}</div>${simpleTable(['Document','Parties / Trajet','Colis reçus','Écart théorique / physique','ETA','État',''],visible.map(d=>[`<button class="tracking" onclick="openOpsDocument(${d.id})">${esc(d.reference)}</button><span class="sub">${opsKinds[d.kind]} · ${date(d.created_at)}</span>`,`${esc(d.source_name)} → ${esc(d.destination_name)}<span class="sub">${esc(d.client_name||'Multi-clients')} · ${esc(d.driver_name||'Transporteur non affecté')}</span>`,`<strong>${d.received} / ${d.count}</strong>`,opsEcartChip(d),opsEtaChip(d),opsTag(d.status),`<div class="pal-row">${paletteRowActions(d.kind==='pickup'?'pickup':d.kind==='return'?'return':'transfer',d.id,'openOpsDocument('+d.id+')')}</div>`]))}</section>`;
 }
 
 /* Réception groupée des palettes : cocher plusieurs palettes → UNE seule validation. */
@@ -78,7 +78,7 @@ function hubPalletsView(data){
    `${esc(d.transport||'—')}<span class="sub">${esc(d.tracking_code||'—')}</span>`,
    `<strong>${d.received||0} / ${d.count||0}</strong><span class="sub">${Math.max(0,d.remaining||0)} restant(s)</span>`,
    d.lots||'—',opsDate(d.created_at),opsTag(d.status),
-   `<div class="hp-row-actions" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn sm" onclick="openOpsDocument(${d.id})">${d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)?'Ouvrir / recevoir':'Ouvrir'} ${icon('arrow')}</button>${d.status==='Préparé'&&!d.dispatched_at&&(!agent||Number(d.source_hub_id)===hubId)?`<button class="btn sm" onclick="hubPaletteAddCmd(${d.id},'${esc(d.palette_purpose||'standard')}')" title="Ajouter des CMD à cette palette : le scan s’ouvre">${icon('plus')}CMD</button><button class="btn sm danger" onclick="hubPaletteDelete(${d.id},'${esc(d.reference)}',${Number(d.revision)||1})" title="Supprimer cette palette non validée">Supprimer</button>`:''}</div>`
+   `<div class="hp-row-actions" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${paletteRowActions('transfer',d.id,'openOpsDocument('+d.id+')')}<button class="btn sm" onclick="openOpsDocument(${d.id})">${d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)?'Ouvrir / recevoir':'Ouvrir'} ${icon('arrow')}</button>${d.status==='Préparé'&&!d.dispatched_at&&(!agent||Number(d.source_hub_id)===hubId)?`<button class="btn sm" onclick="hubPaletteAddCmd(${d.id},'${esc(d.palette_purpose||'standard')}')" title="Ajouter des CMD à cette palette : le scan s’ouvre">${icon('plus')}CMD</button><button class="btn sm danger" onclick="hubPaletteDelete(${d.id},'${esc(d.reference)}',${Number(d.revision)||1})" title="Supprimer cette palette non validée">Supprimer</button>`:''}</div>`
  ])):empty(tab==='retours'?'Aucun retour dans cette sélection':tab==='a-recevoir'?'Aucune palette à recevoir':'Aucune palette inter-Hub','Les palettes autorisées pour votre périmètre apparaîtront ici.');
  if(tab==='retours'&&agent)setTimeout(hubMyReturnsPaint,0);
  const bar=document.getElementById('hp-bulk-btn');if(bar){bar.disabled=true;bar.textContent='Réceptionner la sélection (0)';}
@@ -405,11 +405,14 @@ async function printOpsDocument(id){
  const owner=S?.user?.id;
  try{
   const d=await api('/logistics/documents/'+id);if(S?.user?.id!==owner)return;
-  if(['transfer','return'].includes(d.kind)){
+  if(['transfer','return','pickup'].includes(d.kind)){
    const src=d.source_hub||{},dest=d.destination_hub||{},contact=d.client_contact||{};
-   const isTransfer=d.kind==='transfer';
+   const isTransfer=d.kind==='transfer',isPickup=d.kind==='pickup';
    const clientName=d.client_name||contact.company||contact.legal_name||contact.name||'Client';
-   const party=isTransfer?{
+   const party=isPickup?{
+    label:'Hub de réception',name:dest.name||d.destination_name||'—',
+    lines:[dest.address,dest.city?`Réception · ${dest.city}`:'',d.driver_name?`Livreur : ${d.driver_name}`:'']
+   }:isTransfer?{
     label:'Hubs concernés',name:`${src.name||d.source_name||'Hub de départ'} → ${dest.name||d.destination_name||'Hub de réception'}`,
     lines:[src.address,src.city?`Départ · ${src.city}`:'',dest.address,dest.city?`Réception · ${dest.city}`:'']
    }:{
@@ -419,14 +422,17 @@ async function printOpsDocument(id){
    const departedOnly=isTransfer&&d.departure_scan_required&&['Départ partiel','En transit','Partiellement reçu','Reçu'].includes(d.status);
    const printLines=(d.lines||[]).filter(l=>!l.departure_reconciled_at&&(!departedOnly||l.departure_scanned_at));
    const printCount=departedOnly?d.departure_scanned:d.count;
+   const isReturnPalette=isTransfer&&['return_to_central','return_to_origin'].includes(d.palette_purpose||'standard');
+   const nature=d.kind==='pickup'?'RAMASSAGE':(d.kind==='return'||isReturnPalette)?'RETOUR':'RÉCEPTION';
+   const natureNote=nature==='RAMASSAGE'?'Colis ramassés à réceptionner au Hub':nature==='RETOUR'?(isReturnPalette?(d.palette_purpose==='return_to_central'?'Retour vers le Hub Central':'Retour vers le Hub d’origine'):'Retour à remettre au vendeur'):'Transfert inter-Hub à réceptionner';
    const printData={
-    title:isTransfer?'Bon d’envoi · transfert inter-hubs':'Bon de retour',
+    title:nature==='RAMASSAGE'?'Bon de ramassage':nature==='RETOUR'?'Bon de retour':'Bon d’envoi · transfert inter-hubs',nature,nature_note:natureNote,
     reference:d.reference,date:opsDate(d.dispatched_at||d.created_at),status:d.status,
-    route:isTransfer?`${src.name||d.source_name} → ${dest.name||d.destination_name}`:`${src.name||d.source_name||'Hub'} → ${clientName}`,
+    route:isPickup?`${d.driver_name||'Livreur'} → ${dest.name||d.destination_name}`:isTransfer?`${src.name||d.source_name} → ${dest.name||d.destination_name}`:`${src.name||d.source_name||'Hub'} → ${clientName}`,
     party,count:printCount,received:d.received,remaining:Math.max(0,printCount-d.received),
     note:[d.note,departedOnly&&d.count>printCount?`${d.count-printCount} colis en attente de départ, non inclus dans ce bon.`:'',d.departure_reconciled_count?`${d.departure_reconciled_count} colis sont restés au Hub source et ont été retirés du manifeste.`:'',d.cancel_reason?`Annulation : ${d.cancel_reason}`:''].filter(Boolean).join(' · '),
     rows:printLines.map(l=>({tracking:l.tracking,city:l.city,recipient:l.recipient,phone:l.phone,amount:l.amount})),
-    signatures:isTransfer?['Hub de départ','Transporteur','Réception par le hub destination']:['Responsable du hub','Transporteur','Réception par le client']
+    signatures:isPickup?['Livreur','Transporteur','Réception par le hub']:isTransfer?['Hub de départ','Transporteur','Réception par le hub destination']:['Responsable du hub','Transporteur','Réception par le client']
    };
    await doPrint(o24BonHtml(printData),root=>{if(S?.user?.id!==owner){root.innerHTML='';throw Error('Session modifiée. Rouvrez le document.')}});
    return;

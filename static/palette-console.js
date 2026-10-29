@@ -17,12 +17,14 @@ function pcActs(r){
  const missing=Math.max(0,Number(r.missing)||0);
  const exceptionBtn=missing?`<button type="button" class="pc-ibtn pc-exception" title="Afficher les ${missing} colis non réceptionnés" aria-label="Afficher les ${missing} colis non réceptionnés" onclick="pcExceptions('${r.kind}',${r.id})">${icon('alert')}<span class="pc-exception-count">${missing}</span></button>`:'';
  const btn=(t,fn,cls,title)=>`<button type="button" class="pc-ibtn ${cls||''}" title="${title}" onclick="${fn}">${t}</button>`;
+ const pdf=(suffix,tip)=>`<a class="pc-ibtn" href="/api/palette-docs/${r.kind}/${r.id}/${suffix}" target="_blank" rel="noopener" title="${tip}" aria-label="${tip}">${suffix==='ticket.pdf'?icon('print'):icon('download')}</a>`;
  return exceptionBtn+btn(icon('down'),'pcRowRecv(\''+r.kind+'\','+r.id+')','teal','Receptionner')
   +btn(icon('layers'),'pcSticker(\''+r.kind+'\','+r.id+')','','Print Sticker')
+  +pdf('ticket.pdf','Imprimer le ticket de palette (RÉCEPTION / RETOUR / RAMASSAGE)')
   +btn(icon('file'),'pcColisCSV(\''+r.kind+'\','+r.id+')','','Colis CSV')
   +(closable?btn(icon('close'),'pcClose(\''+r.kind+'\','+r.id+','+r.remaining+')','danger',r.kind==='return'?'Close return pallet':'Clôturer : les non scannés seront déclarés non réceptionnés'):'')
   +btn(icon('link'),'pcAttachOpen(\''+r.kind+'\','+r.id+')','','Attachement')
-  +btn(icon('print'),'pcBonPrint(\''+r.kind+'\','+r.id+')','','Bon de réception')
+  +pdf('bon.pdf','Bon de réception PDF (nature du mouvement en grand)')
   +btn(icon('chevron'),`pcMore('${r.kind}',${r.id},this)`,'','Activités');
 }
 function paletteConsoleView(d){
