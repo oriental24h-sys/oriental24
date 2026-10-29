@@ -177,7 +177,7 @@ async function hubPaletteNew(purpose='standard'){
   hubPaletteDialog={purpose,cfg,agent,myHub,central,sourceHubs:sourceChoices,targets,fixedSource,fixedDestination,defaultSource};
   const title=purpose==='standard'?'Envoyer Palette':purpose==='return_to_central'?'Envoyer Retour au Central':'Envoyer vers le Hub d’origine';
   const sourceControl=fixedSource?`<input id="hp-source" type="hidden" value="${fixedSource}"><div class="full form-hint">Départ : <b>${esc(sourceHub.name||cfg.central_hub.name)}</b></div>`:`<label class="field"><span>Hub de départ</span><select id="hp-source" onchange="hubPaletteUpdateTargets()">${sourceChoices.map(h=>`<option value="${h.id}" ${Number(h.id)===Number(defaultSource)?'selected':''}>${esc(h.name)} · ${esc(h.city||'')}</option>`).join('')}</select></label>`;
-  const destinationControl=fixedDestination?`<input id="hp-destination" type="hidden" value="${fixedDestination}"><div class="full form-hint">Destination : <b>${esc((targets.find(h=>Number(h.id)===fixedDestination)||cfg.central_hub).name)}</b></div>`:`<label class="field"><span>Hub de destination</span><select id="hp-destination" onchange="hubPaletteResetCandidates();hubPaletteLoadCandidates()">${destOptions.map(([id,label])=>`<option value="${id}">${esc(label)}</option>`).join('')}</select></label>`;
+  const destinationControl=fixedDestination?`<input id="hp-destination" type="hidden" value="${fixedDestination}"><div class="full form-hint">Destination : <b>${esc((targets.find(h=>Number(h.id)===fixedDestination)||cfg.central_hub).name)}</b></div>`:`<label class="field"><span>Hub de destination</span><select id="hp-destination" onchange="hubPaletteDestinationChanged()">${destOptions.map(([id,label])=>`<option value="${id}">${esc(label)}</option>`).join('')}</select></label>`;
   hubPaletteDialog.scans=[];
   // Palette retour : le formulaire ne demande que les informations d'envoi.
   // « Envoyer la palette » ouvre directement l'écran de scan (les CMD s'y ajoutent).
@@ -302,8 +302,17 @@ function hubPaletteResetCandidates(){
   hubPaletteDialog.scans=[];
  }
  const host=document.getElementById('hp-candidates');if(host)host.innerHTML='<p class="sub">Aucun colis scanné pour le moment.</p>';
- const button=document.getElementById('hp-create');if(button)button.disabled=true;
- hubPaletteScanFeedback('Trajet mis à jour : scannez les colis à renvoyer.');
+ // Palette de retour : elle se crée VIDE puis s'alimente au scan — le bouton reste
+ // toujours actif. Le bloquer ici rendait « Envoyer la palette » inerte dès que
+ // l'utilisateur changeait le Hub de destination.
+ const standard=hubPaletteDialog&&hubPaletteDialog.purpose==='standard';
+ const button=document.getElementById('hp-create');if(button)button.disabled=standard;
+ if(standard)hubPaletteScanFeedback('Trajet mis à jour : scannez les colis à renvoyer.');
+}
+function hubPaletteDestinationChanged(){
+ const d=hubPaletteDialog;if(!d)return;
+ if(d.purpose!=='standard')return; // palette retour : rien à charger avant le scan
+ hubPaletteResetCandidates();hubPaletteLoadCandidates();
 }
 async function hubPaletteLoadCandidates(){
  const d=hubPaletteDialog,host=document.getElementById('hp-candidates');if(!d||!host)return;
@@ -344,6 +353,7 @@ function hubPaletteSelectionChanged(){
 /* Le bouton « Créer la palette » s'active dès qu'un colis est scanné OU coché. */
 function hubPaletteRefreshCreateButton(){
  const button=document.getElementById('hp-create');if(!button)return;
+ if(hubPaletteDialog&&hubPaletteDialog.purpose!=='standard'){button.disabled=false;return}
  const scanned=(hubPaletteDialog?.scans||[]).length;
  const checked=document.querySelectorAll('#hp-candidates .hp-pick:checked').length;
  button.disabled=!(scanned||checked);
