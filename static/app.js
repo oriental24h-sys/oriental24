@@ -188,6 +188,14 @@ function returnStateTag(p) {
     return `<span class="tag warn return-state-tag" title="Retour envoyé au Hub Central. Le statut de la commande n'a pas changé ; la réception au Hub Central ajoutera « Retour reçu en entrepôt ».">Retours envoye vers agence</span>`;
   if (p.return_state === "recu_entrepot")
     return `<span class="tag warn return-state-tag received" title="Retour reçu au Hub Central. Le statut de la commande n'a pas changé ; une commande issue du stock a été réintégrée au stock.">Retour reçu en entrepôt</span>`;
+  if (p.return_state === "transit_origine") {
+    const hub = p.return_origin_hub ? " " + p.return_origin_hub : "";
+    return `<span class="tag warn return-state-tag transit" title="Le Hub Central a expédié ce retour vers son Hub d'origine ; la réception au Hub d'origine reste attendue.">Retour transit vers origine${esc(hub)}</span>`;
+  }
+  if (p.return_state === "recu_hub_origine") {
+    const hub = p.return_origin_hub ? " " + p.return_origin_hub : "";
+    return `<span class="tag good return-state-tag received" title="Retour physiquement réceptionné au Hub d'origine. Il reste dans « Mes retours » jusqu'à sa remise au client.">Retour reçu en Hub origine${esc(hub)}</span>`;
+  }
   return "";
 }
 let modalCleanup = null;
@@ -1749,7 +1757,7 @@ function ticketsPane(rows) {
     ["Ticket", "Sujet", "Auteur", "Catégorie", "Statut", "Créé le", ""],
     rows.map((t) => [
       `<span class="tracking">TKT-${String(t.id).padStart(4, "0")}</span>`,
-      `<strong>${esc(t.subject)}</strong>${t.tracking?`<span class="sub">${esc(t.tracking)} · ${esc(t.priority)}</span>`:""}`,
+      `<strong>${esc(t.subject)}</strong>${t.tracking?`<span class="sub">${esc(t.tracking)} · ${esc(t.priority)}${t.parcel_origin_hub?' · Hub d’origine : '+esc(t.parcel_origin_hub):''}</span>`:""}`,
       esc(t.author),
       esc(t.category),
       tag(t.status),
@@ -1852,7 +1860,7 @@ async function ticketDetail(id) {
     if(S?.user?.id!==owner)return;
     modal(
       "TKT-" + String(id).padStart(4, "0") + " · " + d.ticket.subject,
-      `<div class="flex between">${tag(d.ticket.status)}${S.user.role === "admin" ? `<select style="width:160px;font-size:12px" aria-label="Statut du ticket" onchange="setTicketStatus(${id},this.value)">${["Ouvert", "En cours", "Résolu"].map((s) => `<option ${s === d.ticket.status ? "selected" : ""}>${s}</option>`).join("")}</select>` : ""}</div>${d.ticket.parcel_id?`<div class="ops-ticket-context">Colis : ${esc(d.ticket.tracking)}${d.ticket.parcel_status?' · '+esc(d.ticket.parcel_status):''} · Priorité : ${esc(d.ticket.priority)}${Number(d.ticket.is_fragile)===1?'<br><b class="ticket-fragile">⚠ COLIS FRAGILE — manipuler avec précaution (transit, Hub, livreur)</b>':''}<br>Responsable : ${esc(S.users.find(u=>u.id===d.ticket.assigned_to)?.name|| (d.ticket.assigned_to?"Administration":"Non affecté"))}<br>Première réponse admin : ${opsDate(d.ticket.first_response_at)}${S.user.role==="admin"?`<button class="btn sm" onclick="opsTicketOwner(${id},'${d.ticket.priority}')">Affecter / Priorité</button>`:""}</div>`:""}${claimAttachmentsMarkup(d.attachments||[])}${d.messages.map((m) => `<div class="message ${m.role === "admin" ? "admin" : ""}"><b>${esc(m.author)}</b><small>${date(m.created_at)}</small><p data-no-translate>${esc(m.body)}</p></div>`).join("")}<form id="reply-form" style="margin-top:20px"><div class="form-error"></div>${textarea("body", "Votre réponse", "", true)}<div class="form-actions"><button class="btn primary" type="submit">Envoyer ${icon("arrow")}</button></div></form>`,
+      `<div class="flex between">${tag(d.ticket.status)}${S.user.role === "admin" ? `<select style="width:160px;font-size:12px" aria-label="Statut du ticket" onchange="setTicketStatus(${id},this.value)">${["Ouvert", "En cours", "Résolu"].map((s) => `<option ${s === d.ticket.status ? "selected" : ""}>${s}</option>`).join("")}</select>` : ""}</div>${d.ticket.parcel_id?`<div class="ops-ticket-context">Colis : ${esc(d.ticket.tracking)}${d.ticket.parcel_status?' · '+esc(d.ticket.parcel_status):''}${d.ticket.parcel_origin_hub?' · <b>Hub d’origine : '+esc(d.ticket.parcel_origin_hub)+'</b>':''} · Priorité : ${esc(d.ticket.priority)}${Number(d.ticket.is_fragile)===1?'<br><b class="ticket-fragile">⚠ COLIS FRAGILE — manipuler avec précaution (transit, Hub, livreur)</b>':''}<br>Responsable : ${esc(S.users.find(u=>u.id===d.ticket.assigned_to)?.name|| (d.ticket.assigned_to?"Administration":"Non affecté"))}<br>Première réponse admin : ${opsDate(d.ticket.first_response_at)}${S.user.role==="admin"?`<button class="btn sm" onclick="opsTicketOwner(${id},'${d.ticket.priority}')">Affecter / Priorité</button>`:""}</div>`:""}${claimAttachmentsMarkup(d.attachments||[])}${d.messages.map((m) => `<div class="message ${m.role === "admin" ? "admin" : ""}"><b>${esc(m.author)}</b><small>${date(m.created_at)}</small><p data-no-translate>${esc(m.body)}</p></div>`).join("")}<form id="reply-form" style="margin-top:20px"><div class="form-error"></div>${textarea("body", "Votre réponse", "", true)}<div class="form-actions"><button class="btn primary" type="submit">Envoyer ${icon("arrow")}</button></div></form>`,
     );
     bindForm(async (f) => {
       await api("/tickets/" + id, "POST", f);

@@ -50,7 +50,7 @@ function hubPalletsView(data){
  const admin=S.user.role==='admin',centralId=Number(data.central_hub_id)||0;
  const receiveAction=`<button class="btn" onclick="hubPaletteReception()">${icon('scan')}Reception Palette</button>`;
  const actions=tab==='default'?`${receiveAction}<button class="btn primary" onclick="hubPaletteNew('standard')">${icon('truck')}Envoyer Palette</button>`:
-   tab==='retours'?(admin?`${receiveAction}<button class="btn" onclick="hubPaletteReviewUnknown()">${icon('alert')}Origines inconnues · Revue Admin</button><button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button><button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:hubId===centralId?`${receiveAction}<button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:`<button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button>`):tab==='a-recevoir'?receiveAction:'';
+   tab==='retours'?(admin?`${receiveAction}<button class="btn" onclick="hubPaletteReviewUnknown()">${icon('alert')}Origines inconnues · Revue Admin</button><button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button><button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:hubId===centralId?`${receiveAction}<button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:`<button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button><button class="btn primary" onclick="hubReturnsReception()">${icon('scan')}Réception des retours Hub</button>`):tab==='a-recevoir'?receiveAction:'';
  const purposeNote=tab==='retours'?(hubId===centralId&&!admin?'Les retours reçus du réseau sont triés ici. Un colis ne peut repartir qu’au Hub attesté par son historique physique; les origines incertaines restent bloquées pour vérification Admin.':'Les colis refusés ou retournés remontent au Hub Central; ils repartent ensuite uniquement vers leur Hub d’origine attesté.'):
    tab==='a-recevoir'?'Cette file contient les retours triés par le Hub Central vers leur Hub d’origine. Les détails du colis ne sont visibles qu’après sa réception physique.':'Le réseau conserve une étoile autour du Hub Central : un Hub secondaire ne transfère jamais directement vers un autre Hub secondaire.';
  const table=rows.length?simpleTable(['Palette','Trajet','Transport · suivi','Colis','Lots','Créée le','État',''],rows.map(d=>[
@@ -61,10 +61,45 @@ function hubPalletsView(data){
    d.lots||'—',opsDate(d.created_at),opsTag(d.status),
    `<div class="hp-row-actions" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn sm" onclick="openOpsDocument(${d.id})">${d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)?'Ouvrir / recevoir':'Ouvrir'} ${icon('arrow')}</button>${d.status==='Préparé'&&!d.dispatched_at&&(!agent||Number(d.source_hub_id)===hubId)?`<button class="btn sm" onclick="hubPaletteAddCmd(${d.id},'${esc(d.palette_purpose||'standard')}')" title="Ajouter des CMD à cette palette : le scan s’ouvre">${icon('plus')}CMD</button><button class="btn sm danger" onclick="hubPaletteDelete(${d.id},'${esc(d.reference)}',${Number(d.revision)||1})" title="Supprimer cette palette non validée">Supprimer</button>`:''}</div>`
  ])):empty(tab==='retours'?'Aucun retour dans cette sélection':tab==='a-recevoir'?'Aucune palette à recevoir':'Aucune palette inter-Hub','Les palettes autorisées pour votre périmètre apparaîtront ici.');
+ if(tab==='retours'&&agent)setTimeout(hubMyReturnsPaint,0);
  return heading('Palettes',agent?`${esc(data.hub?.name||'Mon Hub')} · transferts et retours qui impliquent ce Hub.`:'Transferts et retours inter-Hubs · administrateur.',`<button class="btn" onclick="renderView()">${icon('refresh')}Actualiser</button>`)+
  `<div class="pp-explainer"><span class="stat-icon">${icon('layers')}</span><div><b>${esc(purposeNote)}</b><p>Au scan de départ du retour, chaque colis passe à « Vers Hub Central ». Il devient « Retourné » uniquement après sa réception physique par Admin ou le responsable du Hub Central. Les montants des relevés déjà émis ne sont pas recalculés; une origine inconnue n’est jamais déduite de la ville.</p></div></div>
  <section class="stats">${stat('Palettes affichées',rows.length,'','layers','blue',tab==='default'?'Périmètre autorisé':tab==='retours'?'Flux de retour':'Retours dirigés vers l’origine')}${stat('À traiter',active.length,'','truck','purple','Préparées, départs ou réceptions en cours')}${stat('Colis restant(s)',rows.reduce((n,d)=>n+(d.remaining||0),0),'','box','orange','Résumé de palette, sans détail hors Hub')}${stat('À recevoir',incoming.length,'','scan',incoming.length?'warn':'green','Destinées à votre Hub')}</section>
+ ${tab==='retours'?`<div id="hub-my-returns"></div>`:''}
  <section class="card"><div class="pc-tabs">${tabs.map(([id,label])=>`<button type="button" class="pc-tab ${tab===id?'on':''}" onclick="hubPaletteTabSet('${id}')">${label}</button>`).join('')}</div><div class="pc-actions-row">${actions}</div>${table}</section>`;
+}
+async function hubReturnsReception(){
+ if(S.user.role!=='agent'){toast('Réception des retours réservée au Responsable de Hub.',true);return}
+ try{
+  const data=await api('/logistics/palettes?tab=a-recevoir'),hubId=Number(S.user.agent_hub_id)||0;
+  const rows=(data.rows||[]).filter(d=>Number(d.destination_hub_id)===hubId&&['Départ partiel','En transit','Partiellement reçu'].includes(d.status));
+  if(!rows.length){toast('Aucun retour en transit vers votre Hub.');return}
+  modal('Réception des retours Hub',`<p class="form-hint">Ces retours ont été triés par le Hub Central et voyagent vers votre Hub. Ouvrez-en un puis scannez chaque colis réellement remis : le colis passera à <b>Retour reçu en Hub origine</b> et restera dans <b>Mes retours</b> jusqu’à sa remise au client.</p>${simpleTable(['Palette','Trajet','Colis','État',''],rows.map(d=>[
+    `<strong>${esc(d.reference)}</strong><span class="sub">${esc(hubPalettePurposeLabel(d))}</span>`,
+    `${esc(d.source_name||'—')} → ${esc(d.destination_name||'—')}`,
+    `<strong>${d.received||0} / ${d.count||0}</strong><span class="sub">${Math.max(0,d.remaining||0)} restant(s)</span>`,
+    opsTag(d.status),
+    `<button class="btn sm primary" onclick="closeModal();openReceptionCollection('transfer',${d.id})">${icon('scan')}Réceptionner</button>`
+ ]))}`);
+ }catch(e){toast(e.message,true)}
+}
+async function hubMyReturnsPaint(){
+ const host=document.getElementById('hub-my-returns');if(!host||S.user.role!=='agent')return;
+ host.innerHTML='<section class="card ops-margin"><div class="card-head"><div><h3>Mes retours</h3><p>Retours réceptionnés à votre Hub. Ils restent ici jusqu’à leur remise au client.</p></div></div><p class="sub">Chargement…</p></section>';
+ try{
+  const data=await api('/logistics/my-returns');
+  if(!host.isConnected)return;
+  const rows=data.rows||[];
+  const label={recu_hub_origine:'Retour reçu en Hub origine',transit_origine:'Retour transit vers origine',recu_entrepot:'Retour reçu en entrepôt',envoye:'Retour envoyé vers le Central'};
+  host.innerHTML=`<section class="card ops-margin"><div class="card-head"><div><h3>Mes retours</h3><p>Retours réceptionnés à votre Hub. Ils restent dans cette liste jusqu’à leur remise au client.</p></div><span class="tag">${rows.length} retour${rows.length>1?'s':''}</span></div>${rows.length?simpleTable(['Colis','Client / Ville','État du retour','Reçu le','Depuis',''],rows.map(r=>[
+    `<strong>${esc(r.tracking)}</strong><span class="sub">${esc(r.status)}</span>`,
+    `${esc(r.recipient||'—')}<span class="sub">${esc(r.city||'')}</span>`,
+    `<span class="tag ${r.return_state==='recu_hub_origine'?'good':'warn'}">${esc(label[r.return_state]||r.return_state)}</span>`,
+    opsDate(r.received_at||r.updated_at),
+    r.days+' j',
+    `<button class="btn sm" onclick="parcelDetail(${r.id})">Ouvrir ${icon('arrow')}</button>`
+   ])):empty('Aucun retour au Hub','Les retours réceptionnés depuis le Hub Central apparaîtront ici.')}</section>`;
+ }catch(e){if(host.isConnected)host.innerHTML=`<section class="card ops-margin"><div class="card-head"><div><h3>Mes retours</h3></div></div><p class="sub">${esc(e.message)}</p></section>`}
 }
 async function hubPaletteReception(){
  try{
