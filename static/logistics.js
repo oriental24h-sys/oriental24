@@ -59,7 +59,7 @@ function hubPalletsView(data){
    `${esc(d.transport||'—')}<span class="sub">${esc(d.tracking_code||'—')}</span>`,
    `<strong>${d.received||0} / ${d.count||0}</strong><span class="sub">${Math.max(0,d.remaining||0)} restant(s)</span>`,
    d.lots||'—',opsDate(d.created_at),opsTag(d.status),
-   `<button class="btn sm" onclick="openOpsDocument(${d.id})">${d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)?'Ouvrir / recevoir':'Ouvrir'} ${icon('arrow')}</button>`
+   `<div class="hp-row-actions" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn sm" onclick="openOpsDocument(${d.id})">${d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)?'Ouvrir / recevoir':'Ouvrir'} ${icon('arrow')}</button>${d.status==='Préparé'&&!d.dispatched_at&&(!agent||Number(d.source_hub_id)===hubId)?`<button class="btn sm" onclick="hubPaletteAddCmd(${d.id},'${esc(d.palette_purpose||'standard')}',${Number(d.source_hub_id)||0},${Number(d.destination_hub_id)||0},${Number(d.revision)||1})" title="Ajouter d’autres CMD à cette palette">${icon('plus')}CMD</button><button class="btn sm danger" onclick="hubPaletteDelete(${d.id},'${esc(d.reference)}',${Number(d.revision)||1})" title="Supprimer cette palette non validée">Supprimer</button>`:''}</div>`
  ])):empty(tab==='retours'?'Aucun retour dans cette sélection':tab==='a-recevoir'?'Aucune palette à recevoir':'Aucune palette inter-Hub','Les palettes autorisées pour votre périmètre apparaîtront ici.');
  return heading('Palettes',agent?`${esc(data.hub?.name||'Mon Hub')} · transferts et retours qui impliquent ce Hub.`:'Transferts et retours inter-Hubs · administrateur.',`<button class="btn" onclick="renderView()">${icon('refresh')}Actualiser</button>`)+
  `<div class="pp-explainer"><span class="stat-icon">${icon('layers')}</span><div><b>${esc(purposeNote)}</b><p>Au scan de départ du retour, chaque colis passe à « Vers Hub Central ». Il devient « Retourné » uniquement après sa réception physique par Admin ou le responsable du Hub Central. Les montants des relevés déjà émis ne sont pas recalculés; une origine inconnue n’est jamais déduite de la ville.</p></div></div>
@@ -124,7 +124,13 @@ async function hubPaletteNew(purpose='standard'){
   const sourceControl=fixedSource?`<input id="hp-source" type="hidden" value="${fixedSource}"><div class="full form-hint">Départ : <b>${esc(sourceHub.name||cfg.central_hub.name)}</b></div>`:`<label class="field"><span>Hub de départ</span><select id="hp-source" onchange="hubPaletteUpdateTargets()">${sourceChoices.map(h=>`<option value="${h.id}" ${Number(h.id)===Number(defaultSource)?'selected':''}>${esc(h.name)} · ${esc(h.city||'')}</option>`).join('')}</select></label>`;
   const destinationControl=fixedDestination?`<input id="hp-destination" type="hidden" value="${fixedDestination}"><div class="full form-hint">Destination : <b>${esc((targets.find(h=>Number(h.id)===fixedDestination)||cfg.central_hub).name)}</b></div>`:`<label class="field"><span>Hub de destination</span><select id="hp-destination" onchange="hubPaletteResetCandidates();hubPaletteLoadCandidates()">${destOptions.map(([id,label])=>`<option value="${id}">${esc(label)}</option>`).join('')}</select></label>`;
   hubPaletteDialog.scans=[];
-  modal(title,`<div class="form-grid">${sourceControl}${destinationControl}<label class="field"><span>Transporteur (facultatif)</span><input id="hp-transport" maxlength="120"></label><label class="field"><span>Tracking palette (facultatif)</span><input id="hp-track" maxlength="80"></label><label class="field"><span>Nombre de lots</span><input id="hp-lots" type="number" min="0" max="500" value="0"></label><label class="field full"><span>Note (facultatif)</span><textarea id="hp-note" maxlength="600"></textarea></label></div><div class="hub-palette-scan"><label class="field full" for="hp-scan"><span>Scanner le colis à renvoyer</span><div class="hub-palette-scan-row"><input id="hp-scan" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Scannez ou saisissez le tracking puis Entrée"><button class="btn primary" type="button" id="hp-scan-add" onclick="hubPaletteScanAdd()">${icon('scan')}Ajouter</button></div></label><p class="form-hint">Scannez les colis remis : le serveur vérifie à l’instant qu’ils sont physiquement à ce Hub et admissibles. Aucune case à cocher, aucune liste à charger.</p><div id="hp-scan-feedback" class="hub-palette-scan-feedback" role="status" aria-live="polite">Présentez le premier colis à renvoyer.</div></div><div id="hp-candidates" class="hub-palette-candidates"><p class="sub">Aucun colis scanné pour le moment.</p></div><div class="form-actions"><button class="btn primary" id="hp-create" type="button" disabled onclick="hubPaletteCreate()">Créer la palette</button><button class="btn sm" type="button" onclick="hubPaletteLoadCandidates()">Ou charger la liste des colis admissibles</button></div>`);
+  // Palette retour : le formulaire ne demande que les informations d'envoi.
+  // « Envoyer la palette » ouvre directement l'écran de scan (les CMD s'y ajoutent).
+  const returnPalette=purpose!=='standard';
+  const scanBlock=returnPalette?'':`<div class="hub-palette-scan"><label class="field full" for="hp-scan"><span>Scanner le colis à envoyer</span><div class="hub-palette-scan-row"><input id="hp-scan" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Scannez ou saisissez le tracking puis Entrée"><button class="btn primary" type="button" id="hp-scan-add" onclick="hubPaletteScanAdd()">${icon('scan')}Ajouter</button></div></label><p class="form-hint">Le serveur vérifie à l’instant que le colis est physiquement à ce Hub et qu’il est admissible.</p><div id="hp-scan-feedback" class="hub-palette-scan-feedback" role="status" aria-live="polite">Présentez le premier colis à envoyer.</div></div><div id="hp-candidates" class="hub-palette-candidates"><p class="sub">Aucun colis scanné pour le moment.</p></div>`;
+  const cta=returnPalette?'Envoyer la palette':'Créer la palette';
+  const hint=returnPalette?'<div class="full form-hint">Cliquez « Envoyer la palette » : l’écran de scan s’ouvre aussitôt et chaque CMD scannée s’y ajoute avec sa décision (part direct · rendez-vous · à valider).</div>':'';
+  modal(title,`<div class="form-grid">${sourceControl}${destinationControl}<label class="field"><span>Transporteur (facultatif)</span><input id="hp-transport" maxlength="120"></label><label class="field"><span>Tracking palette (facultatif)</span><input id="hp-track" maxlength="80"></label><label class="field"><span>Nombre de lots</span><input id="hp-lots" type="number" min="0" max="500" value="0"></label><label class="field full"><span>Note (facultatif)</span><textarea id="hp-note" maxlength="600"></textarea></label>${hint}</div>${scanBlock}<div class="form-actions"><button class="btn primary" id="hp-create" type="button" onclick="hubPaletteCreate()">${cta}</button></div>`);
   const scanInput=document.getElementById('hp-scan');
   if(scanInput){scanInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();hubPaletteScanAdd()}});if(innerWidth>760)scanInput.focus({preventScroll:true})}
  }catch(e){toast(e.message,true)}
@@ -267,21 +273,31 @@ function hubPaletteSelectionChanged(){
 }
 async function hubPaletteCreate(){
  const d=hubPaletteDialog;if(!d)return;
- // Mode scan (par défaut) : la palette contient les colis scannés.
- let parcel_ids=(d.scans||[]).map(p=>p.id);
- if(!parcel_ids.length)parcel_ids=[...document.querySelectorAll('#hp-candidates .hp-pick:checked')].map(x=>Number(x.value));
- if(!parcel_ids.length){toast('Scannez au moins un colis à renvoyer.',true);return}
- const confirmed_ids=(d.scans||[]).filter(p=>p.confirmed).map(p=>p.id),overridden_ids=(d.scans||[]).filter(p=>p.forced).map(p=>p.id);
- // Cocher un colis dans la liste vaut validation explicite (OUI).
- document.querySelectorAll('#hp-candidates .hp-pick:checked').forEach(x=>{
-  const dec=x.getAttribute('data-decision'),pid=Number(x.value);
-  if(dec==='confirm'&&!confirmed_ids.includes(pid))confirmed_ids.push(pid);
-  if(dec==='blocked'&&!overridden_ids.includes(pid))overridden_ids.push(pid);
- });
- const selectedRoute=Number(document.getElementById('hp-source')?.value||d.defaultSource)+':'+Number(document.getElementById('hp-destination')?.value||d.fixedDestination);
- if(d.loadedRoute!==selectedRoute){hubPaletteResetCandidates();toast('Le trajet a changé : rechargez les colis.',true);return}
- const body={kind:'transfer',palette_purpose:d.purpose,source_hub_id:Number(document.getElementById('hp-source')?.value||d.defaultSource),destination_hub_id:Number(document.getElementById('hp-destination')?.value||d.fixedDestination),parcel_ids,confirmed_ids,overridden_ids,transport:document.getElementById('hp-transport')?.value||'',tracking_code:document.getElementById('hp-track')?.value||'',lots:Number(document.getElementById('hp-lots')?.value||0),note:document.getElementById('hp-note')?.value||''};
- try{const r=await api('/logistics/documents','POST',body);hubPaletteDialog=null;closeModal();hubPaletteTab=d.purpose==='return_to_origin'?'a-recevoir':d.purpose==='standard'?'default':'retours';toast('Palette préparée · '+r.reference);await renderView();await openOpsDocument(r.id)}catch(e){toast(e.message,true)}
+ const returnPalette=d.purpose!=='standard';
+ const sourceHub=Number(document.getElementById('hp-source')?.value||d.defaultSource);
+ const destinationHub=Number(document.getElementById('hp-destination')?.value||d.fixedDestination);
+ if(!sourceHub||!destinationHub){toast('Choisissez le Hub de départ et la destination.',true);return}
+ if(!returnPalette){
+  // Palette standard : les colis sont scannés ici avant la création.
+  const parcel_ids=(d.scans||[]).map(p=>p.id);
+  if(!parcel_ids.length){toast('Scannez au moins un colis à envoyer.',true);return}
+  const selectedRoute=sourceHub+':'+destinationHub;
+  if(d.loadedRoute!==selectedRoute){hubPaletteResetCandidates();toast('Le trajet a changé : rescannez les colis.',true);return}
+  const confirmed_ids=(d.scans||[]).filter(p=>p.confirmed).map(p=>p.id),overridden_ids=(d.scans||[]).filter(p=>p.forced).map(p=>p.id);
+  const body={kind:'transfer',palette_purpose:d.purpose,source_hub_id:sourceHub,destination_hub_id:destinationHub,parcel_ids,confirmed_ids,overridden_ids,
+   transport:document.getElementById('hp-transport')?.value||'',tracking_code:document.getElementById('hp-track')?.value||'',
+   lots:Number(document.getElementById('hp-lots')?.value||0),note:document.getElementById('hp-note')?.value||''};
+  try{const r=await api('/logistics/documents','POST',body);hubPaletteDialog=null;closeModal();hubPaletteTab='default';toast('Palette préparée · '+r.reference);await renderView();await openOpsDocument(r.id)}catch(e){toast(e.message,true)}
+  return;
+ }
+ // Palette retour : créée vide, puis écran de scan immédiat (les CMD s'ajoutent au scan).
+ const body={kind:'transfer',palette_purpose:d.purpose,source_hub_id:sourceHub,destination_hub_id:destinationHub,parcel_ids:[],
+  transport:document.getElementById('hp-transport')?.value||'',tracking_code:document.getElementById('hp-track')?.value||'',
+  lots:Number(document.getElementById('hp-lots')?.value||0),note:document.getElementById('hp-note')?.value||''};
+ try{const r=await api('/logistics/documents','POST',body);hubPaletteDialog=null;closeModal();
+  hubPaletteTab=d.purpose==='return_to_origin'?'a-recevoir':'retours';
+  toast('Palette '+r.reference+' ouverte · scannez les CMD');
+  await renderView();await openOpsDocument(r.id)}catch(e){toast(e.message,true)}
 }
 async function newOpsDocument(kind='pickup',fixedKind=false){
  try{await opsLoadConfig();if(!opsConfig.hubs.some(h=>h.active)){toast('Créez au moins un hub actif avant de préparer un document.',true);await navigate('ops-settings');return}
@@ -676,3 +692,54 @@ function opsCSV(name,rows){const csv='\ufeff'+rows.map(row=>row.map(v=>{let s=St
 function exportOpsAnalytics(){const d=opsAnalyticsData;opsCSV('ORIENTAL24-activite.csv',[['Catégorie','Entité','Date début','Date fin','Affectations','Tentatives','Livrées','Départs hub','Réceptions hub'],...d.drivers.map(r=>['Livreur',r.name,d.period_from,d.period_to,r.assignment_events,r.attempts,r.delivered_attempts,'','']),...d.daily_assignments.map(r=>['Affectations quotidiennes',r.driver,r.day,r.day,r.assignment_events,'','','','']),...d.daily.map(r=>['Tentatives quotidiennes',r.driver,r.day,r.day,'',r.attempts,r.delivered,'','']),...d.hub_activity.map(r=>['Hub',r.name,d.period_from,d.period_to,'','','',r.departed,r.received])])}
 function stockAnalyticsView(d){stockAnalyticsData=d;return heading('Analyse produits','Mouvements datés et disponibilité actuelle, sans chiffre d’affaires inventé.',`<button class="btn" onclick="exportStockAnalytics()">${icon('download')}CSV produits</button>`)+`<section class="card"><div class="toolbar"><label>Du <input id="stock-period-from" type="date" value="${d.period_from}"></label><label>Au <input id="stock-period-to" type="date" value="${d.period_to}"></label><button class="btn primary" onclick="stockPeriod={from:$('#stock-period-from').value,to:$('#stock-period-to').value};renderView()">Filtrer</button></div></section><div class="demo-notice">Les entrées et sorties incluent les mouvements manuels validés. Les sorties CMD stock sont déduites lors de « Contrôler et créer le colis » au Hub Central; les retours sont réintégrés lors du scan de réception de la palette « Retour vers Hub Central ». Physique, réservé et disponible décrivent maintenant, indépendamment de la période. Le stock CMD est physiquement tenu au Hub Central; aucune quantité par Hub secondaire n’est calculée.</div><section class="card">${simpleTable(['Produit / Client','Entrées','Sorties','Sorties CMD stock','Retours réintégrés','Physique actuel','Réservé actuel','Disponible actuel'],d.products.map(p=>[`${esc(p.name)}<span class="sub">${esc(p.reference)} · ${esc(p.company)}</span>`,p.incoming,p.outgoing,p.prepared,p.restocked,p.quantity,p.reserved,p.available]))}</section>`}
 function exportStockAnalytics(){const d=stockAnalyticsData;opsCSV('ORIENTAL24-produits.csv',[['SKU','Produit','Client','Du','Au','Entrées','Sorties','Départs CMD stock','Retours réintégrés','Physique actuel','Réservé actuel','Disponible actuel'],...d.products.map(p=>[p.reference,p.name,p.company,d.period_from,d.period_to,p.incoming,p.outgoing,p.prepared,p.restocked,p.quantity,p.reserved,p.available])])}
+
+/* ── Palette encore préparée : ajouter des CMD / la supprimer ───────────── */
+function hubPaletteDelete(id,reference,revision){
+ modal('Supprimer la palette '+reference,`<p>La palette <b>${esc(reference)}</b> n’est pas encore validée. Sa suppression retire le bon et libère ses colis : ils redeviennent disponibles pour une autre palette.</p><p class="sub">Cette action est définitive et tracée (audit).</p><div class="form-actions"><button class="btn danger" type="button" onclick="hubPaletteDeleteConfirm(${id},${revision})">Supprimer définitivement</button><button class="btn" type="button" onclick="closeModal()">Annuler</button></div>`);
+}
+async function hubPaletteDeleteConfirm(id,revision){
+ try{
+  const r=await api('/logistics/documents/'+id+'/delete','POST',{confirmed:true,revision});
+  closeModal();toast('Palette '+(r.reference||'')+' supprimée · '+r.released+' colis libéré(s)');
+  await renderView();
+ }catch(e){toast(e.message,true)}
+}
+
+let hubAddDialog=null;
+async function hubPaletteAddCmd(id,purpose,source,destination,revision){
+ if(!source||!destination){toast('Trajet de la palette introuvable.',true);return}
+ hubAddDialog={id,revision,purpose,busy:false};
+ try{
+  const qs=new URLSearchParams({mode:purpose,source_hub_id:String(source),destination_hub_id:String(destination)});
+  const result=await api('/logistics/palette-candidates?'+qs.toString());
+  const all=result.rows||[];
+  const rows=all.slice(0,100);
+  hubAddDialog.rows=rows;
+  const badge=p=>p.decision==='accept'?'<span class="tag good">Part direct</span>':p.decision==='double'?'<span class="tag warn">Déjà Livré</span>':p.decision==='confirm'?'<span class="tag warn">Rendez-vous · OUI requis</span>':p.decision==='blocked'?'<span class="tag bad">À valider</span>':'';
+  const facts=p=>[p.days_at_hub!==undefined&&p.days_at_hub!==null?p.days_at_hub+' j':'',p.handovers!==undefined&&p.handovers!==null?p.handovers+' passage(s) livreur':'',p.appointment?'RDV '+p.appointment:''].filter(Boolean).join(' · ');
+  const list=rows.length?`<div class="form-hint">${rows.length} colis disponibles physiquement au Hub de départ.${all.length>100?' Une palette contient 100 CMD maximum.':''} Cochez ceux à ajouter : la coche vaut validation (OUI).</div><div class="hub-palette-candidates" id="hp-add-list">${rows.map(p=>`<label class="check-label hub-palette-candidate"><input class="hp-add-pick" type="checkbox" value="${p.id}" data-decision="${esc(p.decision||'')}" onchange="hubAddCmdPaint()"><span><b>${esc(p.tracking)}</b> · ${esc(p.recipient||'')} ${badge(p)}<small class="sub">${esc(p.city||'')} · ${esc(p.status||'')}${facts(p)?' · '+esc(facts(p)):''}</small></span></label>`).join('')}</div>`:empty('Aucun colis disponible','Tous les colis du Hub sont déjà dans une palette active.');
+  modal('Ajouter des CMD à la palette',`${list}<div class="form-actions"><button class="btn primary" id="hp-add-submit" type="button" disabled onclick="hubPaletteAddCmdSend()">Ajouter 0 CMD</button><button class="btn" type="button" onclick="closeModal()">Fermer</button></div>`);
+ }catch(e){toast(e.message,true)}
+}
+function hubAddCmdPaint(){
+ const picks=[...document.querySelectorAll('#hp-add-list .hp-add-pick')];
+ const chosen=picks.filter(x=>x.checked);
+ const button=document.getElementById('hp-add-submit');
+ if(button){button.textContent='Ajouter '+chosen.length+' CMD';button.disabled=!chosen.length||hubAddDialog?.busy}
+}
+async function hubPaletteAddCmdSend(){
+ const d=hubAddDialog;if(!d||d.busy)return;
+ const picks=[...document.querySelectorAll('#hp-add-list .hp-add-pick')].filter(x=>x.checked);
+ if(!picks.length)return;
+ const payload={revision:d.revision,
+  parcel_ids:picks.map(x=>Number(x.value)),
+  confirmed_ids:picks.filter(x=>x.dataset.decision==='confirm').map(x=>Number(x.value)),
+  overridden_ids:picks.filter(x=>x.dataset.decision==='blocked').map(x=>Number(x.value))};
+ d.busy=true;hubAddCmdPaint();
+ try{
+  const r=await api('/logistics/documents/'+d.id+'/add-parcels','POST',payload);
+  closeModal();toast(r.added+' CMD ajoutée(s) à la palette · total '+r.count+' colis');
+  await renderView();
+ }catch(e){toast(e.message,true)}
+ finally{if(hubAddDialog===d)d.busy=false;hubAddCmdPaint()}
+}

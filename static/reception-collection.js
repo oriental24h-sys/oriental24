@@ -11,11 +11,13 @@ async function openReceptionCollection(kind,id,mode='receive'){
  try{
   doc=await api(endpoint);if(!current())return;
   const partialSend=sending&&doc.allow_partial_dispatch;
+  // Palette retour créée vide : chaque CMD scannée est ajoutée au manifeste au moment du scan.
+  const returnScan=sending&&kind==='transfer'&&['return_to_central','return_to_origin'].includes(doc.palette_purpose);
   doc.lines=doc.lines.map(l=>({...l,parcel_id:l.id,active:!l.excluded}));
   const lines=doc.lines.filter(l=>l.active||l.received_at),pending=lines.filter(l=>l.active&&!l.received_at);
   const byCode=new Map(lines.map(l=>[norm(l.tracking),l]));
   ctx.node.querySelector('h2').textContent=(sending?'Envoi ':'Réception ')+doc.reference;
-  ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">${sending?'ENVOI AU SCAN · COLLECTE':'RÉCEPTION AU SCAN · COLLECTE'}</span><h3>${esc(doc.reference)} · ${esc(doc.route||'')}</h3><p>${kind==='return'?(sending?'Retour au vendeur — préparation du départ':'Retour au vendeur — confirmation physique de la remise'):kind==='transfer'&&doc.palette_purpose==='return_to_central'?'Palette retour vers Hub Central — le scan de réception réintègre automatiquement les CMD liées au stock.':''}</p></div><span>${rbStatusTag(doc.status)}</span></div><div class="pp-progress"><strong id="rb-collect-count">0<small> / ${pending.length} scannés</small></strong><div><b>colis scannés</b><span id="rb-collect-remaining"></span></div></div>
+  ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">${sending?'ENVOI AU SCAN · COLLECTE':'RÉCEPTION AU SCAN · COLLECTE'}</span><h3>${esc(doc.reference)} · ${esc(doc.route||'')}</h3><p>${kind==='return'?(sending?'Retour au vendeur — préparation du départ':'Retour au vendeur — confirmation physique de la remise'):kind==='transfer'&&['return_to_central','return_to_origin'].includes(doc.palette_purpose)?(sending?'Palette retour — scannez chaque CMD : elle s’ajoute ici avec sa décision (part direct · rendez-vous · à valider).':'Palette retour — le scan de réception réintègre automatiquement les CMD liées au stock.'):''}</p></div><span>${rbStatusTag(doc.status)}</span></div><div class="pp-progress"><strong id="rb-collect-count">0<small> / ${pending.length} scannés</small></strong><div><b>colis scannés</b><span id="rb-collect-remaining"></span></div></div>
   <div class="pp-rxbox"><label for="rb-collect-input">Scanner les colis (lecteur USB, clavier ou caméra)</label><form id="rb-collect-form" class="pp-rx-entry"><input id="rb-collect-input" autocomplete="off" maxlength="160" placeholder="Tracking ORIENTAL24 puis Entrée"><button type="submit" class="btn primary">Ajouter ce colis</button><span id="pp-rx-cam-slot"></span><button type="button" class="btn sm" data-o24-snd onclick="window.o24Sound.set(!window.o24Sound.on())">${ppSound?'🔊 Son activé':'🔇 Son coupé'}</button><button type="button" class="btn sm" id="rb-collect-reset">↺ Vider les scans</button></form><div class="pp-rx-cam" id="rb-collect-camera" hidden><video playsinline muted></video></div><span id="rb-collect-camera-state" class="sub" aria-live="polite"></span><div class="pp-rx-msg" id="rb-collect-feedback" role="status" aria-live="polite">${ppReceptionGuide()}</div></div>
   <div class="pp-rx-list" id="rb-collect-list"></div><div class="pp-validate"><b id="rb-collect-ready"></b><button type="button" class="btn primary" id="rb-collect-confirm" disabled>${sending?'Envoyer':'Réceptionner'} les ${pending.length} colis et valider</button><p class="sub">${esc(doc.confirmation)} ${sending?'Aucun envoi':'Aucune réception'} n’est enregistré avant la validation finale.</p></div><div class="pp-actions"><button type="button" class="btn" id="rc-detail">Fiche complète / incident</button><button type="button" class="btn" id="rb-collect-close">Fermer</button></div>`;
   const input=ctx.node.querySelector('#rb-collect-input'),form=ctx.node.querySelector('#rb-collect-form'),confirm=ctx.node.querySelector('#rb-collect-confirm');
@@ -36,7 +38,10 @@ async function openReceptionCollection(kind,id,mode='receive'){
   const add=async code=>{
    if(!current()||busy||frozen)return;ppUnlockSound();const key=norm(code),line=byCode.get(key);
    if(!key)return;
-   if(!line){ppReceptionSignal('err');message('err','✗ Hors bon : '+code+' — cette commande ne figure pas dans ce document.');return}
+   if(!line){
+    if(returnScan)return addByScan(key);
+    ppReceptionSignal('err');message('err','✗ Hors bon : '+code+' — cette commande ne figure pas dans ce document.');return
+   }
    if(line.received_at||scanned.has(line.parcel_id)){ppReceptionSignal('dup');message('dup','DOUBLE — commande déjà scannée / '+(sending?'envoyée':'réceptionnée')+' : '+line.tracking+'. Aucun ajout.');return}
    if(line.blocked){ppReceptionSignal('err');message('err',sending?(line.blocked_reason||'Commande non admissible pour ce départ.'):'Scan de sortie manquant : '+line.tracking+'. Actualisez après le départ.');return}
    if(!line.active||!doc.available){ppReceptionSignal('err');message('err',sending?'Ce bon n’est pas disponible pour envoi.':'Ce bon n’est pas disponible pour réception.');return}
@@ -48,6 +53,36 @@ async function openReceptionCollection(kind,id,mode='receive'){
    }
    scanned.set(line.parcel_id,line);ppReceptionSignal('ok');paint();
    message('ok','✓ Ajouté : '+line.tracking+' ('+scanned.size+'/'+pending.length+')'+(scanned.size===pending.length?' — tous les colis sont scannés. Validez la réception.':''));
+  };
+  const addByScan=async(code,extra={})=>{
+   if(!current()||busy||frozen)return;
+   busy=true;paint();
+   try{
+    const r=await api('/logistics/documents/'+id+'/scan-add','POST',{tracking:code,...extra});
+    if(!current())return;
+    if(r.needs_confirmation){askDecision(r,code);return}
+    if(r.snapshot)doc.snapshot=r.snapshot;
+    let line=byCode.get(norm(code));
+    if(!line){
+     line={id:r.line_id,parcel_id:r.line_id,tracking:r.tracking,recipient:r.recipient,city:r.city,received_at:null,excluded:false,blocked:false};
+     doc.lines.push(line);lines.push(line);byCode.set(norm(r.tracking),line);pending.push(line);
+    }
+    if(line.received_at||scanned.has(line.parcel_id)){ppReceptionSignal('dup');message('dup','DOUBLE — commande déjà scannée : '+line.tracking+'.');return}
+    scanned.set(line.parcel_id,line);ppReceptionSignal('ok');
+    message('ok','✓ '+r.tracking+' ajouté à la palette · '+scanned.size+' CMD scannée(s)');
+    paint();
+   }catch(e){if(current()){ppReceptionSignal('err');message('err',e.message)}}
+   finally{busy=false;if(current())paint()}
+  };
+  const askDecision=(r,code)=>{
+   const box=ctx.node.querySelector('#rb-collect-feedback');if(!box)return;
+   ppReceptionSignal('err');
+   box.className='pp-rx-msg warn';
+   box.innerHTML=`<div class="hp-decision"><strong>${esc(r.tracking)}</strong><p>${esc(r.message||'')}</p>
+    <div class="hp-decision-actions"><button type="button" class="btn primary sm" data-rb-yes>Oui · envoyer en retour</button>
+    <button type="button" class="btn sm" data-rb-no>Non · reste à l’agence</button></div></div>`;
+   box.querySelector('[data-rb-yes]').onclick=()=>{if(!current())return;addByScan(code,{confirmed:r.decision==='confirm',overridden:r.decision==='blocked'})};
+   box.querySelector('[data-rb-no]').onclick=()=>{if(!current())return;message('warn',code+' laissé à l’agence — non envoyé.');if(input){input.value='';input.focus({preventScroll:true})}};
   };
   form.onsubmit=async e=>{e.preventDefault();const value=input.value;input.value='';await add(value);if(current())input.focus()};
   ctx.node.querySelector('#rb-collect-reset').onclick=()=>{if(busy||frozen)return;scanned.clear();paint();message('','Lot vidé — scannez à nouveau les commandes.');input.focus()};
