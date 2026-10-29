@@ -6,6 +6,7 @@ from flask import request,jsonify,Response
 from partner_intake import partner_intake_status
 from client_types import tracking_text
 from hub_access import hub_received_lines
+import palette_refs
 
 KIND='partner_palette'
 STATES=('Préparé','En transit','Partiellement reçu','Reçu','Clôturé (écarts)','Annulé')
@@ -210,8 +211,9 @@ def register_partner_palettes(app,s):
                 if not p:raise Error('Colis inaccessible pour cette société.',404)
                 lockcheck(c,p,cl['id']);ps.append(p)
             did=c.execute('INSERT INTO ops_documents(kind,client_id,destination_hub_id,client_name,source_name,destination_name,note,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(KIND,cl['id'],dest['id'],cl['company'] or cl['name'],cl['company'] or cl['name'],dest['name'],text(d,'note',600),u['id'],now())).lastrowid
-            ref=f'PP-{did:06d}';c.execute('UPDATE ops_documents SET reference=? WHERE id=?',(ref,did))
+            ref=palette_refs.next_reference(c,KIND);c.execute('UPDATE ops_documents SET reference=? WHERE id=?',(ref,did))
             c.execute('INSERT INTO partner_palette_meta(document_id,partner_reference,transport) VALUES(?,?,?)',(did,text(d,'partner_reference',80),text(d,'transport',120)))
+            c.execute('UPDATE ops_documents SET tracking_code=? WHERE id=? AND COALESCE(tracking_code,\'\')=\'\'',(palette_refs.auto_tracking_code(),did))
             for p in ps:c.execute('INSERT INTO ops_document_lines(document_id,parcel_id,tracking,recipient,city,initial_status) VALUES(?,?,?,?,?,?)',(did,p['id'],p['tracking'],p['recipient'],p['city'],p['status']))
             audit(c,did,u,'Palette préparée',{'parcel_ids':ids,'count':len(ps),'destination_hub_id':dest['id']})
             return result(c,u,d,fp,get(c,did,u))
@@ -267,7 +269,7 @@ def register_partner_palettes(app,s):
             for pid in ids:
                 lockcheck(c,c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone(),cl['id'])
             did=c.execute('INSERT INTO ops_documents(kind,client_id,destination_hub_id,client_name,source_name,destination_name,note,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(KIND,cl['id'],hub_id,cl['company'] or cl['name'],cl['company'] or cl['name'],c.execute('SELECT name FROM ops_hubs WHERE id=?',(hub_id,)).fetchone()['name'],d.get('note','') if isinstance(d.get('note'),str) else '',u['id'],now())).lastrowid
-            ref=f'PP-{did:06d}';c.execute('UPDATE ops_documents SET reference=? WHERE id=?',(ref,did))
+            ref=palette_refs.next_reference(c,KIND);c.execute('UPDATE ops_documents SET reference=? WHERE id=?',(ref,did))
             c.execute('INSERT INTO partner_palette_meta(document_id,partner_reference,transport) VALUES(?,?,?)',(did,f'Palette du jour · {day}',d.get('transport','') if isinstance(d.get('transport'),str) else ''))
             for pid in ids:
                 p=c.execute("SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE p.id=?",(pid,)).fetchone()

@@ -12,6 +12,7 @@ from client_profile_extras import notification_enabled
 from claims import prepare_claim
 import return_scan
 import scan_codes
+import palette_refs
 from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES, DRIVER_HUB_ONLY_STATUSES, DRIVER_TRANSITIONS, EXCHANGE_RECEIVED
 import exchange_flow
 from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
@@ -1104,7 +1105,7 @@ def register_logistics(app, services):
         else:
             pids=ids(d)
         transport=str(d.get('transport') or '').strip()
-        tracking_code=str(d.get('tracking_code') or '').strip()
+        tracking_code=palette_refs.tracking_or_auto(d.get('tracking_code'))
         if len(transport)>120 or len(tracking_code)>80:raise Error('Transport ou numéro de suivi trop long.')
         lots=d.get('lots',0)
         if isinstance(lots,bool) or not isinstance(lots,int) or not 0<=lots<=500:raise Error('Nombre de lots invalide (0 à 500).')
@@ -1202,8 +1203,8 @@ def register_logistics(app, services):
                  cl['name'] if cl else None,dr['name'] if dr else None,src['name'] if src else 'Chez le client',
                  dest['name'] if dest else 'Retour au client',text(d,'note',False,600),u['id'],now(),
                  int(kind=='transfer'),purpose,transport,tracking_code,lots)).lastrowid
-            prefix={'pickup':'RAM','return':'RET','transfer':{'standard':'TRF','return_to_central':'RET','return_to_origin':'RTO'}[purpose]}[kind]
-            reference=prefix+f'-{did:06d}'
+            # RP- (réception) · RT- (retour) · RM- (ramassage) — numérotation continue.
+            reference=palette_refs.next_reference(c,kind,purpose)
             c.execute('UPDATE ops_documents SET reference=? WHERE id=?',(reference,did))
             for p in parcels:
                 city=c.execute('SELECT name FROM cities WHERE id=?',(p['city_id'],)).fetchone()[0]

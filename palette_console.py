@@ -6,6 +6,7 @@ l'expéditeur est notifié. Envoi de retour : transport + vendeur + lots + scan 
 palette naît déjà « En transit ». Aucun effet financier. Les images jointes (Attachement) sont
 stocknées en base comme les preuves de colis, jamais sur disque."""
 import base64,csv,hashlib,io,json,re,datetime
+import palette_refs
 from flask import request,jsonify,Response
 from partner_intake import partner_intake_status
 from client_types import tracking_text
@@ -327,9 +328,11 @@ def register_palette_console(app,s):
                 if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():raise Error('Colis '+code+' déjà réservé dans un document actif.',409)
                 ps.append(p)
             did=c.execute('INSERT INTO ops_documents(kind,client_id,destination_hub_id,client_name,source_name,destination_name,note,created_by,created_at,status,dispatched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(RKIND,cl['id'],h['id'],cl['company'] or cl['name'],h['name'],cl['company'] or cl['name'],text(d,'note',600),u['id'],now(),'En transit',now())).lastrowid
-            ref='PR-%06d'%did
+            ref=palette_refs.next_reference(c,RKIND)
             c.execute('UPDATE ops_documents SET reference=? WHERE id=?',(ref,did))
-            c.execute('INSERT INTO return_palette_meta(document_id,transport,tracking_code,lots) VALUES(?,?,?,?)',(did,text(d,'transport',120),text(d,'tracking_code',80),int(lots)))
+            code_suivi=palette_refs.tracking_or_auto(d.get('tracking_code'))
+            c.execute('INSERT INTO return_palette_meta(document_id,transport,tracking_code,lots) VALUES(?,?,?,?)',(did,text(d,'transport',120),code_suivi,int(lots)))
+            c.execute('UPDATE ops_documents SET tracking_code=? WHERE id=?',(code_suivi,did))
             for p in ps:c.execute('INSERT INTO ops_document_lines(document_id,parcel_id,tracking,recipient,city,initial_status) VALUES(?,?,?,?,?,?)',(did,p['id'],p['tracking'],p['recipient'],p['city'],p['status']))
             for p in ps:event(c,p['id'],p['status'],ref+' · retour expédié au vendeur (console Palettes), remise encore attendue',u)
             audit(c,did,u,'Return Pallet sent',{'count':len(ps),'vendor':cl['id'],'hub':h['id'],'transport':text(d,'transport',120),'tracking_code':text(d,'tracking_code',80),'lots':int(lots)})

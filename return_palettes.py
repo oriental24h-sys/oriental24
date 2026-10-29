@@ -5,6 +5,7 @@ invoice is never duplicated and no payment, COD, fee or invoice status is change
 """
 import csv,io,json,hashlib,re
 from flask import request,jsonify,Response
+import palette_refs
 
 KIND='return_palette'
 STATES=('Préparé','En transit','Partiellement remis','Remis','Clôturé (écarts)','Annulé')
@@ -202,8 +203,10 @@ def register_return_palettes(app,s):
                 if not p:raise Error('Colis inaccessible pour ce vendeur.',404)
                 lockcheck(c,p,cl['id'],src['id']);ps.append(p)
             did=c.execute('INSERT INTO ops_documents(kind,client_id,destination_hub_id,client_name,source_name,destination_name,note,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)',(KIND,cl['id'],src['id'],cl['company'] or cl['name'],src['name'],cl['company'] or cl['name'],text(d,'note',600),u['id'],now())).lastrowid
-            ref=f'PR-{did:06d}';c.execute('UPDATE ops_documents SET reference=? WHERE id=?',(ref,did))
-            c.execute('INSERT INTO return_palette_meta(document_id,transport,tracking_code,lots) VALUES(?,?,?,?)',(did,text(d,'transport',120),text(d,'tracking_code',80),int(flot)))
+            ref=palette_refs.next_reference(c,KIND);c.execute('UPDATE ops_documents SET reference=? WHERE id=?',(ref,did))
+            code_suivi=palette_refs.tracking_or_auto(d.get('tracking_code'))
+            c.execute('INSERT INTO return_palette_meta(document_id,transport,tracking_code,lots) VALUES(?,?,?,?)',(did,text(d,'transport',120),code_suivi,int(flot)))
+            c.execute('UPDATE ops_documents SET tracking_code=? WHERE id=?',(code_suivi,did))
             for p in ps:c.execute('INSERT INTO ops_document_lines(document_id,parcel_id,tracking,recipient,city,initial_status) VALUES(?,?,?,?,?,?)',(did,p['id'],p['tracking'],p['recipient'],p['city'],p['status']))
             audit(c,did,u,'Palette retour préparée',{'parcel_ids':ids,'count':len(ps),'hub_id':src['id'],'vendor_id':cl['id']})
             return result(c,u,d,fp,get(c,did,u))
