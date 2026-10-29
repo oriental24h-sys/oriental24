@@ -59,7 +59,7 @@ function hubPalletsView(data){
    `${esc(d.transport||'—')}<span class="sub">${esc(d.tracking_code||'—')}</span>`,
    `<strong>${d.received||0} / ${d.count||0}</strong><span class="sub">${Math.max(0,d.remaining||0)} restant(s)</span>`,
    d.lots||'—',opsDate(d.created_at),opsTag(d.status),
-   `<div class="hp-row-actions" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn sm" onclick="openOpsDocument(${d.id})">${d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)?'Ouvrir / recevoir':'Ouvrir'} ${icon('arrow')}</button>${d.status==='Préparé'&&!d.dispatched_at&&(!agent||Number(d.source_hub_id)===hubId)?`<button class="btn sm" onclick="hubPaletteAddCmd(${d.id},'${esc(d.palette_purpose||'standard')}',${Number(d.source_hub_id)||0},${Number(d.destination_hub_id)||0},${Number(d.revision)||1})" title="Ajouter d’autres CMD à cette palette">${icon('plus')}CMD</button><button class="btn sm danger" onclick="hubPaletteDelete(${d.id},'${esc(d.reference)}',${Number(d.revision)||1})" title="Supprimer cette palette non validée">Supprimer</button>`:''}</div>`
+   `<div class="hp-row-actions" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn sm" onclick="openOpsDocument(${d.id})">${d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)?'Ouvrir / recevoir':'Ouvrir'} ${icon('arrow')}</button>${d.status==='Préparé'&&!d.dispatched_at&&(!agent||Number(d.source_hub_id)===hubId)?`<button class="btn sm" onclick="hubPaletteAddCmd(${d.id},'${esc(d.palette_purpose||'standard')}')" title="Ajouter des CMD à cette palette : le scan s’ouvre">${icon('plus')}CMD</button><button class="btn sm danger" onclick="hubPaletteDelete(${d.id},'${esc(d.reference)}',${Number(d.revision)||1})" title="Supprimer cette palette non validée">Supprimer</button>`:''}</div>`
  ])):empty(tab==='retours'?'Aucun retour dans cette sélection':tab==='a-recevoir'?'Aucune palette à recevoir':'Aucune palette inter-Hub','Les palettes autorisées pour votre périmètre apparaîtront ici.');
  return heading('Palettes',agent?`${esc(data.hub?.name||'Mon Hub')} · transferts et retours qui impliquent ce Hub.`:'Transferts et retours inter-Hubs · administrateur.',`<button class="btn" onclick="renderView()">${icon('refresh')}Actualiser</button>`)+
  `<div class="pp-explainer"><span class="stat-icon">${icon('layers')}</span><div><b>${esc(purposeNote)}</b><p>Au scan de départ du retour, chaque colis passe à « Vers Hub Central ». Il devient « Retourné » uniquement après sa réception physique par Admin ou le responsable du Hub Central. Les montants des relevés déjà émis ne sont pas recalculés; une origine inconnue n’est jamais déduite de la ville.</p></div></div>
@@ -705,41 +705,12 @@ async function hubPaletteDeleteConfirm(id,revision){
  }catch(e){toast(e.message,true)}
 }
 
-let hubAddDialog=null;
-async function hubPaletteAddCmd(id,purpose,source,destination,revision){
- if(!source||!destination){toast('Trajet de la palette introuvable.',true);return}
- hubAddDialog={id,revision,purpose,busy:false};
- try{
-  const qs=new URLSearchParams({mode:purpose,source_hub_id:String(source),destination_hub_id:String(destination)});
-  const result=await api('/logistics/palette-candidates?'+qs.toString());
-  const all=result.rows||[];
-  const rows=all.slice(0,100);
-  hubAddDialog.rows=rows;
-  const badge=p=>p.decision==='accept'?'<span class="tag good">Part direct</span>':p.decision==='double'?'<span class="tag warn">Déjà Livré</span>':p.decision==='confirm'?'<span class="tag warn">Rendez-vous · OUI requis</span>':p.decision==='blocked'?'<span class="tag bad">À valider</span>':'';
-  const facts=p=>[p.days_at_hub!==undefined&&p.days_at_hub!==null?p.days_at_hub+' j':'',p.handovers!==undefined&&p.handovers!==null?p.handovers+' passage(s) livreur':'',p.appointment?'RDV '+p.appointment:''].filter(Boolean).join(' · ');
-  const list=rows.length?`<div class="form-hint">${rows.length} colis disponibles physiquement au Hub de départ.${all.length>100?' Une palette contient 100 CMD maximum.':''} Cochez ceux à ajouter : la coche vaut validation (OUI).</div><div class="hub-palette-candidates" id="hp-add-list">${rows.map(p=>`<label class="check-label hub-palette-candidate"><input class="hp-add-pick" type="checkbox" value="${p.id}" data-decision="${esc(p.decision||'')}" onchange="hubAddCmdPaint()"><span><b>${esc(p.tracking)}</b> · ${esc(p.recipient||'')} ${badge(p)}<small class="sub">${esc(p.city||'')} · ${esc(p.status||'')}${facts(p)?' · '+esc(facts(p)):''}</small></span></label>`).join('')}</div>`:empty('Aucun colis disponible','Tous les colis du Hub sont déjà dans une palette active.');
-  modal('Ajouter des CMD à la palette',`${list}<div class="form-actions"><button class="btn primary" id="hp-add-submit" type="button" disabled onclick="hubPaletteAddCmdSend()">Ajouter 0 CMD</button><button class="btn" type="button" onclick="closeModal()">Fermer</button></div>`);
- }catch(e){toast(e.message,true)}
+async function hubPaletteAddCmd(id,purpose){
+ // Palette retour encore ouverte : « Ajouter des CMD » ouvre l'écran de scan,
+ // chaque CMD scannée s'y ajoute. Palette standard : on ouvre la fiche du bon.
+ if(!id)return;
+ closeModal();
+ if(purpose==='return_to_central'||purpose==='return_to_origin')return openDispatchCollection('transfer',id);
+ return openOpsDocument(id,true);
 }
-function hubAddCmdPaint(){
- const picks=[...document.querySelectorAll('#hp-add-list .hp-add-pick')];
- const chosen=picks.filter(x=>x.checked);
- const button=document.getElementById('hp-add-submit');
- if(button){button.textContent='Ajouter '+chosen.length+' CMD';button.disabled=!chosen.length||hubAddDialog?.busy}
-}
-async function hubPaletteAddCmdSend(){
- const d=hubAddDialog;if(!d||d.busy)return;
- const picks=[...document.querySelectorAll('#hp-add-list .hp-add-pick')].filter(x=>x.checked);
- if(!picks.length)return;
- const payload={revision:d.revision,
-  parcel_ids:picks.map(x=>Number(x.value)),
-  confirmed_ids:picks.filter(x=>x.dataset.decision==='confirm').map(x=>Number(x.value)),
-  overridden_ids:picks.filter(x=>x.dataset.decision==='blocked').map(x=>Number(x.value))};
- d.busy=true;hubAddCmdPaint();
- try{
-  const r=await api('/logistics/documents/'+d.id+'/add-parcels','POST',payload);
-  closeModal();toast(r.added+' CMD ajoutée(s) à la palette · total '+r.count+' colis');
-  await renderView();
- }catch(e){toast(e.message,true)}
- finally{if(hubAddDialog===d)d.busy=false;hubAddCmdPaint()}
-}
+
