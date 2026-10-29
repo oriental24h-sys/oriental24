@@ -236,3 +236,49 @@ class ReceptionCollectionTests(unittest.TestCase):
             self.assertEqual(r.status_code,200,r.json)
             with self.conn() as c:
                 self.assertEqual(c.execute('SELECT status FROM ops_documents WHERE id=?',(did,)).fetchone()[0],'Partiellement reçu' if kind=='partner' else 'Partiellement remis')
+
+    def bulk(self,documents,request_key=None,headers=None,confirmed=True):
+        return self.client.post('/api/reception-collection/bulk',headers=headers or self.admin,json=dict(
+            confirmed=confirmed,request_key=request_key or uuid.uuid4().hex,documents=documents))
+
+    def test_bulk_reception_receives_several_palettes_in_one_validation(self):
+        first=self.transfer((3,));self.dispatch(first,(3,))
+        second=self.transfer((4,));self.dispatch(second,(4,))
+        key=uuid.uuid4().hex
+        docs=[{'kind':'transfer','id':first},{'kind':'transfer','id':second}]
+        r=self.bulk(docs,key,self.central)
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['received_palettes'],2)
+        self.assertEqual(r.json['received_parcels'],2)
+        self.assertTrue(all(x['ok'] for x in r.json['results']))
+        self.assertEqual(self.t.parcel_state(3)['status'],'Réceptionné')
+        self.assertEqual(self.t.parcel_state(4)['status'],'Réceptionné')
+        self.assertEqual(self.t.parcel_state(3)['current_hub_id'],90)
+        for did in (first,second):
+            self.assertEqual(self.manifest('transfer',did,self.central)['status'],'Reçu')
+        replay=self.bulk(docs,key,self.central)
+        self.assertEqual(replay.status_code,200,replay.json)
+        self.assertTrue(all(x.get('replayed') for x in replay.json['results']))
+        self.assertEqual(replay.json['received_parcels'],2)
+        with self.conn() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM reception_collection_keys').fetchone()[0],2)
+
+    def test_bulk_reception_ignores_invalid_palette_and_guards_roles(self):
+        ready=self.transfer((3,));self.dispatch(ready,(3,))
+        draft=self.t.create_palette('agent',10,'standard',10,90,[4],910)
+        self.assertEqual(draft.status_code,200,draft.json)
+        r=self.bulk([{'kind':'transfer','id':ready},{'kind':'transfer','id':draft.json['id']}],headers=self.central)
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(r.json['received_palettes'],1)
+        skipped=[x for x in r.json['results'] if not x['ok']]
+        self.assertEqual(len(skipped),1)
+        self.assertTrue(skipped[0]['error'])
+        self.assertEqual(self.t.parcel_state(3)['status'],'Réceptionné')
+        self.assertEqual(self.t.parcel_state(4)['status'],'Réceptionné')
+        partner=self.palette('partner',(5,))
+        self.assertEqual(self.bulk([{'kind':'partner','id':partner}],headers=self.other).status_code,403)
+        self.assertEqual(self.bulk([{'kind':'partner','id':partner}]).status_code,200)
+        self.assertEqual(self.bulk([{'kind':'transfer','id':ready}],confirmed=False).status_code,400)
+        self.assertEqual(self.bulk([]).status_code,400)
+        self.assertEqual(self.bulk([{'kind':'return','id':partner}]).status_code,403)
+        self.assertEqual(self.bulk([{'kind':'transfer','id':i} for i in range(1,32)]).status_code,400)
