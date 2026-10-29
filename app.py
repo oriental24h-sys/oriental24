@@ -1270,6 +1270,8 @@ register_contact_log(app, globals())
 
 from reception_collection import register_reception_collection
 register_reception_collection(app, globals())
+from palette_docs import register_palette_docs
+register_palette_docs(app, globals())
 from dispatch_collection import register_dispatch_collection
 register_dispatch_collection(app, globals())
 register_temporary_passwords(app, globals())
