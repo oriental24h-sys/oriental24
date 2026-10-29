@@ -34,6 +34,8 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('GET', r'/api/cities/resolve'),
     # Étiquettes : impression en lecture seule, bornée aux colis du Hub par parcel().
     ('POST', r'/api/labels'),
+    # Remise au client d'un retour reçu : bornée au Hub du compte par la route elle-même.
+    ('POST', r'/api/logistics/my-returns/\d+/handover'),
     ('PATCH', r'/api/parcels/\d+'),
     ('POST', r'/api/logout'), ('PATCH', r'/api/profile'),
     # Réclamations : création et suivi limités aux propres tickets du compte.

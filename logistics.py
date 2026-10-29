@@ -797,9 +797,11 @@ def register_logistics(app, services):
         """Retours réceptionnés au Hub d'origine : visibles jusqu'à leur remise au client."""
         u = user()
         with conn() as c:
+            hub_name = None
             if u['role'] == 'agent':
                 local = local_manager_hub(c, u)
                 hub_id = local['id']
+                hub_name = local['name']
             else:
                 raw = request.args.get('hub_id', '')
                 hub_id = int(raw) if raw.isdigit() else None
@@ -830,11 +832,47 @@ def register_logistics(app, services):
                 except (TypeError, ValueError):
                     item['days'] = 0
                 result.append(item)
-            return jsonify(rows=result, total=len(result), hub_id=hub_id,
+            if hub_name is None and hub_id:
+                row = c.execute('SELECT name FROM ops_hubs WHERE id=?', (hub_id,)).fetchone()
+                hub_name = row['name'] if row else None
+            return jsonify(rows=result, total=len(result), hub_id=hub_id, hub_name=hub_name,
                            state_labels={'recu_hub_origine': 'Retour reçu en Hub origine',
                                          'transit_origine': 'Retour en transit vers le Hub d’origine',
                                          'recu_entrepot': 'Retour reçu en entrepôt',
                                          'envoye': 'Retour envoyé vers le Hub Central'})
+
+    @app.post(P + '/my-returns/<int:pid>/handover')
+    @auth('admin', 'agent')
+    def ops_my_return_handover(pid):
+        """Remise au client d'un retour reçu au Hub d'origine (clôt la ligne « Mes retours »)."""
+        u = user()
+        d = request.get_json(silent=True) or {}
+        if d.get('confirmed') is not True:
+            raise Error('Confirmez la remise du colis au client.')
+        note = text(d, 'note', False, maxlen=300) if 'note' in d else ''
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            p = c.execute('SELECT * FROM parcels WHERE id=?', (pid,)).fetchone()
+            if not p:
+                raise Error('Colis introuvable.', 404)
+            if u['role'] == 'agent':
+                hub_id = local_manager_hub(c, u)['id']
+            else:
+                raw = d.get('hub_id')
+                hub_id = raw if type(raw) is int and raw > 0 else p['current_hub_id']
+            if p['return_state'] != 'recu_hub_origine':
+                raise Error('Ce colis n’est pas un retour reçu au Hub d’origine.', 409)
+            if not parcel_physically_at_hub(p['current_hub_id'], hub_id):
+                raise Error('Ce colis n’est pas physiquement enregistré à ce Hub.', 409)
+            t = now()
+            c.execute("UPDATE parcels SET return_state='remis_client',updated_at=? WHERE id=?", (t, pid))
+            event(c, pid, p['status'], 'Retour remis au client' + (' · ' + note if note else ''), u)
+            append_audit_log(c, actor_id=u['id'], actor_name=u['name'], action='return_handed_to_client',
+                             entity_type='parcel', entity_id=str(pid),
+                             old_value={'return_state': 'recu_hub_origine'},
+                             new_value={'return_state': 'remis_client'},
+                             metadata={'hub_id': hub_id, 'note': note}, created_at=t)
+            return jsonify(ok=True, parcel_id=pid, return_state='remis_client')
 
     @app.get(P+'/palette-candidates')
     @auth('admin','agent')
