@@ -27,6 +27,10 @@ import re
 from flask import request, jsonify
 from hub_access import parcel_by_tracking_at_hub, parcel_by_manifest_at_hub
 
+import logging
+
+log = logging.getLogger('oriental24')
+
 KIND = 'return_palette'
 DEFAULT_WEEK_DAYS = 7
 MIN_HANDOVERS = 2
@@ -44,7 +48,7 @@ def week_days_of(c, fallback=DEFAULT_WEEK_DAYS):
         if row and str(row['value']).strip().isdigit() and 1 <= int(row['value']) <= 90:
             return int(row['value'])
     except Exception:
-        pass
+        log.debug('Règle de retour indisponible', exc_info=True)
     return fallback
 
 
@@ -75,7 +79,7 @@ def arrived_at_hub(c, pid, hub_id):
         if row and row['received']:
             stamps.append(row['received'])
     except Exception:
-        pass
+        log.debug('Preuves de réception indisponibles', exc_info=True)
     row = c.execute('SELECT created_at,status_updated_at FROM parcels WHERE id=?', (pid,)).fetchone()
     if row:
         stamps.append(row['status_updated_at'] or row['created_at'])
@@ -149,7 +153,7 @@ def register_return_scan(app, s):
             if r and str(r['value']).strip().isdigit() and 1 <= int(r['value']) <= 90:
                 return int(r['value'])
         except Exception:
-            pass
+            log.debug('Réglage de retour illisible', exc_info=True)
         return DEFAULT_WEEK_DAYS
 
     def staff(u):

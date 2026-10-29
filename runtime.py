@@ -7,7 +7,22 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 DEMO_EMAILS = ('admin@oriental24.ma','client@oriental24.ma','livreur@oriental24.ma','sara@example.test','youssef@example.test')
 
+def _pin_timezone():
+    # « Aujourd'hui » doit être le jour du Maroc, jamais celui du conteneur (UTC).
+    # Railway exécute en UTC : entre 00:00 et 01:00 heure marocaine le serveur
+    # serait encore la veille (tableau de bord, RDV du jour, aging 30/60/90).
+    import time as _time
+    wanted = os.getenv('TZ', '') or 'Africa/Casablanca'
+    os.environ['TZ'] = wanted
+    try:
+        _time.tzset()
+    except AttributeError:
+        pass
+    return wanted
+
+
 def configure(app, base):
+    app.config['TIMEZONE'] = _pin_timezone()
     mode = os.getenv('ORIENTAL24_MODE', 'demo')
     if mode not in ('demo', 'production'):
         raise RuntimeError('ORIENTAL24_MODE doit être demo ou production.')

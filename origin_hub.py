@@ -1,3 +1,7 @@
+
+import logging
+
+log = logging.getLogger('oriental24')
 """Hub d'origine automatique d'une CMD créée.
 
 Règle métier : toute nouvelle CMD reçoit **immédiatement** un Hub d'origine, sans saisie
@@ -73,7 +77,7 @@ def _first_documented_hub(c, parcel_id):
                 if type(hub_id) is int and hub_id > 0 and event_at:
                     events.append((str(event_at), hub_id))
         except Exception:
-            pass
+            log.warning('Origine ignorée (lecture des preuves)', exc_info=True)
 
     _collect('''SELECT d.destination_hub_id hub_id,l.received_at event_at
                 FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
@@ -114,5 +118,5 @@ def ensure_parcel_origin(c, parcel_id):
         try:
             c.execute('UPDATE parcels SET origin_hub_id=? WHERE id=? AND origin_hub_id IS NULL', (hub_id, parcel_id))
         except Exception:
-            pass
+            log.warning('Origine non enregistrée (écriture)', exc_info=True)
     return hub_id

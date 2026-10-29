@@ -13,6 +13,8 @@ DB = configure(app, BASE)
 from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, DRIVER_HUB_ONLY_STATUSES, EXCHANGE_RECEIVED, EXCHANGE_STATUSES, policy as status_policy
 import exchange_flow
 import origin_hub
+import ledger
+import scan_codes
 from billing import driver_paid_sql
 import client_types
 import city_resolve
@@ -26,11 +28,25 @@ from audit_guard import install_audit_log_guards
 from audit_log import append_audit_log
 
 def now(): return datetime.now().isoformat(timespec='seconds')
+WAL_READY = False
+
+
 @contextmanager
 def conn():
+    global WAL_READY
     c = sqlite3.connect(DB, timeout=15)
     c.row_factory = sqlite3.Row
     c.execute('PRAGMA foreign_keys=ON')
+    # WAL : les lectures (listes, scans) ne sont plus bloquées par une écriture, et
+    # busy_timeout absorbe les pics au lieu d'échouer après 15 s (« database is locked »).
+    try:
+        c.execute('PRAGMA busy_timeout=8000')
+        if not WAL_READY:
+            c.execute('PRAGMA journal_mode=WAL')
+            c.execute('PRAGMA synchronous=NORMAL')
+            WAL_READY = True
+    except sqlite3.DatabaseError:
+        pass
     try:
         yield c
         c.commit()
@@ -87,6 +103,10 @@ def init_db():
         if 'name_ar' not in {r['name'] for r in c.execute('PRAGMA table_info(cities)')}:c.execute("ALTER TABLE cities ADD COLUMN name_ar TEXT DEFAULT ''")
         exchange_flow.migrate(c)
         client_types.migrate(c)
+        # Code d'étiquette court et unique par société (préfixe des étiquettes/scans).
+        scan_codes.migrate(c)
+        # Registre exact au centime (colonnes *_cents synchronisées par triggers).
+        ledger.migrate(c)
         if 'support_id' not in {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}:c.execute('ALTER TABLE parcels ADD COLUMN support_id INTEGER REFERENCES users(id)')
         # Return tracking is a dimension separate from the delivery status: a return
         # keeps the command's delivery status untouched and only sets this state.
@@ -308,6 +328,7 @@ def list_parcels(c,u):
     EXISTS(SELECT 1 FROM ops_document_lines ol WHERE ol.parcel_id=p.id AND ol.active=1) operations_locked,
     EXISTS(SELECT 1 FROM driver_statement_lines dl WHERE dl.parcel_id=p.id AND dl.active=1) financial_locked,
     ci.name city,cl.name client,cl.company company,
+    (SELECT company_code FROM users WHERE id=p.client_id) company_code,
     CASE WHEN EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) THEN NULL ELSE dr.name END driver,
     CASE WHEN EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) THEN NULL ELSE dr.phone END driver_phone,
     CASE WHEN EXISTS(SELECT 1 FROM driver_receipts dw WHERE dw.parcel_id=p.id AND dw.driver_id=p.driver_id) THEN NULL ELSE dr.active END driver_active,
@@ -389,6 +410,8 @@ def register():
     with conn() as c:
         kind=client_types.parse_type(d.get('client_type','vendeur'),'client',APIError)
         cur=c.execute('INSERT INTO users(name,email,password,role,company,phone,created_at,client_type) VALUES(?,?,?,?,?,?,?,?)',(text(d,'name'),email,generate_password_hash(password),'client',text(d,'company'),text(d,'phone'),now(),kind))
+        c.execute('UPDATE users SET company_code=? WHERE id=? AND company_code IS NULL',
+                  (scan_codes.unique_code(c,text(d,'company') or text(d,'name'),cur.lastrowid),cur.lastrowid))
         client_types.audit(c,cur.lastrowid,cur.lastrowid,None,kind,'Inscription client',now)
         security_issue(c,cur.lastrowid,'Compte créé et session ouverte')
     return jsonify(ok=True)
@@ -404,7 +427,7 @@ def bootstrap():
     u=user()
     with conn() as c:
         if u['role']=='admin':
-            users=[dict(r) for r in c.execute("SELECT id,name,email,role,company,phone,active,client_type,agent_hub_id,driver_hub_id,team_lead_id FROM users ORDER BY id")]
+            users=[dict(r) for r in c.execute("SELECT id,name,email,role,company,company_code,phone,active,client_type,agent_hub_id,driver_hub_id,team_lead_id FROM users ORDER BY id")]
         elif u['role']=='agent' and type(u.get('agent_hub_id')) is int:
             users=[dict(r) for r in c.execute("SELECT id,name,email,role,company,phone,active,driver_hub_id,team_lead_id FROM users WHERE role='livreur' AND driver_hub_id=? AND EXISTS(SELECT 1 FROM ops_hubs h WHERE h.id=users.driver_hub_id AND h.active=1) ORDER BY name",(u['agent_hub_id'],))]
         elif u['role']=='livreur' and type(u.get('driver_hub_id')) is int and u['driver_hub_id']>0:
@@ -533,6 +556,13 @@ def update_parcel(pid):
             return jsonify(ok=True)
         if c.execute('SELECT 1 FROM driver_statement_lines WHERE parcel_id=? AND active=1',(pid,)).fetchone():
             raise APIError('Ce colis est figé dans un relevé livreur. Annulez le relevé avant toute correction.',409)
+        if u['role']=='admin' and set(d)-{'revision'}:
+            # Verrou optimiste : deux écrans Admin ouverts ne s'écrasent plus en silence
+            # (montant COD, ville, destinataire). Le client envoie sa version du colis.
+            if type(d.get('revision')) is not int:
+                raise APIError('Version du colis requise : rechargez la fiche avant de modifier.',409)
+            if d['revision']!=p['ops_revision']:
+                raise APIError('Le colis a changé entre-temps. Rechargez la fiche avant de confirmer.',409)
         if p['invoice_id']: raise APIError('Ce colis est facturé et ne peut plus être modifié.')
         exchange_created=None
         ops_change(c,p,d,u)
@@ -863,6 +893,10 @@ def add_user():
                 if type(lead) is not int or lead<=0:raise APIError('Chef d’équipe invalide : choisissez un livreur actif non rattaché.')
                 validate_driver_team_hub(c,0,driver_hub_id,lead_id=lead)
         uid=c.execute('INSERT INTO users(name,email,password,role,company,phone,created_at,client_type,agent_hub_id,team_lead_id,driver_hub_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(text(d,'name'),email,generate_password_hash(pw),role,text(d,'company',False),text(d,'phone'),now(),kind,hub_id,lead,driver_hub_id)).lastrowid
+        if role=='client':
+            # Préfixe d'étiquette unique dès la création : le tracking de la société reste intact.
+            c.execute('UPDATE users SET company_code=? WHERE id=? AND company_code IS NULL',
+                      (scan_codes.unique_code(c,text(d,'company',False) or text(d,'name'),uid),uid))
         if role=='support':save_support_cities(c,uid,city_ids)
         if role=='client':client_types.audit(c,uid,session['uid'],None,kind,'Création administrative',now)
         if role=='livreur' and driver_hub_id is not None:
@@ -881,6 +915,13 @@ def edit_user(uid):
         v=c.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
         if not v or v['role']=='admin':raise APIError('Ce compte ne peut pas être modifié ici.')
         if 'client_type' in d:client_types.change_type(c,v,d['client_type'],session['uid'],APIError,now)
+        if 'company_code' in d and v['role']=='client':
+            previous_code=c.execute('SELECT company_code FROM users WHERE id=?',(uid,)).fetchone()['company_code']
+            code=scan_codes.set_code(c,uid,d.get('company_code'),APIError)
+            if (previous_code or '')!=code:
+                append_audit_log(c,actor_id=actor['id'],actor_name=actor['name'],action='client_company_code_changed',
+                    entity_type='user',entity_id=str(uid),old_value={'company_code':previous_code},
+                    new_value={'company_code':code},metadata={'note':'Préfixe des étiquettes et des scans'},created_at=now())
         support_city_ids=validate_support_cities(c,d['city_ids'],uid) if v['role']=='support' and 'city_ids' in d else None
         if v['role']=='livreur':
             if v['driver_archived'] and d.get('active'):raise APIError('Désarchivez le livreur depuis sa fiche.',409)
@@ -1036,9 +1077,13 @@ def invoices():
                     WHERE l.parcel_id=p.id AND l.active=1 AND d.kind='return_palette'
                   )""",(cid,)).fetchall()
             if not ps:raise APIError('Aucun colis clôturé non facturé pour ce client.')
-            cod=round(sum(p['amount'] for p in ps if p['status']=='Livré'),2)
-            fees=round(sum(p['fee'] if p['status']=='Livré' else p['return_fee'] for p in ps),2)
-            cur=c.execute('INSERT INTO invoices(client_id,cod,fees,total,created_at) VALUES(?,?,?,?,?)',(cid,cod,fees,round(cod-fees,2),now()))
+            # Totaux exacts : calculés en centimes entiers puis convertis en MAD.
+            totals=ledger.invoice_totals([dict(r) for r in ps])
+            cod,fees,total=totals['cod'],totals['fees'],totals['total']
+            cur=c.execute('INSERT INTO invoices(client_id,cod,fees,total,cod_cents,fees_cents,total_cents,created_at) '
+                          'VALUES(?,?,?,?,?,?,?,?)',
+                          (cid,cod,fees,total,totals['cod_cents'],totals['fees_cents'],totals['total_cents'],now()))
+            ledger.record_lines(c,cur.lastrowid,totals,now())
             client_invoice_info(c,c.execute('SELECT * FROM invoices WHERE id=?',(cur.lastrowid,)).fetchone())
             for p in ps:
                 c.execute('UPDATE parcels SET invoice_id=? WHERE id=?',(cur.lastrowid,p['id']))
@@ -1059,7 +1104,10 @@ def invoice(iid):
             settle_client_invoice(c,i,u)
             i=c.execute('SELECT i.*,u.name client,u.company company FROM invoices i JOIN users u ON u.id=i.client_id WHERE i.id=?',(iid,)).fetchone()
         i=client_invoice_info(c,i)
-        return jsonify(**client_invoice_history(c,iid),invoice=i,parcels=[dict(r) for r in c.execute('SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE invoice_id=?',(iid,))])
+        detail=ledger.lines_for(c,iid)
+        return jsonify(**client_invoice_history(c,iid),invoice=i,lines=detail,
+                       lines_total_cents=sum(int(l['cod_cents'])-int(l['fee_cents']) for l in detail),
+                       parcels=[dict(r) for r in c.execute('SELECT p.*,ci.name city FROM parcels p JOIN cities ci ON ci.id=p.city_id WHERE invoice_id=?',(iid,))])
 @app.route('/api/products',methods=['GET','POST'])
 @auth('admin','client')
 def products():

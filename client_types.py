@@ -1,7 +1,10 @@
 """Client classification and tracking policy; no financial rules live here."""
+import logging
 import re
 import secrets
 import sqlite3
+
+log = logging.getLogger('oriental24')
 
 TYPES = ('vendeur', 'societe_livraison')
 TRACKING_PATTERN = r'[A-Za-z0-9][A-Za-z0-9._/\-]{0,79}'
@@ -14,6 +17,20 @@ def migrate(c):
     # Fast case-insensitive search; uniqueness is enforced in code, per company.
     c.execute('DROP INDEX IF EXISTS idx_tracking_nocase')
     c.execute('CREATE INDEX IF NOT EXISTS idx_tracking_search ON parcels(tracking COLLATE NOCASE)')
+    # Garantie ultime : un même tracking ne peut pas exister deux fois pour une société.
+    # (Deux sociétés différentes peuvent partager un code : l'index est borné au client.)
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='parcels_client_tracking_unique'").fetchone():
+        duplicates = c.execute('''SELECT client_id, upper(tracking) code, count(*) n FROM parcels
+                                  WHERE client_id IS NOT NULL
+                                  GROUP BY client_id, upper(tracking) HAVING count(*)>1 LIMIT 1''').fetchone()
+        if duplicates:
+            # Historique à nettoyer : on n'échoue jamais au démarrage, l'index sera créé
+            # dès que les doublons auront été corrigés (contrainte déjà assurée en code).
+            log.warning('Index de tracking non créé : doublons historiques (client %s, code %s, %s lignes)',
+                        duplicates['client_id'], duplicates['code'], duplicates['n'])
+        else:
+            c.execute('CREATE UNIQUE INDEX IF NOT EXISTS parcels_client_tracking_unique '
+                      'ON parcels(client_id, tracking COLLATE NOCASE)')
     c.execute('''CREATE TABLE IF NOT EXISTS client_type_audit(
         id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
         actor_id INTEGER NOT NULL REFERENCES users(id), old_type TEXT,

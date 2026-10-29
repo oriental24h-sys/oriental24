@@ -37,6 +37,7 @@ MAX_FILE = 2 * 1024 * 1024
 
 import city_resolve
 import origin_hub
+import scan_codes
 
 
 def normalize(value):
@@ -426,11 +427,15 @@ def register_operations(app, services):
                 # Lecture seule : le Responsable Hub imprime les colis de son Hub,
                 # y compris ceux déjà confiés à ses livreurs (même périmètre que sa liste).
                 p = parcel(c, pid, u, follow_drivers=True, include_sent=True)
-                extras = c.execute('SELECT ci.name city,u.name client,u.company company,oh.name origin_hub FROM cities ci JOIN users u ON u.id=? LEFT JOIN ops_hubs oh ON oh.id=? WHERE ci.id=?', (p['client_id'], p.get('origin_hub_id'), p['city_id'])).fetchone()
+                extras = c.execute('SELECT ci.name city,u.name client,u.company company,u.company_code company_code,oh.name origin_hub FROM cities ci JOIN users u ON u.id=? LEFT JOIN ops_hubs oh ON oh.id=? WHERE ci.id=?', (p['client_id'], p.get('origin_hub_id'), p['city_id'])).fetchone()
                 stock_lines=[]
                 if p.get('stock_order_id'):
                     stock_lines=[dict(r) for r in c.execute('SELECT sku,name,quantity FROM fulfillment_lines WHERE order_id=? ORDER BY id',(p['stock_order_id'],))]
-                result.append({**p, **dict(extras), 'stock_lines':stock_lines, **codes_for(p['tracking'])})
+                # Le code-barres imprimé porte le préfixe de la société : il reste
+                # unique dans tout le réseau même si deux sociétés ont le même tracking.
+                label = scan_codes.label_code(extras['company_code'], p['tracking'])
+                result.append({**p, **dict(extras), 'stock_lines':stock_lines,
+                               'scan_code': label, 'client_tracking': p['tracking'], **codes_for(label)})
         return jsonify(result)
 
     @app.post('/api/scan')
@@ -440,7 +445,9 @@ def register_operations(app, services):
         tracking = tracking_text(payload.get('tracking'), Error)
         cond, args = scope(user())
         with conn() as c:
-            rows = c.execute(f'SELECT p.id,p.tracking,p.client_id,u.company FROM parcels p JOIN users u ON u.id=p.client_id WHERE p.tracking=? COLLATE NOCASE AND {cond} ORDER BY p.id DESC LIMIT 12', [tracking]+args).fetchall()
+            # Le scan accepte l'étiquette ORIENTAL24 (SOCIETE-TRACKING) et le tracking brut.
+            found = scan_codes.lookup(c, tracking, cond, args)
+            rows = found[:12]
             if not rows:
                 raise Error('Aucun colis accessible avec cette référence.', 404)
             p = rows[0]
@@ -448,8 +455,7 @@ def register_operations(app, services):
                 chosen = payload.get('client_id')
                 match = [r for r in rows if type(chosen) is int and r['client_id'] == chosen]
                 if len(match) != 1:
-                    companies = ', '.join(sorted({r['company'] or '—' for r in rows[:6]}))
-                    raise Error('Référence identique chez plusieurs sociétés (' + companies + ') : ouvrez le bon colis via la recherche détaillée avant de scanner.', 409)
+                    raise Error(scan_codes.ambiguous_message(tracking, [dict(r) for r in rows]), 409)
                 p = match[0]
             return jsonify(dict(p))
 

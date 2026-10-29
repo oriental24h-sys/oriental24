@@ -11,6 +11,7 @@ from notification_retention import purge_read_notifications
 from client_profile_extras import notification_enabled
 from claims import prepare_claim
 import return_scan
+import scan_codes
 from parcel_statuses import ATTEMPT_SOURCES, ATTEMPT_OUTCOMES, DRIVER_HUB_ONLY_STATUSES, DRIVER_TRANSITIONS, EXCHANGE_RECEIVED
 import exchange_flow
 from audit_guard import install_ops_audit_guards, install_departure_reconciliation_guard
@@ -984,11 +985,18 @@ def register_logistics(app, services):
                     raise Error('Le trajet doit relier le Hub Central à un Hub secondaire actif.',409)
                 condition="p.status IN ('Ramassé','Au hub','Réceptionné') AND p.invoice_id IS NULL AND NOT EXISTS(SELECT 1 FROM driver_statement_lines st WHERE st.parcel_id=p.id AND st.active=1)"
                 args=[source_id]
-            args.append(tracking)
+            # Étiquette ORIENTAL24 (`SOCIETE-TRACKING`) : le préfixe désigne la société, donc
+            # plus aucune ambiguïté même si deux sociétés utilisent le même tracking.
+            prefix, base_tracking = scan_codes.split_known(c,tracking)
+            args.append(base_tracking)
+            company_filter = ''
+            if prefix:
+                company_filter = " AND upper(COALESCE((SELECT company_code FROM users WHERE id=p.client_id),''))=?"
+                args.append(prefix)
             row=c.execute('''SELECT p.id,p.tracking,p.recipient,p.phone,p.status,p.current_hub_id,p.origin_hub_id,
                     p.next_attempt_at,p.is_exchange,p.exchange_of_id,ci.name city,oh.name origin_hub
                 FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id
-                WHERE p.current_hub_id=? AND '''+condition+''' AND upper(p.tracking)=?
+                WHERE p.current_hub_id=? AND '''+condition+''' AND upper(p.tracking)=?'''+company_filter+'''
                   AND NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)''',args).fetchone()
             if row:
                 decision=return_scan.decide_policy(c,dict(row),source_id,now)
@@ -997,11 +1005,17 @@ def register_logistics(app, services):
                                direct=decision['code'] in ('accept','double'))
 
             # Diagnostic précis : on explique pourquoi le colis ne peut pas partir.
-            seen=c.execute('''SELECT p.tracking,p.status,p.current_hub_id,p.origin_hub_id,
+            seen_rows=c.execute('''SELECT p.id,p.client_id,p.tracking,p.status,p.current_hub_id,p.origin_hub_id,
+                    cl.company company,cl.company_code company_code,
                     (SELECT name FROM ops_hubs WHERE id=p.current_hub_id) current_hub_name,
                     EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1) busy
-                FROM parcels p WHERE upper(p.tracking)=? ORDER BY p.id DESC LIMIT 1''',(tracking,)).fetchone()
-            if not seen:raise Error('Référence « '+tracking+' » introuvable.',404)
+                FROM parcels p LEFT JOIN users cl ON cl.id=p.client_id
+                WHERE upper(p.tracking)=? OR upper(COALESCE(cl.company_code,'') || '-' || p.tracking)=? ORDER BY p.id DESC''',
+                (scan_codes.split_known(c,tracking)[1],scan_codes.normalize(tracking))).fetchall()
+            if not seen_rows:raise Error('Référence « '+tracking+' » introuvable.',404)
+            if len({r['client_id'] for r in seen_rows})>1:
+                raise Error(scan_codes.ambiguous_message(tracking,[dict(r) for r in seen_rows]),409)
+            seen=seen_rows[0]
             if seen['busy']:raise Error('Ce colis appartient déjà à un document actif.',409)
             if seen['current_hub_id']!=source_id:
                 where='le Hub de départ' if mode!='return_to_origin' else 'le Hub Central'
@@ -1277,8 +1291,9 @@ def register_logistics(app, services):
                                decision='accept',message='Colis déjà dans cette palette.')
             if doc['status'] not in ('Préparé','Départ partiel'):
                 raise Error('Palette déjà validée : aucun ajout possible.',409)
-            row=c.execute('SELECT * FROM parcels WHERE upper(tracking)=? ORDER BY id DESC LIMIT 1',(tracking,)).fetchone()
-            if not row:raise Error('Aucun colis avec ce numéro de suivi.',404)
+            # Étiquette ORIENTAL24 (SOCIETE-TRACKING) ou tracking brut ; jamais de choix deviné
+            # entre deux sociétés qui partagent le même code.
+            row=scan_codes.lookup_one(c,tracking,Error)
             try:p=parcel(c,row['id'],u)
             except Error:raise Error('Aucun colis avec ce numéro de suivi.',404)
             if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():
@@ -1339,12 +1354,14 @@ def register_logistics(app, services):
             raise Error('Document introuvable.',404)
         if doc['kind']!='transfer' or not doc['departure_scan_required']:
             raise Error('Ce document ne requiert pas les scans de sortie.',409)
-        line=next((l for l in doc['lines'] if l['tracking'].upper()==tracking and l['active']),None)
+        _prefix,_base=scan_codes.split_known(c,tracking)
+        line=next((l for l in doc['lines']
+                   if scan_codes.normalize(l['tracking'])==scan_codes.normalize(_base) and l['active']),None)
         if not line:
             # Give a routing explanation only for a code physically at the
             # source; never disclose a foreign Hub's parcel or city.
-            candidates=c.execute('SELECT * FROM parcels WHERE upper(tracking)=? AND current_hub_id=?',(tracking,doc['source_hub_id'])).fetchall()
-            if len(candidates)==1:check_transfer_city(c,doc,candidates[0])
+            found=scan_codes.lookup(c,tracking,'p.current_hub_id=?',(doc['source_hub_id'],))
+            if len(found)==1:check_transfer_city(c,doc,found[0])
             raise Error('Colis non scanné : cette référence ne figure pas dans ce transfert actif.',404)
         if line['departure_scanned_at']:
             return jsonify(ok=True,already_scanned=True,departure_scanned=doc['departure_scanned'],count=doc['count'],dispatched=bool(doc['dispatched_at']))

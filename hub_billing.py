@@ -15,6 +15,10 @@ from flask import jsonify, request, Response
 from hub_access import driver_financial_hub_sql
 from invoice_profile import issuer_for_actor, hub_identity
 
+import logging
+
+log = logging.getLogger('oriental24')
+
 TZ = ZoneInfo('Africa/Casablanca')
 
 
@@ -469,7 +473,8 @@ def register_hub_billing(app, s):
                     app.logger.exception('Hub billing scheduler failed')
                     try:
                         with conn() as c:c.execute('UPDATE hub_billing_schedule SET last_error=? WHERE id=1',(str(exc)[:300],))
-                    except Exception:pass
+                    except Exception:
+                        log.warning('Ligne de facture Hub ignorée', exc_info=True)
         thread=threading.Thread(target=loop,name='hub-billing-scheduler',daemon=True)
         app.extensions['hub_billing_scheduler']=dict(thread=thread,stop=stop)
         thread.start()

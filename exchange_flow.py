@@ -17,6 +17,10 @@ import re
 import origin_hub
 from parcel_statuses import EXCHANGE_TO_RECOVER, EXCHANGE_RECEIVED, EXCHANGE_STATUSES
 
+import logging
+
+log = logging.getLogger('oriental24')
+
 MAX_TRACKING = 72
 
 
@@ -146,7 +150,7 @@ def create_for_delivery(c, pid, actor, event, now, audit=None):
                              'origin_hub_id': origin_hub_id},
                   metadata={'source_tracking': p['tracking']}, created_at=t)
         except Exception:
-            pass
+            log.warning('Audit échange non journalisé', exc_info=True)
     row = c.execute('SELECT * FROM parcels WHERE id=?', (eid,)).fetchone()
     return summary(c, row)
 

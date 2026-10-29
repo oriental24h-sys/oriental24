@@ -6,6 +6,10 @@ import math,secrets,time
 from datetime import datetime,timedelta
 from flask import request,jsonify
 
+import logging
+
+log = logging.getLogger('oriental24')
+
 OPEN_STATES=('Transit','Créé','Ramassé','Au hub','Réceptionné','Reçu par le livreur','En livraison','Programmé','Reporté','Intéressé')
 OUT_STATES=('En livraison','Programmé')
 # v1.8.1 « Messagerie guidée » : messages prêts à l'emploi, jamais de texte libre (aucune fuite possible).
@@ -69,7 +73,8 @@ def register_tour_control(app,s):
     def parse(t):
         for fmt in ('%Y-%m-%dT%H:%M:%S','%Y-%m-%d %H:%M:%S'):
             try:return time.mktime(time.strptime(str(t)[:19],fmt))
-            except Exception:pass
+            except Exception:
+                log.warning('Colonne OTP indisponible', exc_info=True)
         return 0.0
     # v1.9.0 : ETA prédictive (modèle appris par advanced_tech) — repli sur la formule d'origine.
     def eta_params():

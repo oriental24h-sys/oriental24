@@ -21,6 +21,10 @@ from urllib.parse import quote
 from flask import request, jsonify
 from tour_control import OUT_STATES, OPEN_STATES, GEO, haversine, route_km, order_route, MSG_TEMPLATES
 
+import logging
+
+log = logging.getLogger('oriental24')
+
 # ---- gabarits de notification : texte figé + variables système uniquement ({tracking}, {code}) ----
 NOTIF = {
     'pickup':   'ORIENTAL24 : votre colis {tracking} a été ramassé et rejoint notre réseau de livraison.',
@@ -71,7 +75,8 @@ def msg_links(phone, text):
 def _ts(t):
     for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S'):
         try: return time.mktime(time.strptime(str(t)[:19], fmt))
-        except Exception: pass
+        except Exception:
+            log.warning('Réglage technique ignoré', exc_info=True)
     return 0.0
 
 def _solve3(A, b):
