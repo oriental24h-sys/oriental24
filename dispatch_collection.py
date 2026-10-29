@@ -41,7 +41,7 @@ def register_dispatch_collection(app,s):
                 private=u['role']=='agent' and l.get('current_hub_id')!=u.get('agent_hub_id')
                 rows.append(dict(id=l['id'],tracking=l['tracking'],received_at=sent(kind,doc,l),excluded=excluded(l),blocked=bool(reason),blocked_reason=reason,
                     recipient='' if private else l.get('recipient',''),city='' if private else l.get('city','')))
-            return jsonify(id=did,reference=doc['reference'],status=doc['status'],snapshot=snapshot,lines=rows,available=available(doc),allow_partial_dispatch=bool(a.get('release')),
+            return jsonify(id=did,reference=doc['reference'],status=doc['status'],palette_purpose=doc.get('palette_purpose') or 'standard',snapshot=snapshot,lines=rows,available=available(doc),allow_partial_dispatch=bool(a.get('release')),
                 route=' → '.join(filter(None,[doc.get('source_name') or doc.get('client_name'),doc.get('destination_name')])),
                 confirmation='Je confirme le départ physique de tous les colis scannés. Aucun envoi avant cette validation.')
 

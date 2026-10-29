@@ -39,6 +39,26 @@ def release_received_transfer_lines(c):
           AND document_id IN (SELECT id FROM ops_documents WHERE kind='transfer')""").rowcount
 
 
+RETURN_LEGACY_STATUSES=('Retourné','Refusé','Échange Réceptionné')
+
+
+def return_expected_status(line):
+    """Status recorded when the return manifest was prepared (snapshot)."""
+    return line.get('return_transit_status') or line.get('return_status') or line.get('initial_status')
+
+
+def return_status_unchanged(line, p):
+    """Every Hub parcel can be returned (any delivery status).
+
+    What must hold is that the recorded status snapshot still equals the parcel's
+    current status: only a real change since preparation blocks the scan.
+    """
+    expected = return_expected_status(line)
+    if not expected:
+        return False
+    return p['status'] == expected
+
+
 def register_logistics(app, services):
     conn,auth,user,now,text,Error,event,parcel = (services[k] for k in ['conn','auth','user','now','text','APIError','event','parcel'])
     generate_password_hash=services['generate_password_hash']
@@ -152,6 +172,9 @@ def register_logistics(app, services):
         c.executemany('INSERT OR IGNORE INTO ops_reasons(code,label) VALUES(?,?)',REASONS)
         c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('ops_started_at',?)",(now(),))
 
+    def city_name(c,p):
+        row=c.execute('SELECT name FROM cities WHERE id=?',(p['city_id'],)).fetchone()
+        return row[0] if row else ''
     def body():
         d=request.get_json()
         if not isinstance(d,dict):raise Error('Objet JSON requis.')
@@ -296,6 +319,7 @@ def register_logistics(app, services):
         return reason,next_at
     def allowed_doc(c,did,u):
         d=c.execute('SELECT * FROM ops_documents WHERE id=?',(did,)).fetchone()
+        if d and d['status']=='Supprimé':raise Error('Document introuvable.',404)
         if not d or (u['role']=='client' and (d['kind']=='transfer' or d['client_id']!=u['id'])) or (u['role']=='livreur' and d['driver_id']!=u['id']):raise Error('Document introuvable.',404)
         if u['role']=='agent' and (d['kind']!='transfer' or u.get('agent_hub_id') not in (d['source_hub_id'],d['destination_hub_id'])):raise Error('Document introuvable.',404)
         return dict(d)
@@ -653,10 +677,10 @@ def register_logistics(app, services):
     @auth()
     def ops_documents():
         u=user()
-        if u['role']=='admin':where,args='1=1',[]
-        elif u['role']=='client':where,args="kind!='transfer' AND client_id=?",[u['id']]
-        elif u['role']=='agent' and u.get('agent_hub_id'):where,args="kind='transfer' AND (source_hub_id=? OR destination_hub_id=?)",[u['agent_hub_id'],u['agent_hub_id']]
-        elif u['role']=='livreur':where,args='driver_id=?',[u['id']]
+        if u['role']=='admin':where,args="status!='Supprimé'",[]
+        elif u['role']=='client':where,args="kind!='transfer' AND client_id=? AND status!='Supprimé'",[u['id']]
+        elif u['role']=='agent' and u.get('agent_hub_id'):where,args="kind='transfer' AND (source_hub_id=? OR destination_hub_id=?) AND status!='Supprimé'",[u['agent_hub_id'],u['agent_hub_id']]
+        elif u['role']=='livreur':where,args="driver_id=? AND status!='Supprimé'",[u['id']]
         else:where,args='1=0',[]
         with conn() as c:
             return jsonify([scoped_document_data(c,dict(r),u) for r in c.execute('SELECT * FROM ops_documents WHERE '+where+' ORDER BY id DESC LIMIT 500',args).fetchall()])
@@ -667,7 +691,7 @@ def register_logistics(app, services):
         u=user();tab=request.args.get('tab','default')
         if tab not in ('default','retours','a-recevoir'):raise Error('Onglet de palettes invalide.')
         with conn() as c:
-            where=["d.kind='transfer'"];args=[]
+            where=["d.kind='transfer'","d.status!='Supprimé'"];args=[]
             local=None;central_id,central=current_central_hub(c)
             if u['role']=='agent':
                 local=local_manager_hub(c,u)
@@ -775,7 +799,7 @@ def register_logistics(app, services):
                 rows=c.execute('''SELECT p.id,p.tracking,p.recipient,p.status,p.origin_hub_id,ci.name city,
                     oh.name origin_hub FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id
                     LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id
-                    WHERE p.current_hub_id=? AND p.origin_hub_id=? AND p.status IN ('Retourné','Refusé','Échange Réceptionné')
+                    WHERE p.current_hub_id=? AND p.origin_hub_id=? AND p.status!='Livré'
                       AND NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)
                       AND EXISTS(SELECT 1 FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
                         WHERE l.parcel_id=p.id AND l.received_at IS NOT NULL AND d.kind='transfer'
@@ -952,12 +976,17 @@ def register_logistics(app, services):
     @app.post(P+'/documents')
     @auth('admin','agent')
     def ops_create_document():
-        d=body();u=user();pids=ids(d);kind=d.get('kind')
+        d=body();u=user();kind=d.get('kind')
         if kind not in ['pickup','return','transfer']:raise Error('Type de document invalide.')
         if u['role']=='agent' and kind!='transfer':raise Error('Le Hub Manager peut uniquement préparer des transferts inter-Hubs.',403)
         purpose=d.get('palette_purpose','standard') if kind=='transfer' else 'standard'
         if purpose not in ('standard','return_to_central','return_to_origin'):
             raise Error('Type de palette invalide.')
+        # Une palette retour s'ouvre vide : les colis sont ajoutés au scan, un par un.
+        if kind=='transfer' and purpose in ('return_to_central','return_to_origin') and d.get('parcel_ids') in (None,[],()):
+            pids=[]
+        else:
+            pids=ids(d)
         transport=str(d.get('transport') or '').strip()
         tracking_code=str(d.get('tracking_code') or '').strip()
         if len(transport)>120 or len(tracking_code)>80:raise Error('Transport ou numéro de suivi trop long.')
@@ -1023,7 +1052,7 @@ def register_logistics(app, services):
                                   ' · motif : '+decision['message'],u)
                         line_return_status[pid]=p['status']
                     else:
-                        if p['origin_hub_id']!=dest['id'] or p['status'] not in ('Retourné','Refusé','Échange Réceptionné'):
+                        if p['origin_hub_id']!=dest['id']:
                             raise Error('Ce colis ne correspond pas au Hub d’origine sélectionné.',409)
                         returned=c.execute('''SELECT 1 FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
                             WHERE l.parcel_id=? AND l.received_at IS NOT NULL AND d.kind='transfer'
@@ -1035,7 +1064,7 @@ def register_logistics(app, services):
                               AND l.received_at IS NOT NULL AND d.destination_hub_id=?
                             ORDER BY l.received_at DESC,l.id DESC LIMIT 1''',(pid,src['id'])).fetchone()
                         prior_status=prior_status['return_status'] if prior_status else None
-                        if prior_status not in ('Retourné','Refusé','Échange Réceptionné'):raise Error('Statut initial du retour non confirmé; révision Admin requise.',409)
+                        if not prior_status:raise Error('Statut initial du retour non confirmé; révision Admin requise.',409)
                         line_return_status[pid]=p['status']
                 else:
                     if kind=='return':
@@ -1124,6 +1153,70 @@ def register_logistics(app, services):
             name=city['name'] if city else 'non renseignée'
             raise Error(f"Colis non scanné : la ville {name} n’est pas rattachée à {destination['name']}. Choisissez un autre Hub.",409)
 
+    @app.post(P+'/documents/<int:did>/scan-add')
+    @auth('admin','agent')
+    def ops_document_scan_add(did):
+        """Ajoute au scan un colis à une palette retour encore ouverte (palette créée vide)."""
+        d=body();u=user();tracking=text(d,'tracking',maxlen=80).upper()
+        confirmed=d.get('confirmed') is True;overridden=d.get('overridden') is True
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            doc=document_data(c,allowed_doc(c,did,u))
+            if doc['kind']!='transfer' or (doc.get('palette_purpose') or '') not in ('return_to_central','return_to_origin'):
+                raise Error('L’ajout au scan est réservé aux palettes retour.',409)
+            if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):
+                raise Error('Document introuvable.',404)
+            existing=next((l for l in doc['lines'] if l['tracking'].upper()==tracking and l['active']),None)
+            if existing:
+                return jsonify(ok=True,already_in_manifest=True,line_id=existing['id'],tracking=existing['tracking'],
+                               decision='accept',message='Colis déjà dans cette palette.')
+            if doc['status'] not in ('Préparé','Départ partiel'):
+                raise Error('Palette déjà validée : aucun ajout possible.',409)
+            row=c.execute('SELECT * FROM parcels WHERE upper(tracking)=? ORDER BY id DESC LIMIT 1',(tracking,)).fetchone()
+            if not row:raise Error('Aucun colis avec ce numéro de suivi.',404)
+            try:p=parcel(c,row['id'],u)
+            except Error:raise Error('Aucun colis avec ce numéro de suivi.',404)
+            if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(p['id'],)).fetchone():
+                raise Error('Ce colis appartient déjà à une autre palette active.',409)
+            src=doc['source_hub_id']
+            if not parcel_physically_at_hub(p.get('current_hub_id'),src):
+                raise Error('Le colis '+p['tracking']+' n’est pas physiquement enregistré à ce Hub.',409)
+            purpose=doc['palette_purpose']
+            decision='accept';message=''
+            if purpose=='return_to_central':
+                result=return_scan.decide_policy(c,p,src,now)
+                decision=result.get('code','accept');message=result.get('message','')
+                if decision in ('confirm','blocked'):
+                    allowed=confirmed if decision=='confirm' else overridden
+                    if not allowed:
+                        return jsonify(ok=False,needs_confirmation=True,decision=decision,tracking=p['tracking'],
+                                       recipient=p['recipient'],city=city_name(c,p),status=p['status'],
+                                       message=message,details=result.get('details') or {})
+                    if decision=='blocked':
+                        event(c,p['id'],p['status'],'Retour forcé vers le Hub Central par '+(u['name'] or 'le Hub')+
+                              ' · motif : '+message,u)
+            else:
+                if p['origin_hub_id']!=doc['destination_hub_id']:
+                    raise Error('Ce colis ne correspond pas au Hub d’origine de cette palette.',409)
+                prior=c.execute('''SELECT l.return_status FROM ops_document_lines l JOIN ops_documents dd ON dd.id=l.document_id
+                    WHERE l.parcel_id=? AND dd.kind='transfer' AND dd.palette_purpose='return_to_central'
+                      AND l.received_at IS NOT NULL AND dd.destination_hub_id=?
+                    ORDER BY l.received_at DESC,l.id DESC LIMIT 1''',(p['id'],src)).fetchone()
+                if not prior or not prior['return_status']:
+                    raise Error('Ce colis n’a pas été réceptionné au Hub Central depuis un retour de Hub.',409)
+            city=c.execute('SELECT name FROM cities WHERE id=?',(p['city_id'],)).fetchone()[0]
+            line_id=c.execute('''INSERT INTO ops_document_lines(document_id,parcel_id,tracking,recipient,city,initial_status,return_status)
+                VALUES(?,?,?,?,?,?,?)''',(did,p['id'],p['tracking'],p['recipient'],city,p['status'],p['status'])).lastrowid
+            c.execute('UPDATE ops_documents SET revision=revision+1 WHERE id=?',(did,))
+            c.execute('UPDATE parcels SET ops_revision=ops_revision+1 WHERE id=?',(p['id'],))
+            audit(c,did,u,'Colis ajouté au scan',{'tracking':p['tracking'],'parcel_id':p['id'],'decision':decision})
+            fresh_doc,fresh_lines=services['dispatch_adapters']['transfer']['load'](c,did,u)
+            parcels=[dict(c.execute('SELECT * FROM parcels WHERE id=?',(l['parcel_id'],)).fetchone()) for l in fresh_lines]
+            snapshot=hashlib.sha256(json.dumps([fresh_doc,fresh_lines,parcels],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+            return jsonify(ok=True,already_in_manifest=False,line_id=line_id,tracking=p['tracking'],
+                           recipient=p['recipient'],city=city,status=p['status'],decision=decision,message=message,
+                           snapshot=snapshot,count=fresh_doc['count'])
+
     @app.post(P+'/documents/<int:did>/departure-scan')
     @auth('admin','agent')
     def ops_document_departure_scan(did):
@@ -1152,7 +1245,7 @@ def register_logistics(app, services):
         p=parcel(c,line['parcel_id'],u)
         special_return=doc.get('palette_purpose') in ('return_to_central','return_to_origin')
         if special_return:
-            if line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné') or p['status']!=line['return_status']:
+            if not return_status_unchanged(line,p):
                 raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
         else:guard(c,p,False)
         if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
@@ -1211,7 +1304,7 @@ def register_logistics(app, services):
                 p=parcel(c,line['parcel_id'],u)
                 special_return=doc.get('palette_purpose') in ('return_to_central','return_to_origin')
                 if special_return:
-                    if line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné') or p['status']!=line['return_status']:
+                    if not return_status_unchanged(line,p):
                         raise Error('Le statut de retour a changé; aucune réconciliation automatique.',409)
                 else:guard(c,p,False)
                 if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):
@@ -1261,8 +1354,8 @@ def register_logistics(app, services):
                 raise Error(unavailable,404)
             if doc['status'] not in ['En transit','Partiellement reçu','Départ partiel']:
                 raise Error(unavailable,404)
-            expected_status=(line.get('return_transit_status') or line.get('return_status')) if special_return else 'Transit'
-            if p['current_hub_id'] is not None or (special_return and line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné')) or p['status']!=expected_status:
+            expected_status=return_expected_status(line) if special_return else 'Transit'
+            if p['current_hub_id'] is not None or p['status']!=expected_status:
                 raise Error(unavailable,404)
             if doc['departure_scan_required'] and not line['departure_scanned_at']:
                 raise Error(unavailable,404)
@@ -1276,7 +1369,7 @@ def register_logistics(app, services):
             p=parcel(c,line['parcel_id'],u)
         if not p:raise Error('Document introuvable.',404)
         if doc['kind']=='transfer' and doc['departure_scan_required']:
-            expected_status=(line.get('return_transit_status') or line.get('return_status')) if special_return else 'Transit'
+            expected_status=return_expected_status(line) if special_return else 'Transit'
             if p['current_hub_id'] is not None or p['status']!=expected_status:
                 raise Error('Le colis n’est pas en transit vers ce Hub ou a déjà été localisé ailleurs.',409)
         if doc['kind']!='return' and not special_return:
@@ -1284,7 +1377,7 @@ def register_logistics(app, services):
                 try:guard(c,p,False)
                 except Error:raise Error('Colis non disponible pour réception à ce Hub.',404)
             else:guard(c,p,False)
-        if special_return and (line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné') or p['status']!=(line.get('return_transit_status') or line.get('return_status'))):
+        if special_return and not return_status_unchanged(line,p):
             raise Error('Le statut de retour a changé. Faites vérifier le colis par Admin.',409)
         received_at=now()
         c.execute('UPDATE ops_document_lines SET received_at=?,received_by=?,active=0 WHERE id=?',(received_at,u['id'],line['id']))
@@ -1350,6 +1443,107 @@ def register_logistics(app, services):
                 if duplicate is not None:return duplicate
             else:raise Error('Action inconnue.',404)
             return jsonify(ok=True,already_received=False,parcel_status=None)
+
+    def manifest_editable(doc, u):
+        """Only a palette not yet validated (no departure, no scan) can be edited or deleted."""
+        if u['role']=='agent' and not hub_manager_transfer_scope(doc,u.get('agent_hub_id'),'departure'):
+            raise Error('Cette palette ne dépend pas de votre Hub.',404)
+        if doc['kind']!='transfer':raise Error('Modification réservée aux palettes inter-Hub.',409)
+        if doc['status']!='Préparé' or doc.get('dispatched_at'):
+            raise Error('Palette déjà validée : elle ne peut plus être supprimée ni complétée.',409)
+        if any(l.get('departure_scanned_at') or l.get('received_at') for l in doc['lines']):
+            raise Error('Des colis sont déjà scannés : la palette ne peut plus être modifiée.',409)
+
+    @app.post(P+'/documents/<int:did>/add-parcels')
+    @auth('admin','agent')
+    def ops_document_add_parcels(did):
+        """Ajouter d'autres CMD à une palette encore préparée (mêmes règles que la création)."""
+        d=body();u=user();pids=ids(d)
+        if type(d.get('revision')) is not int:raise Error('Version de la palette requise.',409)
+        confirmed_ids=d.get('confirmed_ids') if isinstance(d.get('confirmed_ids'),list) else []
+        overridden_ids=d.get('overridden_ids') if isinstance(d.get('overridden_ids'),list) else []
+        if any(type(i) is not int for i in confirmed_ids+overridden_ids):raise Error('Liste de confirmation invalide.')
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            doc=document_data(c,allowed_doc(c,did,u))
+            manifest_editable(doc,u)
+            if d['revision']!=doc['revision']:raise Error('La palette a changé. Rechargez la liste.',409)
+            purpose=doc.get('palette_purpose') or 'standard'
+            if purpose not in ('standard','return_to_central','return_to_origin'):
+                raise Error('Palette non modifiable.',409)
+            existing={l['parcel_id'] for l in doc['lines']}
+            src=hub(c,doc['source_hub_id'])
+            added=[]
+            for pid in pids:
+                if pid in existing:raise Error('Ce colis est déjà dans la palette.',409)
+                p=parcel(c,pid,u)
+                if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(pid,)).fetchone():
+                    raise Error('Un colis appartient déjà à un document actif.',409)
+                if not parcel_physically_at_hub(p.get('current_hub_id'),src['id']):
+                    raise Error('Le colis '+p['tracking']+' doit être physiquement enregistré au Hub de départ.',409)
+                if purpose=='standard':
+                    guard(c,p)
+                    if p['status'] not in ['Ramassé','Au hub','Réceptionné']:
+                        raise Error('Palette standard : sélectionnez uniquement des colis reçus physiquement au Hub.')
+                    check_transfer_city(c,doc,p)
+                elif purpose=='return_to_central':
+                    try:
+                        decision=return_scan.assert_allowed(c,p,src['id'],now,
+                            confirmed=pid in confirmed_ids,overridden=pid in overridden_ids)
+                    except return_scan._Blocked as blocked:
+                        raise Error(blocked.message,409)
+                    if decision.get('validated')=='overridden_by_hub':
+                        event(c,pid,p['status'],'Retour forcé vers le Hub Central par '+(u['name'] or 'le Hub')+
+                              ' · motif : '+decision['message'],u)
+                else:
+                    if p['origin_hub_id']!=doc['destination_hub_id']:
+                        raise Error('Ce colis ne correspond pas au Hub d’origine sélectionné.',409)
+                    prior=c.execute('''SELECT l.return_status FROM ops_document_lines l JOIN ops_documents dd ON dd.id=l.document_id
+                        WHERE l.parcel_id=? AND dd.kind='transfer' AND dd.palette_purpose='return_to_central'
+                          AND l.received_at IS NOT NULL AND dd.destination_hub_id=?
+                        ORDER BY l.received_at DESC,l.id DESC LIMIT 1''',(pid,src['id'])).fetchone()
+                    if not prior or not prior['return_status']:
+                        raise Error('Statut initial du retour non confirmé; révision Admin requise.',409)
+                added.append(p)
+            at=now()
+            for p in added:
+                city=c.execute('SELECT name FROM cities WHERE id=?',(p['city_id'],)).fetchone()[0]
+                c.execute('''INSERT INTO ops_document_lines(document_id,parcel_id,tracking,recipient,city,initial_status,return_status)
+                    VALUES(?,?,?,?,?,?,?)''',(did,p['id'],p['tracking'],p['recipient'],city,p['status'],
+                    p['status'] if purpose in ('return_to_central','return_to_origin') else None))
+                c.execute('UPDATE parcels SET ops_revision=ops_revision+1 WHERE id=?',(p['id'],))
+            c.execute('UPDATE ops_documents SET revision=revision+1 WHERE id=?',(did,))
+            audit(c,did,u,'Colis ajoutés à la palette',{'count':len(added),'trackings':[p['tracking'] for p in added],
+                'palette_purpose':purpose})
+            after=document_data(c,dict(c.execute('SELECT * FROM ops_documents WHERE id=?',(did,)).fetchone()))
+            return jsonify(ok=True,added=len(added),count=after['count'],revision=after['revision'])
+
+    @app.post(P+'/documents/<int:did>/delete')
+    @auth('admin','agent')
+    def ops_document_delete(did):
+        """Supprimer une palette encore préparée : les colis redeviennent disponibles."""
+        d=body();u=user()
+        if d.get('confirmed') is not True:raise Error('Confirmez la suppression de la palette.')
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            doc=document_data(c,allowed_doc(c,did,u))
+            manifest_editable(doc,u)
+            if type(d.get('revision')) is not int or d['revision']!=doc['revision']:
+                raise Error('La palette a changé. Rechargez la liste.',409)
+            trackings=[l['tracking'] for l in doc['lines']];parcel_ids=[l['parcel_id'] for l in doc['lines']]
+            at=now()
+            # Journal append-only : la palette est retirée des listes (statut « Supprimé »),
+            # ses colis sont libérés, et l'audit reste intact.
+            c.execute("UPDATE ops_documents SET status='Supprimé',cancel_reason=?,completed_at=?,revision=revision+1 WHERE id=?",
+                      ('Supprimée avant validation par '+(u['name'] or 'le Hub'),at,did))
+            c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,))
+            for pid in parcel_ids:c.execute('UPDATE parcels SET ops_revision=ops_revision+1 WHERE id=?',(pid,))
+            append_audit_log(c,actor_id=u['id'],actor_name=u['name'],action='ops_document_deleted',
+                entity_type='ops_document',entity_id=did,
+                old_value={'reference':doc['reference'],'count':doc['count'],'status':doc['status'],
+                           'palette_purpose':doc.get('palette_purpose')},
+                new_value={'deleted':True},metadata={'trackings':trackings[:100]},created_at=at)
+            return jsonify(ok=True,deleted=True,reference=doc['reference'],released=len(parcel_ids))
 
     @app.post(P+'/assignments/preview')
     @auth('admin')
@@ -1777,7 +1971,7 @@ def register_logistics(app, services):
         p=parcel(c,line['parcel_id'],u)
         if p['tracking']!=line['tracking'] or not line['active']:raise Error('Contenu du manifeste modifié.',409)
         if doc.get('palette_purpose') in ('return_to_central','return_to_origin'):
-            if line.get('return_status') not in ('Retourné','Refusé','Échange Réceptionné') or p['status']!=line['return_status']:raise Error('Statut de retour modifié.',409)
+            if not return_status_unchanged(line,p):raise Error('Statut de retour modifié.',409)
         else:guard(c,p,False)
         if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):raise Error('Colis physiquement hors du Hub de départ.',409)
         check_transfer_city(c,doc,p)
