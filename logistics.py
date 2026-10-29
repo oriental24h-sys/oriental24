@@ -1000,7 +1000,13 @@ def register_logistics(app, services):
                 WHERE p.current_hub_id=? AND '''+condition+''' AND upper(p.tracking)=?'''+company_filter+'''
                   AND NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)''',args).fetchone()
             if row:
-                decision=return_scan.decide_policy(c,dict(row),source_id,now)
+                # Palette standard = CMD normales (Hub -> Central ou Central -> Hub) : AUCUNE
+                # règle de retour. Les conditions 7 jours / passages livreur / rendez-vous
+                # ne s'appliquent QUE sur le trajet de retour.
+                if mode=='standard':
+                    decision={'code':'accept','message':'','details':{}}
+                else:
+                    decision=return_scan.decide_policy(c,dict(row),source_id,now)
                 return jsonify(found=True,mode=mode,source_hub_id=source_id,destination_hub_id=dest_id,
                                parcel=dict(row),decision=decision,
                                direct=decision['code'] in ('accept','double'))
