@@ -14,6 +14,7 @@ Aucun COD n'est encaissé sur la reprise : elle n'est jamais « Livré ».
 """
 import re
 
+import origin_hub
 from parcel_statuses import EXCHANGE_TO_RECOVER, EXCHANGE_RECEIVED, EXCHANGE_STATUSES
 
 MAX_TRACKING = 72
@@ -105,7 +106,11 @@ def create_for_delivery(c, pid, actor, event, now, audit=None):
     t = now()
     tracking = exchange_tracking(c, p['tracking'])
     # Origine de la reprise = origine de la CMD livrée (et non le Hub du scan).
+    # Si la CMD livrée n'a pas encore d'origine, on la résout d'abord (preuves
+    # physiques documentées, sinon Hub Central) puis on hérite de cette valeur.
     origin_hub_id = _value(p, 'origin_hub_id')
+    if not origin_hub_id:
+        origin_hub_id = origin_hub.ensure_parcel_origin(c, pid)
     if origin_hub_id and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1', (origin_hub_id,)).fetchone():
         origin_hub_id = None
     columns = {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}

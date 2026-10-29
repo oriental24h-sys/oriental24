@@ -32,6 +32,27 @@ REASONS += [('no_answer','Pas de réponse'),('postponed','Reporté'),
  ('wrong_number','Numéro incorrect'),('travelling','Le client est en voyage'),
  ('not_interested','Client(e) pas intéressé'),('return_agency','Retour envoyé vers agence')]
 
+def repair_exchange_origins(c):
+    """Réaligne l'origine de chaque reprise `EC…` sur celle de la CMD livrée d'origine.
+
+    Corrige les reprises créées par une ancienne version qui prenait le Hub du scan
+    de livraison (Hub du livreur) comme origine. Idempotent, exécuté à chaque démarrage.
+    """
+    columns = {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
+    if 'origin_hub_id' not in columns or 'exchange_of_id' not in columns:
+        return 0
+    try:
+        cur = c.execute('''UPDATE parcels SET origin_hub_id=(
+                        SELECT src.origin_hub_id FROM parcels src WHERE src.id=parcels.exchange_of_id)
+                    WHERE exchange_of_id IS NOT NULL
+                      AND (SELECT src.origin_hub_id FROM parcels src WHERE src.id=parcels.exchange_of_id) IS NOT NULL
+                      AND (origin_hub_id IS NULL OR origin_hub_id IS NOT (
+                            SELECT src.origin_hub_id FROM parcels src WHERE src.id=parcels.exchange_of_id))''')
+        return cur.rowcount or 0
+    except Exception:
+        return 0
+
+
 def release_received_transfer_lines(c):
     """Repair legacy locks without deleting manifest/history or unlocking pending lines."""
     return c.execute("""UPDATE ops_document_lines SET active=0
@@ -140,20 +161,30 @@ def register_logistics(app, services):
         install_departure_reconciliation_guard(c)
         release_received_transfer_lines(c)
         columns={r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
-        for key,definition in [('reason_code','TEXT'),('next_attempt_at','TEXT'),('ops_revision','INTEGER NOT NULL DEFAULT 0'),('current_hub_id','INTEGER REFERENCES ops_hubs(id)'),('origin_hub_id','INTEGER REFERENCES ops_hubs(id)')]:
+        for key,definition in [('reason_code','TEXT'),('next_attempt_at','TEXT'),('ops_revision','INTEGER NOT NULL DEFAULT 0'),('current_hub_id','INTEGER REFERENCES ops_hubs(id)'),('origin_hub_id','INTEGER REFERENCES ops_hubs(id)'),('exchange_of_id','INTEGER REFERENCES parcels(id)')]:
             if key not in columns:c.execute(f'ALTER TABLE parcels ADD COLUMN {key} {definition}')
+            columns.add(key)
         c.execute('CREATE INDEX IF NOT EXISTS parcels_origin_hub_idx ON parcels(origin_hub_id,current_hub_id,status)')
         c.executescript('''
+        DROP TRIGGER IF EXISTS parcels_origin_hub_on_physical_insert;
         DROP TRIGGER IF EXISTS parcels_origin_hub_on_physical_arrival;
+        -- Une reprise échange (EC…) ne prend JAMAIS l'origine du Hub où elle a été
+        -- scannée/livrée : elle hérite de l'origine de la CMD livrée d'origine.
         CREATE TRIGGER IF NOT EXISTS parcels_origin_hub_on_physical_insert
         AFTER INSERT ON parcels
         WHEN NEW.origin_hub_id IS NULL AND NEW.current_hub_id IS NOT NULL
         BEGIN
-          UPDATE parcels SET origin_hub_id=NEW.current_hub_id WHERE id=NEW.id AND origin_hub_id IS NULL;
+          UPDATE parcels SET origin_hub_id=(
+              SELECT src.origin_hub_id FROM parcels src WHERE src.id=NEW.exchange_of_id)
+            WHERE id=NEW.id AND origin_hub_id IS NULL
+              AND NEW.exchange_of_id IS NOT NULL
+              AND (SELECT src.origin_hub_id FROM parcels src WHERE src.id=NEW.exchange_of_id) IS NOT NULL;
+          UPDATE parcels SET origin_hub_id=NEW.current_hub_id
+            WHERE id=NEW.id AND origin_hub_id IS NULL AND NEW.exchange_of_id IS NULL;
         END;
         CREATE TRIGGER IF NOT EXISTS parcels_origin_hub_on_physical_arrival
         AFTER UPDATE OF current_hub_id ON parcels
-        WHEN NEW.origin_hub_id IS NULL AND NEW.current_hub_id IS NOT NULL
+        WHEN NEW.origin_hub_id IS NULL AND NEW.current_hub_id IS NOT NULL AND NEW.exchange_of_id IS NULL
           AND NOT EXISTS(SELECT 1 FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
             WHERE l.parcel_id=NEW.id AND d.kind='transfer')
         BEGIN
@@ -188,6 +219,7 @@ def register_logistics(app, services):
         central_id=int(central_raw) if central_raw.isdigit() else None
         if central_id and c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(central_id,)).fetchone():
             c.execute('UPDATE parcels SET origin_hub_id=? WHERE origin_hub_id IS NULL',(central_id,))
+        repair_exchange_origins(c)
         install_hub_analytics_schema(c,now())
         c.executemany('INSERT OR IGNORE INTO ops_reasons(code,label) VALUES(?,?)',REASONS)
         c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('ops_started_at',?)",(now(),))
