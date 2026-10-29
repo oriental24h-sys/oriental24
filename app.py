@@ -12,6 +12,7 @@ from runtime import configure
 DB = configure(app, BASE)
 from parcel_statuses import STATUSES, DRIVER_TRANSITIONS, DRIVER_HUB_ONLY_STATUSES, EXCHANGE_RECEIVED, EXCHANGE_STATUSES, policy as status_policy
 import exchange_flow
+import origin_hub
 from billing import driver_paid_sql
 import client_types
 import city_resolve
@@ -317,7 +318,8 @@ def list_parcels(c,u):
     (SELECT COALESCE(NULLIF(rc.requested_phone,''),p.phone) FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_phone,
     (SELECT COALESCE(NULLIF(rc.requested_address,''),p.address) FROM recipient_change_requests rc WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_address,
     (SELECT COALESCE(ci.name,(SELECT name FROM cities WHERE id=p.city_id)) FROM recipient_change_requests rc LEFT JOIN cities ci ON ci.id=rc.requested_city_id WHERE rc.parcel_id=p.id AND rc.status='En attente' ORDER BY rc.id DESC LIMIT 1) recipient_change_city,
-    (SELECT label FROM ops_reasons WHERE code=p.reason_code) reason_label
+    (SELECT label FROM ops_reasons WHERE code=p.reason_code) reason_label,
+    (SELECT name FROM ops_hubs WHERE id=p.origin_hub_id) return_origin_hub
     FROM parcels p JOIN cities ci ON ci.id=p.city_id JOIN users cl ON cl.id=p.client_id
     LEFT JOIN users dr ON dr.id=p.driver_id LEFT JOIN users su ON su.id=p.support_id
     LEFT JOIN parcel_support ps ON ps.parcel_id=p.id LEFT JOIN support_contacts sc ON sc.id=ps.contact_id
@@ -477,11 +479,17 @@ def create_parcel():
         address=text(d,'address',False) or city['name']
         track=client_types.tracking_for(c,cid,d.get('tracking'),APIError);t=now()
         fee,ret=globals()['tariff_fees_for'](c,int(cid),dict(city)) if 'tariff_fees_for' in globals() else (city['fee'],city['return_fee'])
-        cur=c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,open_allowed,is_exchange,is_fragile,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(track,cid,text(d,'recipient'),phone,address,city['id'],number(d,'amount'),fee,ret,text(d,'product',False),text(d,'note',False),open_allowed,is_exchange,is_fragile,t,t))
+        # Hub d'origine attribué automatiquement dès la création (jamais deviné ensuite).
+        # Seul l'Admin peut forcer un Hub d'origine ; sinon il est attribué automatiquement.
+        requested=d.get('origin_hub_id')
+        origin_id=origin_hub.resolve_or_keep(c,requested if (u['role']=='admin' and type(requested) is int) else None,u)
+        cur=c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,open_allowed,is_exchange,is_fragile,created_at,updated_at,origin_hub_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(track,cid,text(d,'recipient'),phone,address,city['id'],number(d,'amount'),fee,ret,text(d,'product',False),text(d,'note',False),open_allowed,is_exchange,is_fragile,t,t,origin_id))
         flags=[]
         if not open_allowed:flags.append('ouverture du colis interdite')
         if is_exchange:flags.append('échange demandé')
         if is_fragile:flags.append('colis fragile')
+        origin_name=c.execute('SELECT name FROM ops_hubs WHERE id=?',(origin_id,)).fetchone()[0] if origin_id else None
+        if origin_name:flags.append('hub d’origine : '+origin_name)
         event_note='Colis enregistré'+(' · '+' · '.join(flags) if flags else '')
         event(c,cur.lastrowid,'Créé',event_note,u)
         assigned=c.execute('SELECT su.id,su.name,su.phone FROM parcels p LEFT JOIN users su ON su.id=p.support_id WHERE p.id=?',(cur.lastrowid,)).fetchone()
@@ -946,9 +954,10 @@ def tickets():
             c.execute('INSERT INTO messages(ticket_id,user_id,body,created_at) VALUES(?,?,?,?)',(cur.lastrowid,u['id'],text(d,'body',maxlen=3000),now()))
             return jsonify(ok=True)
         sql=('SELECT t.*,u.name author,l.parcel_id,l.priority,l.assigned_to,l.first_response_at,'
-             'p.tracking,p.status parcel_status,p.is_fragile,p.current_hub_id parcel_hub_id '
+             'p.tracking,p.status parcel_status,p.is_fragile,p.current_hub_id parcel_hub_id,p.origin_hub_id parcel_origin_hub_id,oh.name parcel_origin_hub '
              'FROM tickets t JOIN users u ON u.id=t.user_id '
-             'LEFT JOIN ops_ticket_links l ON l.ticket_id=t.id LEFT JOIN parcels p ON p.id=l.parcel_id')
+             'LEFT JOIN ops_ticket_links l ON l.ticket_id=t.id LEFT JOIN parcels p ON p.id=l.parcel_id '
+             'LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id')
         args=[]
         if u['role']=='admin':
             pass
@@ -967,7 +976,7 @@ def tickets():
 def ticket(tid):
     u=user();d=request.get_json(silent=True) or {}
     with conn() as c:
-        t=c.execute('SELECT t.*,l.parcel_id,l.priority,l.assigned_to,l.first_response_at,p.tracking,p.status parcel_status,p.is_fragile,p.current_hub_id parcel_hub_id FROM tickets t LEFT JOIN ops_ticket_links l ON l.ticket_id=t.id LEFT JOIN parcels p ON p.id=l.parcel_id WHERE t.id=?',(tid,)).fetchone()
+        t=c.execute('SELECT t.*,l.parcel_id,l.priority,l.assigned_to,l.first_response_at,p.tracking,p.status parcel_status,p.is_fragile,p.current_hub_id parcel_hub_id,p.origin_hub_id parcel_origin_hub_id,oh.name parcel_origin_hub FROM tickets t LEFT JOIN ops_ticket_links l ON l.ticket_id=t.id LEFT JOIN parcels p ON p.id=l.parcel_id LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id WHERE t.id=?',(tid,)).fetchone()
         visible=bool(t) and (u['role']=='admin' or t['user_id']==u['id'])
         if not visible and t and u['role']=='agent' and t['parcel_hub_id'] is not None:
             # Un Responsable de Hub peut traiter les réclamations des commandes de son Hub.

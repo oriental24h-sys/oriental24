@@ -36,6 +36,7 @@ MAX_FILE = 2 * 1024 * 1024
 
 
 import city_resolve
+import origin_hub
 
 
 def normalize(value):
@@ -403,8 +404,9 @@ def register_operations(app, services):
                     raise Error(f"La référence {r['reference']} a déjà été importée. Aucun colis ajouté.", 409)
                 tracking = tracking_for(c,b['client_id'],r['reference'] if client['client_type']=='societe_livraison' else None,Error); t = now()
                 fee, ret = services['tariff_fees_for'](c, b['client_id'], dict(city)) if services.get('tariff_fees_for') else (city['fee'], city['return_fee'])
-                cur = c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                                (tracking, b['client_id'], r['recipient'], r['phone'], r['address'], city['id'], r['amount'], fee, ret, r['product'], r['note'], t, t))
+                origin_id = origin_hub.resolve_or_keep(c, None, u)
+                cur = c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,created_at,updated_at,origin_hub_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                                (tracking, b['client_id'], r['recipient'], r['phone'], r['address'], city['id'], r['amount'], fee, ret, r['product'], r['note'], t, t, origin_id))
                 c.execute('INSERT INTO parcel_external_refs(client_id,reference,parcel_id) VALUES(?,?,?)', (b['client_id'], r['reference'].casefold(), cur.lastrowid))
                 event(c, cur.lastrowid, 'Créé', f"Import {filename_display(b['filename'])} · Commande {r['reference']}", u)
                 created.append({'id': cur.lastrowid, 'tracking': tracking, 'reference': r['reference']})
@@ -424,7 +426,7 @@ def register_operations(app, services):
                 # Lecture seule : le Responsable Hub imprime les colis de son Hub,
                 # y compris ceux déjà confiés à ses livreurs (même périmètre que sa liste).
                 p = parcel(c, pid, u, follow_drivers=True, include_sent=True)
-                extras = c.execute('SELECT ci.name city,u.name client,u.company company FROM cities ci JOIN users u ON u.id=? WHERE ci.id=?', (p['client_id'], p['city_id'])).fetchone()
+                extras = c.execute('SELECT ci.name city,u.name client,u.company company,oh.name origin_hub FROM cities ci JOIN users u ON u.id=? LEFT JOIN ops_hubs oh ON oh.id=? WHERE ci.id=?', (p['client_id'], p.get('origin_hub_id'), p['city_id'])).fetchone()
                 stock_lines=[]
                 if p.get('stock_order_id'):
                     stock_lines=[dict(r) for r in c.execute('SELECT sku,name,quantity FROM fulfillment_lines WHERE order_id=? ORDER BY id',(p['stock_order_id'],))]

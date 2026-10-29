@@ -56,6 +56,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('GET', r'/api/logistics/config'),
     ('GET', r'/api/logistics/documents'), ('GET', r'/api/logistics/documents/\d+'),
     ('POST', r'/api/logistics/documents'),
+    ('GET', r'/api/logistics/my-returns'),
     ('POST', r'/api/logistics/documents/\d+/add-parcels'),
     ('POST', r'/api/logistics/documents/\d+/scan-add'),
     ('POST', r'/api/logistics/documents/\d+/delete'),

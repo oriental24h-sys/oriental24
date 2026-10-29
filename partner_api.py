@@ -6,6 +6,7 @@ Aucune donnée d'autres clients, aucun accès financier.
 import hashlib, json, re, secrets, threading, time
 from flask import request, jsonify
 from client_types import tracking_for
+import origin_hub
 
 RATE_LIMIT = 120
 _rate = {}
@@ -182,9 +183,10 @@ def register_partner_api(app, s):
             city = dict(city)
             fee, ret = s['tariff_fees_for'](c, k['client_id'], city)
             t = now()
-            pid = c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            origin_id = origin_hub.resolve_or_keep(c, None, None)
+            pid = c.execute('INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,product,note,created_at,updated_at,origin_hub_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                             (tracking, k['client_id'], text(payload, 'recipient'), phone, text(payload, 'address'), city['id'],
-                             amount(payload), fee, ret, text(payload, 'product', False), text(payload, 'note', False), t, t)).lastrowid
+                             amount(payload), fee, ret, text(payload, 'product', False), text(payload, 'note', False), t, t, origin_id)).lastrowid
             s['event'](c, pid, 'Créé', 'Colis créé via API partenaire · clé «' + k['label'] + '»', {'id': k['client_id']})
             result = dict(ok=True, id=pid, tracking=tracking, status='Créé', fee=fee, return_fee=ret, city=city['name'])
             c.execute('INSERT INTO partner_api_idem(key_id,idem_key,fingerprint,result,created_at) VALUES(?,?,?,?,?)',

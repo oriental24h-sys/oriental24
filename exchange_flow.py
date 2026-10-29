@@ -27,6 +27,13 @@ def migrate(c):
     if 'exchange_received_at' not in cols:
         c.execute('ALTER TABLE parcels ADD COLUMN exchange_received_at TEXT')
     c.execute('CREATE INDEX IF NOT EXISTS idx_parcels_exchange_of ON parcels(exchange_of_id,id)')
+    # L'origine d'une reprise échange est l'origine de la CMD livrée d'origine,
+    # jamais le Hub où la reprise a été scannée/réceptionnée.
+    if 'origin_hub_id' in cols:
+        c.execute('''UPDATE parcels SET origin_hub_id=(
+                SELECT src.origin_hub_id FROM parcels src WHERE src.id=parcels.exchange_of_id)
+            WHERE exchange_of_id IS NOT NULL AND origin_hub_id IS NULL
+              AND (SELECT src.origin_hub_id FROM parcels src WHERE src.id=parcels.exchange_of_id) IS NOT NULL''')
 
 
 def exchange_tracking(c, source_tracking):
@@ -52,6 +59,14 @@ def summary(c, row):
                 recipient=row['recipient'] or '', phone=row['phone'] or '',
                 city=city['name'] if city else '', amount=row['amount'],
                 created_at=row['created_at'])
+
+
+def _value(row, key):
+    """Lecture tolérante d'une colonne (sqlite3.Row, dict, ligne partielle)."""
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
 
 
 def _driver_hub(c, driver_id):
@@ -89,12 +104,29 @@ def create_for_delivery(c, pid, actor, event, now, audit=None):
         hub_id = None
     t = now()
     tracking = exchange_tracking(c, p['tracking'])
-    eid = c.execute('''INSERT INTO parcels(tracking,client_id,driver_id,recipient,phone,address,city_id,amount,
-        fee,return_fee,status,product,note,created_at,updated_at,current_hub_id,open_allowed,is_exchange,exchange_of_id)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (tracking, p['client_id'], driver_id, p['recipient'], p['phone'], p['address'], p['city_id'],
-         p['amount'], p['fee'], p['return_fee'], EXCHANGE_TO_RECOVER, p['product'], p['note'],
-         t, t, hub_id, p['open_allowed'] if 'open_allowed' in p.keys() else 1, 1, pid)).lastrowid
+    # Origine de la reprise = origine de la CMD livrée (et non le Hub du scan).
+    origin_hub_id = _value(p, 'origin_hub_id')
+    if origin_hub_id and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1', (origin_hub_id,)).fetchone():
+        origin_hub_id = None
+    columns = {r['name'] for r in c.execute('PRAGMA table_info(parcels)')}
+    if 'origin_hub_id' in columns:
+        eid = c.execute('''INSERT INTO parcels(tracking,client_id,driver_id,recipient,phone,address,city_id,amount,
+            fee,return_fee,status,product,note,created_at,updated_at,current_hub_id,origin_hub_id,open_allowed,is_exchange,exchange_of_id)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (tracking, p['client_id'], driver_id, p['recipient'], p['phone'], p['address'], p['city_id'],
+             p['amount'], p['fee'], p['return_fee'], EXCHANGE_TO_RECOVER, p['product'], p['note'],
+             t, t, hub_id, origin_hub_id, _value(p, 'open_allowed') if _value(p, 'open_allowed') is not None else 1, 1, pid)).lastrowid
+    else:
+        eid = c.execute('''INSERT INTO parcels(tracking,client_id,driver_id,recipient,phone,address,city_id,amount,
+            fee,return_fee,status,product,note,created_at,updated_at,current_hub_id,open_allowed,is_exchange,exchange_of_id)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (tracking, p['client_id'], driver_id, p['recipient'], p['phone'], p['address'], p['city_id'],
+             p['amount'], p['fee'], p['return_fee'], EXCHANGE_TO_RECOVER, p['product'], p['note'],
+             t, t, hub_id, _value(p, 'open_allowed') if _value(p, 'open_allowed') is not None else 1, 1, pid)).lastrowid
+    if origin_hub_id is None and 'origin_hub_id' in columns:
+        # Origine inconnue sur la CMD livrée : on ne devine pas avec le Hub du scan.
+        # La reprise part en « origine à vérifier » (revue Admin) comme un retour classique.
+        c.execute('UPDATE parcels SET origin_hub_id=NULL WHERE id=?', (eid,))
     event(c, eid, EXCHANGE_TO_RECOVER,
           'Reprise échange créée après la livraison de ' + str(p['tracking']) +
           ' · à récupérer chez le destinataire puis à réceptionner au Hub.', actor)
@@ -105,7 +137,8 @@ def create_for_delivery(c, pid, actor, event, now, audit=None):
             audit(c, actor_id=actor['id'], actor_name=actor['name'], action='exchange_parcel_created',
                   entity_type='parcel', entity_id=str(eid),
                   old_value={'source_parcel_id': pid},
-                  new_value={'tracking': tracking, 'driver_id': driver_id, 'hub_id': hub_id},
+                  new_value={'tracking': tracking, 'driver_id': driver_id, 'hub_id': hub_id,
+                             'origin_hub_id': origin_hub_id},
                   metadata={'source_tracking': p['tracking']}, created_at=t)
         except Exception:
             pass

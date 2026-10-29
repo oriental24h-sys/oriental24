@@ -42,6 +42,19 @@ def release_received_transfer_lines(c):
 RETURN_LEGACY_STATUSES=('Retourné','Refusé','Échange Réceptionné')
 
 
+RETURN_STATES_SENT=('envoye','transit_origine','recu_hub_origine')
+
+
+def received_in_warehouse(p):
+    """Le colis porte-t-il le tag « Retour reçu en entrepôt » (donc triable au Central) ?
+
+    Un colis jamais réceptionné au Hub Central (envoyé, en transit, ou déjà reçu au Hub
+    d'origine) ne peut pas repartir d'ici.
+    """
+    state=(p.get('return_state') if hasattr(p,'get') else p['return_state']) or None
+    return state not in RETURN_STATES_SENT
+
+
 def return_expected_status(line):
     """Status recorded when the return manifest was prepared (snapshot)."""
     return line.get('return_transit_status') or line.get('return_status') or line.get('initial_status')
@@ -168,6 +181,13 @@ def register_logistics(app, services):
                 first=min(t for t,_ in items);hubs={hid for stamp,hid in items if stamp==first and hid is not None}
                 if len(hubs)==1:
                     c.execute('UPDATE parcels SET origin_hub_id=? WHERE id=? AND origin_hub_id IS NULL',(next(iter(hubs)),parcel_id))
+        # Toute CMD doit avoir un Hub d'origine : les colis antérieurs à cette règle
+        # reçoivent le Hub Central actif (point d'entrée du réseau). Idempotent.
+        setting=c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
+        central_raw=str(setting['value']).strip() if setting and setting['value'] is not None else ''
+        central_id=int(central_raw) if central_raw.isdigit() else None
+        if central_id and c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(central_id,)).fetchone():
+            c.execute('UPDATE parcels SET origin_hub_id=? WHERE origin_hub_id IS NULL',(central_id,))
         install_hub_analytics_schema(c,now())
         c.executemany('INSERT OR IGNORE INTO ops_reasons(code,label) VALUES(?,?)',REASONS)
         c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('ops_started_at',?)",(now(),))
@@ -737,6 +757,51 @@ def register_logistics(app, services):
             return jsonify(tab=tab,rows=rows,total=len(rows),central_hub_id=central_id,
                            hub=local,total_colis=sum(r['count'] for r in rows),page=1,size=30)
 
+    @app.get(P + '/my-returns')
+    @auth('admin', 'agent')
+    def ops_my_returns():
+        """Retours réceptionnés au Hub d'origine : visibles jusqu'à leur remise au client."""
+        u = user()
+        with conn() as c:
+            if u['role'] == 'agent':
+                local = local_manager_hub(c, u)
+                hub_id = local['id']
+            else:
+                raw = request.args.get('hub_id', '')
+                hub_id = int(raw) if raw.isdigit() else None
+            where = ["p.status IN ('Retourné','Refusé','Échange Réceptionné')",
+                     "p.return_state IN ('recu_hub_origine','recu_entrepot','transit_origine','envoye')",
+                     "NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)"]
+            args = []
+            if hub_id:
+                where.append('p.current_hub_id=?')
+                args.append(hub_id)
+            else:
+                where.append('p.current_hub_id IS NOT NULL')
+            sql = ("SELECT p.id,p.tracking,p.recipient,p.phone,p.status,p.return_state,p.amount,"
+                   "p.origin_hub_id,p.current_hub_id,ci.name city,oh.name origin_hub,ch.name current_hub,p.updated_at,"
+                   "(SELECT max(l.received_at) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id "
+                   " WHERE l.parcel_id=p.id AND l.received_at IS NOT NULL "
+                   " AND d.palette_purpose='return_to_origin') received_at "
+                   "FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id "
+                   "LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id LEFT JOIN ops_hubs ch ON ch.id=p.current_hub_id "
+                   "WHERE " + ' AND '.join(where) + " ORDER BY p.updated_at DESC,p.id DESC LIMIT 500")
+            rows = c.execute(sql, args).fetchall()
+            result = []
+            for r in rows:
+                item = dict(r)
+                stamp = item.get('received_at') or item.get('updated_at')
+                try:
+                    item['days'] = max(0, (datetime.now() - datetime.fromisoformat(stamp)).days) if stamp else 0
+                except (TypeError, ValueError):
+                    item['days'] = 0
+                result.append(item)
+            return jsonify(rows=result, total=len(result), hub_id=hub_id,
+                           state_labels={'recu_hub_origine': 'Retour reçu en Hub origine',
+                                         'transit_origine': 'Retour en transit vers le Hub d’origine',
+                                         'recu_entrepot': 'Retour reçu en entrepôt',
+                                         'envoye': 'Retour envoyé vers le Hub Central'})
+
     @app.get(P+'/palette-candidates')
     @auth('admin','agent')
     def ops_palette_candidates():
@@ -796,10 +861,11 @@ def register_logistics(app, services):
                 except Exception:dest_id=None
                 if not dest_id or dest_id==central_id or not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(dest_id,)).fetchone():
                     raise Error('Choisissez un Hub d’origine actif.')
-                rows=c.execute('''SELECT p.id,p.tracking,p.recipient,p.status,p.origin_hub_id,ci.name city,
+                rows=c.execute('''SELECT p.id,p.tracking,p.recipient,p.status,p.return_state,p.origin_hub_id,ci.name city,
                     oh.name origin_hub FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id
                     LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id
                     WHERE p.current_hub_id=? AND p.origin_hub_id=? AND p.status!='Livré'
+                      AND COALESCE(p.return_state,'') NOT IN ('envoye','transit_origine','recu_hub_origine')
                       AND NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)
                       AND EXISTS(SELECT 1 FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id
                         WHERE l.parcel_id=p.id AND l.received_at IS NOT NULL AND d.kind='transfer'
@@ -877,7 +943,8 @@ def register_logistics(app, services):
                 dest_id=integer(request.args.get('destination_hub_id'),'Hub d’origine')
                 if not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1',(dest_id,)).fetchone() or dest_id==central_id:
                     raise Error('Choisissez un Hub d’origine actif.')
-                condition="p.origin_hub_id=? AND p.status IN ('Retourné','Refusé','Échange Réceptionné')"
+                condition=("p.origin_hub_id=? AND p.status IN ('Retourné','Refusé','Échange Réceptionné') "
+                           "AND COALESCE(p.return_state,'') NOT IN ('envoye','transit_origine','recu_hub_origine')")
                 args=[source_id,dest_id]
             else:
                 dest_id=integer(request.args.get('destination_hub_id'),'Hub de destination')
@@ -933,7 +1000,10 @@ def register_logistics(app, services):
             if not central or not central.get('active'):raise Error('Aucun Hub Central actif.',409)
             p=c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone()
             if not p:raise Error('Colis introuvable.',404)
-            if p['origin_hub_id'] is not None:raise Error('L’origine du colis est déjà enregistrée; toute correction exige une procédure distincte.',409)
+            # Une origine « par défaut » (Hub Central, posée automatiquement) reste corrigeable
+            # par l'Admin avec preuve, sinon elle est verrouillée.
+            defaulted=p['origin_hub_id'] is None or p['origin_hub_id']==central_id
+            if not defaulted:raise Error('L’origine du colis est déjà enregistrée; toute correction exige une procédure distincte.',409)
             if p['current_hub_id']!=central_id or p['status'] not in ('Retourné','Refusé','Échange Réceptionné'):
                 raise Error('Seul un retour physiquement reçu au Hub Central peut être revu.',409)
             if c.execute('SELECT 1 FROM ops_document_lines WHERE parcel_id=? AND active=1',(pid,)).fetchone():
@@ -961,7 +1031,7 @@ def register_logistics(app, services):
                 raise Error('Aucune preuve numérique trouvée à ce Hub. Confirmez une revue manuelle fondée sur un reçu ou registre physique.',409)
             if not evidence_rows and (len(evidence_reference)<8 or len(reason)<24):
                 raise Error('Sans trace numérique, une référence physique plus complète et un motif détaillé sont requis.',409)
-            cur=c.execute('UPDATE parcels SET origin_hub_id=?,ops_revision=ops_revision+1,updated_at=? WHERE id=? AND origin_hub_id IS NULL',(target_id,now(),pid))
+            cur=c.execute('UPDATE parcels SET origin_hub_id=?,ops_revision=ops_revision+1,updated_at=? WHERE id=? AND (origin_hub_id IS NULL OR origin_hub_id=?)',(target_id,now(),pid,central_id))
             if cur.rowcount!=1:raise Error('L’origine du colis vient d’être modifiée. Rechargez la page.',409)
             details={'hub_id':target_id,'hub_name':c.execute('SELECT name FROM ops_hubs WHERE id=?',(target_id,)).fetchone()['name'],
                      'reason':reason,'evidence_reference':evidence_reference,'manual_physical_review':bool(d['manual_physical_review']),
@@ -1065,6 +1135,9 @@ def register_logistics(app, services):
                             ORDER BY l.received_at DESC,l.id DESC LIMIT 1''',(pid,src['id'])).fetchone()
                         prior_status=prior_status['return_status'] if prior_status else None
                         if not prior_status:raise Error('Statut initial du retour non confirmé; révision Admin requise.',409)
+                        if not received_in_warehouse(p):
+                            raise Error('Colis '+p['tracking']+' : seul un colis portant le tag « Retour reçu en entrepôt » '
+                                        'peut partir du Hub Central.',409)
                         line_return_status[pid]=p['status']
                 else:
                     if kind=='return':
@@ -1198,6 +1271,9 @@ def register_logistics(app, services):
             else:
                 if p['origin_hub_id']!=doc['destination_hub_id']:
                     raise Error('Ce colis ne correspond pas au Hub d’origine de cette palette.',409)
+                if not received_in_warehouse(p):
+                    raise Error('Colis '+p['tracking']+' : seul un colis portant le tag « Retour reçu en entrepôt » '
+                                'peut partir du Hub Central vers son Hub d’origine.',409)
                 prior=c.execute('''SELECT l.return_status FROM ops_document_lines l JOIN ops_documents dd ON dd.id=l.document_id
                     WHERE l.parcel_id=? AND dd.kind='transfer' AND dd.palette_purpose='return_to_central'
                       AND l.received_at IS NOT NULL AND dd.destination_hub_id=?
@@ -1260,9 +1336,9 @@ def register_logistics(app, services):
             c.execute("UPDATE parcels SET return_state='envoye',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
             event(c,p['id'],p['status'],doc['reference']+' · retour scanné au départ vers le Hub Central; statut inchangé, réception attendue',u)
         elif special_return:
-            # Onward sorting from Central preserves the received return state.
-            c.execute('UPDATE parcels SET current_hub_id=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?',(scanned_at,p['id']))
-            event(c,p['id'],p['status'],doc['reference']+' · scan de sortie Hub; statut financier inchangé',u)
+            # Tri au Hub Central : le retour repart vers son Hub d'origine.
+            c.execute("UPDATE parcels SET current_hub_id=NULL,return_state='transit_origine',ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
+            event(c,p['id'],p['status'],doc['reference']+' · retour en transit vers son Hub d’origine; statut de livraison inchangé',u)
         else:
             c.execute("UPDATE parcels SET status='Transit',current_hub_id=NULL,next_attempt_at=NULL,reason_code=NULL,ops_revision=ops_revision+1,updated_at=? WHERE id=?",(scanned_at,p['id']))
             event(c,p['id'],'Transit',doc['reference']+' · scan de sortie du Hub',u)
@@ -1392,6 +1468,7 @@ def register_logistics(app, services):
             c.execute("UPDATE parcels SET status=?,next_attempt_at=NULL,reason_code=NULL,updated_at=? WHERE id=?",(received_status,received_at,p['id']))
         if complete:c.execute('UPDATE ops_document_lines SET active=0 WHERE document_id=?',(did,))
         central_return=doc.get('palette_purpose')=='return_to_central'
+        origin_return=doc.get('palette_purpose')=='return_to_origin'
         stock_movement=None
         if central_return:
             # Central receipt: the delivery status stays untouched. Only the return
@@ -1401,6 +1478,10 @@ def register_logistics(app, services):
             if stock_receive:stock_movement=stock_receive(c,p['id'],u,doc['destination_hub_id'])
             if stock_events is not None and stock_movement and stock_movement.get('restocked'):
                 stock_events.append(tracking)
+        if origin_return:
+            # Retour réceptionné physiquement au Hub d'origine : il y reste
+            # (section « Mes retours ») jusqu'à sa remise au client.
+            c.execute("UPDATE parcels SET return_state='recu_hub_origine',next_attempt_at=NULL,reason_code=NULL WHERE id=?",(p['id'],))
         sync_central_receipts(c,parcel_id=p['id'])
         event_status=p['status'] if central_return else p['status'] if doc['kind']=='return' or special_return else received_status
         event_note=doc['reference']+(' · retour réceptionné physiquement au Hub Central · statut inchangé, retour marqué' if central_return else ' · réception physique déclarée'+(' · état de retour conservé' if special_return else ''))
@@ -1504,6 +1585,9 @@ def register_logistics(app, services):
                         ORDER BY l.received_at DESC,l.id DESC LIMIT 1''',(pid,src['id'])).fetchone()
                     if not prior or not prior['return_status']:
                         raise Error('Statut initial du retour non confirmé; révision Admin requise.',409)
+                    if not received_in_warehouse(p):
+                        raise Error('Colis '+p['tracking']+' : seul un colis portant le tag « Retour reçu en entrepôt » '
+                                    'peut partir du Hub Central.',409)
                 added.append(p)
             at=now()
             for p in added:
@@ -1972,6 +2056,9 @@ def register_logistics(app, services):
         if p['tracking']!=line['tracking'] or not line['active']:raise Error('Contenu du manifeste modifié.',409)
         if doc.get('palette_purpose') in ('return_to_central','return_to_origin'):
             if not return_status_unchanged(line,p):raise Error('Statut de retour modifié.',409)
+            if doc.get('palette_purpose')=='return_to_origin' and not received_in_warehouse(p):
+                raise Error('Colis '+p['tracking']+' : seul un colis portant le tag « Retour reçu en entrepôt » '
+                            'peut partir du Hub Central vers son Hub d’origine.',409)
         else:guard(c,p,False)
         if not parcel_physically_at_hub(p['current_hub_id'],doc['source_hub_id']):raise Error('Colis physiquement hors du Hub de départ.',409)
         check_transfer_city(c,doc,p)
