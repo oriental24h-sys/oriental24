@@ -746,7 +746,7 @@ def register_logistics(app, services):
         if tab not in ('default','retours','a-recevoir'):raise Error('Onglet de palettes invalide.')
         with conn() as c:
             where=["d.kind='transfer'","d.status!='Supprimé'"];args=[]
-            local=None;central_id,central=current_central_hub(c)
+            central_id,central=current_central_hub(c)
             if u['role']=='agent':
                 local=local_manager_hub(c,u)
                 if tab=='default':
@@ -763,9 +763,6 @@ def register_logistics(app, services):
             elif tab=='a-recevoir':
                 where.append("d.palette_purpose='return_to_origin' AND d.status IN ('Départ partiel','En transit','Partiellement reçu')")
             else:where.append("d.palette_purpose='standard'")
-            if tab=='a-recevoir' and u['role']=='admin':
-                # The Admin sees all customer returns routed from the Central Hub to their origin Hubs.
-                pass
             if request.args.get('hub_id','').isdigit() and u['role']=='admin':
                 hid=int(request.args['hub_id']);where.append('(d.source_hub_id=? OR d.destination_hub_id=?)');args.extend([hid,hid])
             status=request.args.get('status','').strip()
