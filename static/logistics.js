@@ -64,7 +64,7 @@ function hubPalletsView(data){
  const active=rows.filter(d=>['Préparé','Départ partiel','En transit','Partiellement reçu'].includes(d.status));
  const pending=rows.filter(d=>['Départ partiel','En transit','Partiellement reçu'].includes(d.status));
  const incoming=rows.filter(d=>(!agent||Number(d.destination_hub_id)===hubId)&&['Départ partiel','En transit','Partiellement reçu'].includes(d.status));
- const tabs=[['default','Default'],['retours','Retours'],['a-recevoir','À recevoir']];
+ const tabs=[['default','Default'],['retours','Retours'],['a-recevoir','Retours du Central']];
  const admin=S.user.role==='admin',centralId=Number(data.central_hub_id)||0;
  const receiveAction=`<button class="btn" onclick="hubPaletteReception()">${icon('scan')}Reception Palette</button>`;
  const actions=tab==='default'?`${receiveAction}<button class="btn primary" onclick="hubPaletteNew('standard')">${icon('truck')}Envoyer Palette</button>`:
@@ -82,13 +82,13 @@ function hubPalletsView(data){
    d.lots||'—',opsDate(d.created_at),opsTag(d.status),
    `<div class="hp-row-actions" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${paletteRowActions('transfer',d.id,'openOpsDocument('+d.id+')')}<button class="btn sm" onclick="openOpsDocument(${d.id})">${d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)?'Ouvrir / recevoir':'Ouvrir'} ${icon('arrow')}</button>${d.status==='Préparé'&&!d.dispatched_at&&(!agent||Number(d.source_hub_id)===hubId)?`<button class="btn sm" onclick="hubPaletteAddCmd(${d.id},'${esc(d.palette_purpose||'standard')}')" title="Ajouter des CMD à cette palette : le scan s’ouvre">${icon('plus')}CMD</button><button class="btn sm danger" onclick="hubPaletteDelete(${d.id},'${esc(d.reference)}',${Number(d.revision)||1})" title="Supprimer cette palette non validée">Supprimer</button>`:''}</div>`
  ])):empty(tab==='retours'?'Aucun retour dans cette sélection':tab==='a-recevoir'?'Aucune palette à recevoir':'Aucune palette inter-Hub','Les palettes autorisées pour votre périmètre apparaîtront ici.');
- if(tab==='retours'&&agent)setTimeout(hubMyReturnsPaint,0);
+ if((tab==='retours'||tab==='a-recevoir')&&agent)setTimeout(hubMyReturnsPaint,0);
  const bar=document.getElementById('hp-bulk-btn');if(bar){bar.disabled=true;bar.innerHTML=icon('scan')+'Réceptionner la sélection (0)';}document.querySelectorAll('.hp-fus-all').forEach(a=>{a.checked=false;a.indeterminate=false});
  return heading('Palettes',agent?`${esc(data.hub?.name||'Mon Hub')} · transferts et retours qui impliquent ce Hub.`:'Transferts et retours inter-Hubs · administrateur.',`<button class="btn" onclick="renderView()">${icon('refresh')}Actualiser</button>`)+
  `<div class="pp-explainer"><span class="stat-icon">${icon('layers')}</span><div><b>${esc(purposeNote)}</b>${tab==='default'?'<p>Transferts normaux des CMD : d’un Hub vers le Hub Central, ou du Hub Central vers un Hub. Aucune règle de retour ne s’applique ici.':'<p>Au scan de départ du retour, chaque colis passe à « Vers Hub Central ». Il devient « Retourné » uniquement après sa réception physique par Admin ou le responsable du Hub Central. Les montants des relevés déjà émis ne sont pas recalculés; une origine inconnue n’est jamais déduite de la ville.</p>'}</div></div>
  <section class="stats">${stat('Palettes affichées',rows.length,'','layers','blue',tab==='default'?'Périmètre autorisé':tab==='retours'?'Flux de retour':'Retours dirigés vers l’origine')}${stat('À traiter',active.length,'','truck','purple','Préparées, départs ou réceptions en cours')}${stat('Colis restant(s)',rows.reduce((n,d)=>n+(d.remaining||0),0),'','box','orange','Résumé de palette, sans détail hors Hub')}${stat('À recevoir',incoming.length,'','scan',incoming.length?'warn':'green','Destinées à votre Hub')}</section>
- ${tab==='retours'?`<div id="hub-my-returns"></div>`:''}
- <section class="card"><div class="pc-tabs">${tabs.map(([id,label])=>`<button type="button" class="pc-tab ${tab===id?'on':''}" onclick="hubPaletteTabSet('${id}')">${label}</button>`).join('')}</div><div class="pc-actions-row">${actions}</div><div class="hp-bulk-bar"><button type="button" class="btn primary" id="hp-bulk-btn" onclick="hubPaletteBulkReception()" disabled>${icon('scan')}Réceptionner la sélection (0)</button><span class="sub" id="hp-bulk-count">Cochez les palettes arrivées à votre Hub : tous leurs colis sont réceptionnés en une seule validation.</span></div>${table}</section>`;
+ ${(tab==='retours'||tab==='a-recevoir')?`<div id="hub-my-returns"></div>`:''}
+ <section class="card"><div class="pc-tabs">${tabs.map(([id,label])=>`<button type="button" class="pc-tab ${tab===id?'on':''}" onclick="hubPaletteTabSet('${id}')">${label}</button>`).join('')}</div>${tab==='a-recevoir'?`<div class="full form-hint"><b>Palettes de retour envoyées par le Hub Central vers ${esc(data.hub?.name||'mon Hub')}</b> — réceptionnez-les pour que les colis passent dans « Mes retours », puis remettez-les au client.</div>`:''}<div class="pc-actions-row">${actions}</div><div class="hp-bulk-bar"><button type="button" class="btn primary" id="hp-bulk-btn" onclick="hubPaletteBulkReception()" disabled>${icon('scan')}Réceptionner la sélection (0)</button><span class="sub" id="hp-bulk-count">Cochez les palettes arrivées à votre Hub : tous leurs colis sont réceptionnés en une seule validation.</span></div>${table}</section>`;
 }
 async function hubReturnsReception(){
  if(S.user.role!=='agent'){toast('Réception des retours réservée au Responsable de Hub.',true);return}
@@ -107,21 +107,34 @@ async function hubReturnsReception(){
 }
 async function hubMyReturnsPaint(){
  const host=document.getElementById('hub-my-returns');if(!host||S.user.role!=='agent')return;
- host.innerHTML='<section class="card ops-margin"><div class="card-head"><div><h3>Mes retours</h3><p>Retours réceptionnés à votre Hub. Ils restent ici jusqu’à leur remise au client.</p></div></div><p class="sub">Chargement…</p></section>';
+ host.innerHTML='<section class="card ops-margin"><div class="card-head"><div><h3>Retours du Hub Central · à remettre au client</h3><p>Chargement…</p></div></div></section>';
  try{
   const data=await api('/logistics/my-returns');
   if(!host.isConnected)return;
   const rows=data.rows||[];
   const label={recu_hub_origine:'Retour reçu en Hub origine',transit_origine:'Retour transit vers origine',recu_entrepot:'Retour reçu en entrepôt',envoye:'Retour envoyé vers le Central'};
-  host.innerHTML=`<section class="card ops-margin"><div class="card-head"><div><h3>Mes retours</h3><p>Retours réceptionnés à votre Hub. Ils restent dans cette liste jusqu’à leur remise au client.</p></div><span class="tag">${rows.length} retour${rows.length>1?'s':''}</span></div>${rows.length?simpleTable(['Colis','Client / Ville','État du retour','Reçu le','Depuis',''],rows.map(r=>[
+  host.innerHTML=`<section class="card ops-margin"><div class="card-head"><div><h3>Retours du Hub Central · à remettre au client</h3><p>Colis de retour arrivés à ${esc(data.hub_name||'votre Hub')} : remettez-les au client puis cliquez « Remis au client ».</p></div><span class="tag">${rows.length} retour${rows.length>1?'s':''}</span></div>${rows.length?simpleTable(['Colis','Client / Ville','État du retour','Reçu le','Depuis',''],rows.map(r=>[
     `<strong>${esc(r.tracking)}</strong><span class="sub">${esc(r.status)}</span>`,
     `${esc(r.recipient||'—')}<span class="sub">${esc(r.city||'')}</span>`,
     `<span class="tag ${r.return_state==='recu_hub_origine'?'good':'warn'}">${esc(label[r.return_state]||r.return_state)}</span>`,
     opsDate(r.received_at||r.updated_at),
     r.days+' j',
-    `<button class="btn sm" onclick="parcelDetail(${r.id})">Ouvrir ${icon('arrow')}</button>`
+    `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn sm" onclick="parcelDetail(${r.id})">Ouvrir ${icon('arrow')}</button>${r.return_state==='recu_hub_origine'?`<button class="btn sm primary" onclick="hubMyReturnHandover(${r.id},'${esc(r.tracking)}')">${icon('check')}Remis au client</button>`:''}</div>`
    ])):empty('Aucun retour au Hub','Les retours réceptionnés depuis le Hub Central apparaîtront ici.')}</section>`;
  }catch(e){if(host.isConnected)host.innerHTML=`<section class="card ops-margin"><div class="card-head"><div><h3>Mes retours</h3></div></div><p class="sub">${esc(e.message)}</p></section>`}
+}
+async function hubMyReturnHandover(id,tracking){
+ if(!['admin','agent'].includes(S?.user?.role))return;
+ const ctx=ppContext('Remise au client · '+tracking);
+ ctx.node.querySelector('.modal-body').innerHTML=`<p class="form-hint">Confirmez la remise physique du colis <b>${esc(tracking)}</b> au client. La ligne sort de « Mes retours » et l’opération est tracée.</p><label class="field full"><span>Note (facultatif)</span><input id="mrh-note" maxlength="300" placeholder="Nom de la personne, référence de reçu…"></label><div class="form-error" id="mrh-error" style="display:none"></div><div class="form-actions"><button class="btn" onclick="closeModal()">Annuler</button><button class="btn primary" id="mrh-go">Remis au client</button></div>`;
+ const go=ctx.node.querySelector('#mrh-go'),err=ctx.node.querySelector('#mrh-error');
+ go.onclick=async()=>{
+  if(go.disabled)return;go.disabled=true;err.style.display='none';
+  try{
+   await api('/logistics/my-returns/'+Number(id)+'/handover','POST',{confirmed:true,note:(ctx.node.querySelector('#mrh-note')?.value||'').trim()});
+   if(!ctx.current())return;closeModal();toast('Colis '+tracking+' remis au client');await renderView();
+  }catch(e){if(ctx.current()){err.textContent=e.message;err.style.display='block';go.disabled=false}}
+ };
 }
 async function hubPaletteReception(){
  try{
@@ -320,7 +333,7 @@ async function hubPaletteLoadCandidates(){
   if((d.scans||[]).length){d.scans=[]}
  const badge=p=>p.decision==='accept'?`<span class="tag good">Part direct</span>`:p.decision==='double'?`<span class="tag warn">Déjà Livré</span>`:p.decision==='confirm'?`<span class="tag warn">Rendez-vous · OUI requis</span>`:p.decision==='blocked'?`<span class="tag bad">À valider</span>`:'';
  const facts=p=>[p.days_at_hub!==undefined&&p.days_at_hub!==null?p.days_at_hub+' j':'',p.handovers!==undefined&&p.handovers!==null?p.handovers+' passage(s) livreur':'',p.appointment?'RDV '+p.appointment:''].filter(Boolean).join(' · ');
- host.innerHTML=rows.length?`<div class="full form-hint">${rows.length} colis physiquement au Hub de départ.${available.length>100?' Une palette contient 100 colis maximum : préparez-en une autre pour le reste.':''} ${d.purpose==='standard'?'Scannez-les ou cochez-les : chaque colis coché entre dans la palette.':'Scannez-les ou cochez-les : la coche vaut validation (OUI).'}</div><div class="hp-selection-tools"><button type="button" class="btn sm" id="hp-select-all" onclick="hubPaletteSelectAll(true)">Sélectionner tout</button><button type="button" class="btn sm" id="hp-clear-all" onclick="hubPaletteSelectAll(false)">Tout désélectionner</button><span class="sub" id="hp-selected-count">0 / ${rows.length} sélectionnés</span></div>${rows.map(p=>`<label class="check-label hub-palette-candidate"><input class="hp-pick" type="checkbox" value="${p.id}" data-decision="${esc(p.decision||'')}" onchange="hubPaletteSelectionChanged()"><span><b>${esc(p.tracking)}</b> · ${esc(p.recipient)} ${badge(p)}<small class="sub">${esc(p.city||'')} · ${esc(p.status)}${facts(p)?' · '+esc(facts(p)):''}${p.origin_hub?' · origine vérifiée : '+esc(p.origin_hub):''}</small></span></label>`).join('')}`:empty('Aucun colis au Hub de départ','Aucun colis physiquement enregistré dans ce Hub. Scannez d’abord les colis à leur réception, puis revenez ici.');
+ host.innerHTML=rows.length?`<div class="full form-hint">${rows.length} colis physiquement au Hub de départ.${available.length>100?' Une palette contient 100 colis maximum : préparez-en une autre pour le reste.':''} ${d.purpose==='standard'?'Scannez-les ou cochez-les : chaque colis coché entre dans la palette.':'Scannez-les ou cochez-les : la coche vaut validation (OUI).'}</div><div class="hp-selection-tools"><button type="button" class="btn" id="hp-select-all" onclick="hubPaletteSelectAll(true)">${icon('check')}Sélectionner tout</button><button type="button" class="btn" id="hp-clear-all" onclick="hubPaletteSelectAll(false)">${icon('close')}Tout désélectionner</button><span class="sub hp-selected-count" id="hp-selected-count">0 / ${rows.length} sélectionnés</span></div>${rows.map(p=>`<label class="check-label hub-palette-candidate"><input class="hp-pick" type="checkbox" value="${p.id}" data-decision="${esc(p.decision||'')}" onchange="hubPaletteSelectionChanged()"><span><b>${esc(p.tracking)}</b> · ${esc(p.recipient)} ${badge(p)}<small class="sub">${esc(p.city||'')} · ${esc(p.status)}${facts(p)?' · '+esc(facts(p)):''}${p.origin_hub?' · origine vérifiée : '+esc(p.origin_hub):''}</small></span></label>`).join('')}`:empty('Aucun colis au Hub de départ','Aucun colis physiquement enregistré dans ce Hub. Scannez d’abord les colis à leur réception, puis revenez ici.');
   hubPaletteSelectionChanged();
  }catch(e){if(hubPaletteDialog===d&&serial===d.loadSerial&&host.isConnected){host.textContent=e.message;toast(e.message,true)}}
 }
