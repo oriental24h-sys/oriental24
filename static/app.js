@@ -1148,7 +1148,7 @@ function drawParcelTable() {
     (p) =>
       (!q ||
         [p.tracking, p.recipient, p.phone, p.company, p.city].some((x) =>
-          String(x).toLowerCase().includes(q),
+          String(x).toLowerCase().includes(q) || (p.company_code && `${p.company_code}-${p.tracking}`.toLowerCase().includes(q)),
         )) &&
       (!filters.status || p.status === filters.status) &&
       (!filters.city || String(p.city_id) === filters.city) &&
@@ -1367,7 +1367,11 @@ function assignDriver(id) {
     ),
   );
   bindForm(async (d) => {
-    await api("/parcels/" + id, "PATCH", d);
+    // Version optimiste : deux écrans ouverts ne peuvent plus s'écraser sans avertissement.
+    await api409(
+      (f) => api("/parcels/" + id, "PATCH", { ...d, revision: f ? f.ops_revision : (p.ops_revision || 0) }),
+      async () => ({ ops_revision: (await api("/parcels/" + id)).parcel.ops_revision }),
+    );
     await saved("Affectation enregistrée");
   });
 }
@@ -1704,7 +1708,7 @@ function userForm(id, role) {
           ? "Nouveau compte Support"
           : "Nouveau client",
     form(
-      `${role === "client" ? select("client_type", "Type de client", clientTypeOptions, u.client_type || "vendeur") + `<div class="form-hint"><b>Vendeur</b> : tracking ORIENTAL24 automatique.<br><b>Société de livraison</b> : tracking saisi par la société et conservé.${id?"<br>Le type est verrouillé après le premier colis ou la première préparation.":""}</div>` : ""}${input("name", "Nom complet", u.name)}${!id ? input("email", "Adresse e-mail", "", "email") : `<div class="form-hint">${esc(u.email)}<br>L’identifiant du compte est conservé.</div>`}${input("phone", "Téléphone", u.phone, "tel")}${role === "support" ? supportCityPicker(u,id) : input("company", "Entreprise / Boutique", u.company, "text", false)}${role === "livreur" ? driverHubPicker(u,!id)+`<div class="full form-hint">Un livreur doit être rattaché à un Hub actif avant toute nouvelle affectation. Les affectations historiques ambiguës restent à examiner par l’Admin.</div>` : ""}${role === "livreur" ? select("team_lead_id", "Chef d’équipe (optionnel) — visible et réaffectable uniquement dans le même Hub", [["", "Sans chef d’équipe (compte autonome)"]].concat(S.users.filter((x) => x.role === "livreur" && x.active && x.id !== id && !x.team_lead_id).map((x) => [x.id, x.name])), u.team_lead_id || "", false) : ""}${adminPasswordControl(id)}${id ? `<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active ? "checked" : ""}><label for="user-active">Compte actif</label></div>` : ""}<div class="full form-hint">Minimum 10 caractères pour le mot de passe. ${id ? "Un compte désactivé ne peut plus accéder à la plateforme." : "Transmettez les identifiants au titulaire par un canal sûr."}</div>`,
+      `${role === "client" ? select("client_type", "Type de client", clientTypeOptions, u.client_type || "vendeur") + `<div class="form-hint"><b>Vendeur</b> : tracking ORIENTAL24 automatique.<br><b>Société de livraison</b> : tracking saisi par la société et conservé.${id?"<br>Le type est verrouillé après le premier colis ou la première préparation.":""}</div>` : ""}${input("name", "Nom complet", u.name)}${!id ? input("email", "Adresse e-mail", "", "email") : `<div class="form-hint">${esc(u.email)}<br>L’identifiant du compte est conservé.</div>`}${input("phone", "Téléphone", u.phone, "tel")}${role === "support" ? supportCityPicker(u,id) : input("company", "Entreprise / Boutique", u.company, "text", false)}${role === "client" && id ? input("company_code", "Code société (préfixe étiquette · 2–6 caractères)", u.company_code || "", "text", false, 'dir="ltr" maxlength="6" placeholder="ex. SOC7" autocomplete="off" spellcheck="false"') + `<div class="full form-hint">هذا الكود كيتزاد <b>غير فالليبل والسكان</b> : الكود لي دخلاتو الشركة (tracking) كيبقى كيفما هو فالمنصة، الفواتير والـAPI. مثال: <b dir="ltr">${esc(u.company_code || "SOC7")}-${esc(u.client_type === "societe_livraison" ? "SOC-000123" : "O24-XXXXXXXXXX")}</b><br>الهدف: إلا زوج شركات عندهم نفس الـtracking، الليبل والسكان كيبقاو واضحين بلا ما نبدلو الكود ديال حتى شركة.</div>` : ""}${role === "livreur" ? driverHubPicker(u,!id)+`<div class="full form-hint">Un livreur doit être rattaché à un Hub actif avant toute nouvelle affectation. Les affectations historiques ambiguës restent à examiner par l’Admin.</div>` : ""}${role === "livreur" ? select("team_lead_id", "Chef d’équipe (optionnel) — visible et réaffectable uniquement dans le même Hub", [["", "Sans chef d’équipe (compte autonome)"]].concat(S.users.filter((x) => x.role === "livreur" && x.active && x.id !== id && !x.team_lead_id).map((x) => [x.id, x.name])), u.team_lead_id || "", false) : ""}${adminPasswordControl(id)}${id ? `<div class="switch"><input id="user-active" type="checkbox" name="active" ${u.active ? "checked" : ""}><label for="user-active">Compte actif</label></div>` : ""}<div class="full form-hint">Minimum 10 caractères pour le mot de passe. ${id ? "Un compte désactivé ne peut plus accéder à la plateforme." : "Transmettez les identifiants au titulaire par un canal sûr."}</div>`,
     ),
   );
   bindForm(async (d) => {
