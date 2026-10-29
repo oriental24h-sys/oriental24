@@ -109,3 +109,49 @@ async function openReceptionCollection(kind,id,mode='receive'){
 }
 
 function openDispatchCollection(kind,id){return openReceptionCollection(kind,id,'dispatch')}
+
+/* ── Réception groupée : plusieurs palettes cochées → UNE seule validation ──────
+   Le serveur réceptionne chaque palette entière dans sa propre sauvegarde : une
+   palette en erreur n'annule pas les autres et son motif est renvoyé à l'écran. */
+function bulkReceptionStart(kind,items){
+ if(!['admin','agent'].includes(S?.user?.role))return;
+ const sel=(items||[]).filter(x=>x&&Number(x.id)>0);
+ if(!sel.length){toast('Cochez au moins une palette à réceptionner.',true);return}
+ if(sel.length>30){toast('Maximum 30 palettes par réception groupée.',true);return}
+ const ctx=ppContext('Réceptionner la sélection');ppUnlockSound();
+ const parcels=sel.reduce((n,x)=>n+Number(x.remaining||0),0);
+ const key=financeKey();
+ ctx.node.querySelector('.modal-body').innerHTML=`<p class="form-hint">${sel.length} palette(s) sélectionnée(s) · <b>${parcels} colis restant(s)</b>. Tous ces colis seront réceptionnés en une seule validation — palette par palette, chacune dans sa propre sauvegarde.</p>
+  <div class="pp-confirm-list">${sel.map(x=>`<div><b>${esc(x.reference||('#')+x.id)}</b> · ${Number(x.remaining||0)} colis restant(s)</div>`).join('')}</div>
+  <label class="full pp-consent"><input type="checkbox" id="bulk-consent"> Je confirme avoir physiquement contrôlé et reçu TOUS les colis des palettes ci-dessus.</label>
+  <p class="full form-hint orange">Une palette invalide (déjà réceptionnée, départ non scanné) est ignorée et signalée : les autres sont bien réceptionnées. Aucune réception n'est enregistrée avant la validation finale.</p>
+  <div class="form-error" id="bulk-error" style="display:none"></div>
+  <div class="form-actions"><button type="button" class="btn" id="bulk-cancel">Annuler</button><button type="button" class="btn primary" id="bulk-go" disabled>Réceptionner ${sel.length} palette(s)</button></div>`;
+ const consent=ctx.node.querySelector('#bulk-consent'),go=ctx.node.querySelector('#bulk-go'),err=ctx.node.querySelector('#bulk-error');
+ consent.onchange=()=>{go.disabled=!consent.checked};
+ ctx.node.querySelector('#bulk-cancel').onclick=()=>closeModal();
+ go.onclick=async()=>{
+  if(!ctx.current()||!consent.checked||go.disabled)return;
+  go.disabled=true;consent.disabled=true;err.style.display='none';
+  const label=go.textContent;go.textContent='Réception en cours…';
+  try{
+   const r=await api('/reception-collection/bulk','POST',{confirmed:true,request_key:key,documents:sel.map(x=>({kind,id:Number(x.id)}))});
+   if(!ctx.current())return;
+   const bad=(r.results||[]).filter(x=>!x.ok);
+   if(!bad.length){
+    closeModal();toast(`${r.received_palettes} palette(s) · ${r.received_parcels} colis réceptionnés`);
+    await refresh();if(typeof renderView==='function')await renderView();
+    return;
+   }
+   ctx.node.querySelector('.modal-body').innerHTML=`<div class="pp-document-head"><div><span class="eyebrow orange">RÉCEPTION GROUPÉE</span><h3>${r.received_palettes} / ${r.palettes} palette(s) réceptionnée(s)</h3><p>${r.received_parcels} colis réceptionnés.</p></div></div>
+    <div class="pp-confirm-list">${bad.map(x=>`<div><b class="tag bad">Ignorée</b> ${esc(x.reference||('#')+x.id)} — ${esc(x.error||'Réception impossible.')}</div>`).join('')}</div>
+    <p class="form-hint orange">Ces palettes n'ont pas été modifiées. Ouvrez-les à l'unité pour voir le détail.</p>
+    <div class="form-actions"><button type="button" class="btn primary" onclick="closeModal();refresh().then(()=>typeof renderView==='function'&&renderView())">Fermer et actualiser</button></div>`;
+   if(typeof refresh==='function'){await refresh();await renderView()}
+  }catch(e){
+   if(!ctx.current())return;
+   err.textContent=e.message;err.style.display='block';
+   go.textContent=label;go.disabled=false;consent.disabled=false;
+  }
+ };
+}
