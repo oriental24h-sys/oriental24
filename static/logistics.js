@@ -68,7 +68,7 @@ function hubPalletsView(data){
  const admin=S.user.role==='admin',centralId=Number(data.central_hub_id)||0;
  const receiveAction=`<button class="btn" onclick="hubPaletteReception()">${icon('scan')}Reception Palette</button>`;
  const actions=tab==='default'?`${receiveAction}<button class="btn primary" onclick="hubPaletteNew('standard')">${icon('truck')}Envoyer Palette</button>`:
-   tab==='retours'?(admin?`${receiveAction}<button class="btn" onclick="hubPaletteReviewUnknown()">${icon('alert')}Origines inconnues · Revue Admin</button><button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button><button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:hubId===centralId?`${receiveAction}<button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:`<button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button><button class="btn primary" onclick="hubReturnsReception()">${icon('scan')}Réception des retours Hub</button>`):tab==='a-recevoir'?receiveAction:'';
+   tab==='retours'?(admin?`${receiveAction}<button class="btn" onclick="hubPaletteReviewUnknown()">${icon('alert')}Origines inconnues · Revue Admin</button><button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button><button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:hubId===centralId?`${receiveAction}<button class="btn primary" onclick="hubPaletteNew('return_to_origin')">${icon('layers')}Envoyer vers le Hub d’origine</button>`:`<button class="btn danger" onclick="hubPaletteNew('return_to_central')">${icon('truck')}Envoyer Retour au Central</button><button class="btn" onclick="hubPaletteReception('a-recevoir')">${icon('scan')}Réception des retours Hub</button>`):tab==='a-recevoir'?receiveAction:'';
  const purposeNote=tab==='retours'?(hubId===centralId&&!admin?'Les retours reçus du réseau sont triés ici. Un colis ne peut repartir qu’au Hub attesté par son historique physique; les origines incertaines restent bloquées pour vérification Admin.':'Les colis refusés ou retournés remontent au Hub Central; ils repartent ensuite uniquement vers leur Hub d’origine attesté.'):
    tab==='a-recevoir'?'Cette file contient les retours triés par le Hub Central vers leur Hub d’origine. Les détails du colis ne sont visibles qu’après sa réception physique.':'Le réseau conserve une étoile autour du Hub Central : un Hub secondaire ne transfère jamais directement vers un autre Hub secondaire.';
  const receivable=d=>!!(d.destination_hub_id&&(!agent||Number(d.destination_hub_id)===hubId)&&pending.includes(d)&&['En transit','Partiellement reçu','Départ partiel'].includes(d.status));
@@ -89,21 +89,6 @@ function hubPalletsView(data){
  <section class="stats">${stat('Palettes affichées',rows.length,'','layers','blue',tab==='default'?'Périmètre autorisé':tab==='retours'?'Flux de retour':'Retours dirigés vers l’origine')}${stat('À traiter',active.length,'','truck','purple','Préparées, départs ou réceptions en cours')}${stat('Colis restant(s)',rows.reduce((n,d)=>n+(d.remaining||0),0),'','box','orange','Résumé de palette, sans détail hors Hub')}${stat('À recevoir',incoming.length,'','scan',incoming.length?'warn':'green','Destinées à votre Hub')}</section>
  ${(tab==='retours'||tab==='a-recevoir')?`<div id="hub-my-returns"></div>`:''}
  <section class="card"><div class="pc-tabs">${tabs.map(([id,label])=>`<button type="button" class="pc-tab ${tab===id?'on':''}" onclick="hubPaletteTabSet('${id}')">${label}</button>`).join('')}</div>${tab==='a-recevoir'?`<div class="full form-hint"><b>Palettes de retour envoyées par le Hub Central vers ${esc(data.hub?.name||'mon Hub')}</b> — réceptionnez-les pour que les colis passent dans « Mes retours », puis remettez-les au client.</div>`:''}<div class="pc-actions-row">${actions}</div><div class="hp-bulk-bar"><button type="button" class="btn primary" id="hp-bulk-btn" onclick="hubPaletteBulkReception()" disabled>${icon('scan')}Réceptionner la sélection (0)</button><span class="sub" id="hp-bulk-count">Cochez les palettes arrivées à votre Hub : tous leurs colis sont réceptionnés en une seule validation.</span></div>${table}</section>`;
-}
-async function hubReturnsReception(){
- if(S.user.role!=='agent'){toast('Réception des retours réservée au Responsable de Hub.',true);return}
- try{
-  const data=await api('/logistics/palettes?tab=a-recevoir'),hubId=Number(S.user.agent_hub_id)||0;
-  const rows=(data.rows||[]).filter(d=>Number(d.destination_hub_id)===hubId&&['Départ partiel','En transit','Partiellement reçu'].includes(d.status));
-  if(!rows.length){toast('Aucun retour en transit vers votre Hub.');return}
-  modal('Réception des retours Hub',`<p class="form-hint">Ces retours ont été triés par le Hub Central et voyagent vers votre Hub. Ouvrez-en un puis scannez chaque colis réellement remis : le colis passera à <b>Retour reçu en Hub origine</b> et restera dans <b>Mes retours</b> jusqu’à sa remise au client.</p>${simpleTable(['Palette','Trajet','Colis','État',''],rows.map(d=>[
-    `<strong>${esc(d.reference)}</strong><span class="sub">${esc(hubPalettePurposeLabel(d))}</span>`,
-    `${esc(d.source_name||'—')} → ${esc(d.destination_name||'—')}`,
-    `<strong>${d.received||0} / ${d.count||0}</strong><span class="sub">${Math.max(0,d.remaining||0)} restant(s)</span>`,
-    opsTag(d.status),
-    `<button class="btn sm primary" onclick="closeModal();openReceptionCollection('transfer',${d.id})">${icon('scan')}Réceptionner</button>`
- ]))}`);
- }catch(e){toast(e.message,true)}
 }
 async function hubMyReturnsPaint(){
  const host=document.getElementById('hub-my-returns');if(!host||S.user.role!=='agent')return;
@@ -136,9 +121,9 @@ async function hubMyReturnHandover(id,tracking){
   }catch(e){if(ctx.current()){err.textContent=e.message;err.style.display='block';go.disabled=false}}
  };
 }
-async function hubPaletteReception(){
+async function hubPaletteReception(tabOverride){
  try{
-  const data=await api('/logistics/palettes?tab='+encodeURIComponent(hubPaletteTab)),agent=S.user.role==='agent',hubId=Number(S.user.agent_hub_id)||0;
+  const data=await api('/logistics/palettes?tab='+encodeURIComponent(tabOverride||hubPaletteTab)),agent=S.user.role==='agent',hubId=Number(S.user.agent_hub_id)||0;
   const rows=(data.rows||[]).filter(d=>(!agent||Number(d.destination_hub_id)===hubId)&&['Départ partiel','En transit','Partiellement reçu'].includes(d.status));
   if(!rows.length){toast('Aucune palette en transit vers votre Hub.');return}
   modal('Reception Palette',`<p class="form-hint">Ouvrez le bon, vérifiez le trajet et scannez chaque colis réellement arrivé. Le manifeste affiche les colis expédiés. Seul le scan de réception les enregistre physiquement au Hub destinataire.</p>${simpleTable(['Référence','Origine → destination','Colis','État',''],rows.map(d=>[`<strong>${esc(d.reference)}</strong><span class="sub">${esc(hubPalettePurposeLabel(d))}</span>`,`${esc(d.source_name)} → ${esc(d.destination_name)}`,`${d.received||0} / ${d.count||0}`,opsTag(d.status),`<button class="btn sm primary" onclick="closeModal();openOpsDocument(${d.id})">Ouvrir</button>`]))}`);
