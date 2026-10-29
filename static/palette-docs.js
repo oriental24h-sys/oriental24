@@ -2,6 +2,9 @@
    ticket (impression), CSV des CMD, ouverture, pièces jointes, bon de réception PDF.
    `kind` : `partner` (palette société) ou `transfer` (palette inter-Hub). */
 function paletteDocsBase(kind, id) { return '/api/palette-docs/' + kind + '/' + Number(id) }
+function o24AutoTrackingCode() {
+  try { return [...crypto.getRandomValues(new Uint8Array(8))].map(x => x.toString(16).padStart(2, '0')).join(''); } catch (e) { return String(Date.now()); }
+}
 const PALETTE_NATURES = { partner: 'RÉCEPTION', transfer: 'RÉCEPTION', pickup: 'RAMASSAGE', return: 'RETOUR' }
 function paletteRowActions(kind, id, opener) {
   const base = paletteDocsBase(kind, id), k = String(kind).replace(/[^a-z]/g, '');

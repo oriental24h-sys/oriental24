@@ -194,7 +194,7 @@ async function pcLegacySendReturn(){
    <label><span>Select a transport</span><input id="pc-r-transport" list="pc-r-transports" value="${esc(c._t||'')}"><datalist id="pc-r-transports"><option value="SAT"></option><option value="Ghazala"></option><option value="car"></option><option value="Taxi"></option></datalist></label>
    <label><span>Select a destination</span><select id="pc-r-vendor"><option value="">Destination</option>${cfg.clients.map(x=>`<option value="${x.id}" ${String(c._v||'')===String(x.id)?'selected':''}>${esc(x.company||x.name)}</option>`).join('')}</select></label>
    <label><span>Hub de départ</span><select id="pc-r-hub">${cfg.hubs.map(h=>`<option value="${h.id}" ${String(c._h||(cfg.hubs.length===1?cfg.hubs[0].id:''))===String(h.id)?'selected':''}>${esc(h.name)} · ${esc(h.city)}</option>`).join('')}</select></label>
-   <label><span>Tracking Code</span><input id="pc-r-code" placeholder="(optionnel) numéro de bordereau transport" value="${esc(c._c||'')}"></label>
+   <label><span>Code de suivi (généré automatiquement)</span><input id="pc-r-code" placeholder="généré automatiquement" value="${esc(c._c||o24AutoTrackingCode())}" title="Rempli automatiquement — remplacez-le si le transporteur fournit son numéro"></label>
    <label><span>Nombre de lots</span><input id="pc-r-lots" type="number" min="0" max="500" value="${esc(c._l||'')}" placeholder="Enter number of lots"></label>
   </div>
   <div class="pc-scanzone"><p>Merci de scanner les colis à retourner</p>
