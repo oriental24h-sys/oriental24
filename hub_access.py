@@ -107,6 +107,7 @@ HUB_MANAGER_SCOPED_ROUTES = (
     ('POST', r'/api/dispatch-collection/(transfer|return)/\d+'),
     ('GET', r'/api/reception-collection/(transfer|partner|return|fusion|recovered)/\d+'),
     ('POST', r'/api/reception-collection/(transfer|partner|return|fusion|recovered)/\d+'),
+    ('POST', r'/api/reception-collection/bulk'),
     ('GET', r'/api/ramassage-bons'),
     ('GET', r'/api/ramassage-bons/hub/queue'),
     ('GET', r'/api/ramassage-bons/hub/collected'),
