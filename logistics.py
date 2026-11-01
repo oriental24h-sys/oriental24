@@ -791,7 +791,11 @@ def register_logistics(app, services):
     @app.get(P + '/my-returns')
     @auth('admin', 'agent')
     def ops_my_returns():
-        """Retours réceptionnés au Hub d'origine : visibles jusqu'à leur remise au client."""
+        """« Mes retours » : deux familles strictement séparées.
+        - received : retour physiquement au Hub, à remettre au client ; la ligne reste
+          jusqu'à « Remis au client » (return_state='remis_client').
+        - sent : retour déjà expédié par ce Hub vers le Hub Central, pas encore revenu.
+        """
         u = user()
         with conn() as c:
             hub_name = None
@@ -802,37 +806,52 @@ def register_logistics(app, services):
             else:
                 raw = request.args.get('hub_id', '')
                 hub_id = int(raw) if raw.isdigit() else None
-            where = ["p.status IN ('Retourné','Refusé','Échange Réceptionné')",
-                     "p.return_state IN ('recu_hub_origine','recu_entrepot','transit_origine','envoye')",
-                     "NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)"]
-            args = []
+            cols = ("SELECT p.id,p.tracking,p.recipient,p.phone,p.status,p.return_state,p.amount,"
+                    "p.origin_hub_id,p.current_hub_id,ci.name city,oh.name origin_hub,ch.name current_hub,p.updated_at,")
+            received_at_sql = ("(SELECT max(l.received_at) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id "
+                               " WHERE l.parcel_id=p.id AND l.received_at IS NOT NULL "
+                               " AND d.palette_purpose='return_to_origin') received_at ")
+            base_from = ("FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id "
+                         "LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id "
+                         "LEFT JOIN ops_hubs ch ON ch.id=p.current_hub_id ")
+            active_line = "NOT EXISTS(SELECT 1 FROM ops_document_lines a WHERE a.parcel_id=p.id AND a.active=1)"
+            # 1) Retours réceptionnés, présents au Hub : visibles jusqu'à la remise au client.
+            where_recv = ["p.return_state='recu_hub_origine'", active_line]
+            args_recv = []
             if hub_id:
-                where.append('p.current_hub_id=?')
-                args.append(hub_id)
+                where_recv.insert(0, 'p.current_hub_id=?')
+                args_recv.append(hub_id)
             else:
-                where.append('p.current_hub_id IS NOT NULL')
-            sql = ("SELECT p.id,p.tracking,p.recipient,p.phone,p.status,p.return_state,p.amount,"
-                   "p.origin_hub_id,p.current_hub_id,ci.name city,oh.name origin_hub,ch.name current_hub,p.updated_at,"
-                   "(SELECT max(l.received_at) FROM ops_document_lines l JOIN ops_documents d ON d.id=l.document_id "
-                   " WHERE l.parcel_id=p.id AND l.received_at IS NOT NULL "
-                   " AND d.palette_purpose='return_to_origin') received_at "
-                   "FROM parcels p LEFT JOIN cities ci ON ci.id=p.city_id "
-                   "LEFT JOIN ops_hubs oh ON oh.id=p.origin_hub_id LEFT JOIN ops_hubs ch ON ch.id=p.current_hub_id "
-                   "WHERE " + ' AND '.join(where) + " ORDER BY p.updated_at DESC,p.id DESC LIMIT 500")
-            rows = c.execute(sql, args).fetchall()
-            result = []
-            for r in rows:
-                item = dict(r)
-                stamp = item.get('received_at') or item.get('updated_at')
-                try:
-                    item['days'] = max(0, (datetime.now() - datetime.fromisoformat(stamp)).days) if stamp else 0
-                except (TypeError, ValueError):
-                    item['days'] = 0
-                result.append(item)
+                where_recv.insert(0, 'p.current_hub_id IS NOT NULL')
+            rows_recv = [dict(r) for r in c.execute(
+                cols + received_at_sql + base_from + "WHERE " + ' AND '.join(where_recv) +
+                " ORDER BY p.updated_at DESC,p.id DESC LIMIT 500", args_recv).fetchall()]
+            # 2) Retours expédiés par ce Hub vers le Central : pas encore de retour physique.
+            where_sent = ["p.return_state IN ('envoye','transit_origine','recu_entrepot')", active_line,
+                          "EXISTS(SELECT 1 FROM ops_document_lines s JOIN ops_documents sd ON sd.id=s.document_id "
+                          " WHERE s.parcel_id=p.id AND sd.kind='transfer' AND sd.palette_purpose='return_to_central'"
+                          + (" AND sd.source_hub_id=?" if hub_id else " AND sd.source_hub_id IS NOT NULL") + ")"]
+            args_sent = [hub_id] if hub_id else []
+            rows_sent = [dict(r) for r in c.execute(
+                cols + received_at_sql + base_from + "WHERE " + ' AND '.join(where_sent) +
+                " ORDER BY p.updated_at DESC,p.id DESC LIMIT 500", args_sent).fetchall()]
+            def finish(items, flow):
+                out = []
+                for item in items:
+                    item['flow'] = flow
+                    stamp = item.get('received_at') or item.get('updated_at')
+                    try:
+                        item['days'] = max(0, (datetime.now() - datetime.fromisoformat(stamp)).days) if stamp else 0
+                    except (TypeError, ValueError):
+                        item['days'] = 0
+                    out.append(item)
+                return out
+            result = finish(rows_recv, 'received') + finish(rows_sent, 'sent')
             if hub_name is None and hub_id:
                 row = c.execute('SELECT name FROM ops_hubs WHERE id=?', (hub_id,)).fetchone()
                 hub_name = row['name'] if row else None
-            return jsonify(rows=result, total=len(result), hub_id=hub_id, hub_name=hub_name,
+            return jsonify(rows=result, total=len(result), received=len(rows_recv), sent=len(rows_sent),
+                           hub_id=hub_id, hub_name=hub_name,
                            state_labels={'recu_hub_origine': 'Retour reçu en Hub origine',
                                          'transit_origine': 'Retour en transit vers le Hub d’origine',
                                          'recu_entrepot': 'Retour reçu en entrepôt',
