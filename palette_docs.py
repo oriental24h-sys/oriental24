@@ -1,7 +1,7 @@
 """Documents d'une palette — toutes les palettes qui ARRIVENT (société ou inter-Hub).
 
 Quatre documents, une seule adresse pour les deux types de palette :
-  · `ticket.pdf`  : ticket de palette (A6 + QR) à coller / agrafer sur la palette ;
+  · `ticket.pdf`  : ticket de palette 100 × 100 mm (+ QR) à coller / agrafer sur la palette ;
   · `bon.pdf`     : bon de réception A4 (liste des CMD, compteurs, signatures) ;
   · `colis.csv`   : toutes les CMD de la palette (Excel / CSV, séparateur `;`) ;
   · `attachments` : pièces jointes (photo du bon, réserve transporteur…), en base.
@@ -266,57 +266,93 @@ def register_palette_docs(app, s):
         pdf.build(story, onFirstPage=footer, onLaterPages=footer)
         return out.getvalue()
 
+    def _fit(canvas, text, max_width, size, min_size=5.0, font='O24Bold'):
+        """Réduit la taille puis tronque : un ticket 100 × 100 ne déborde jamais."""
+        text = str('' if text is None else text)
+        while size > min_size and canvas.stringWidth(text, font, size) > max_width:
+            size -= .2
+        if canvas.stringWidth(text, font, size) > max_width:
+            while text and canvas.stringWidth(text + '…', font, size) > max_width:
+                text = text[:-1]
+            text += '…'
+        canvas.setFont(font, size)
+        return text
+
     def ticket_pdf(doc, kind, total, received):
-        """Ticket de palette A5 paysage : la NATURE du mouvement est écrite en grand."""
+        """Ticket de palette **100 × 100 mm** (carré) : même module que l'étiquette de
+        livraison 100 × 100. La NATURE du mouvement est écrite en grand et colorée
+        (vert ramassage · bleu réception · rouge retour), QR en bas à droite."""
         nature, subtitle = nature_of(kind, doc)
-        width, height = 210 * mm, 148 * mm
+        side = 100 * mm
+        width = height = side
+        pad = 6 * mm
         out = io.BytesIO()
         canvas = Canvas(out, pagesize=(width, height))
-        band = 30 * mm
+
+        # --- bandeau de nature ---
+        band = 22 * mm
         canvas.setFillColor(NATURE_COLORS.get(nature, NAVY))
         canvas.rect(0, height - band, width, band, stroke=0, fill=1)
         canvas.setFillColor(colors.white)
-        canvas.setFont('O24Bold', 30)
-        canvas.drawString(11 * mm, height - 17 * mm, nature)
-        canvas.setFont('O24', 10)
-        canvas.drawString(11 * mm, height - 24 * mm, subtitle)
-        canvas.setFont('O24', 8)
-        canvas.drawRightString(width - 11 * mm, height - 12 * mm, TITLES.get(kind, 'Palette'))
         canvas.setFont('O24Bold', 20)
-        canvas.drawRightString(width - 11 * mm, height - 21 * mm, str(doc.get('reference') or ''))
-        canvas.setFillColor(NAVY)
-        rows = [('SOURCE', doc.get('source_name') or doc.get('client_name') or '—'),
-                ('DESTINATION', doc.get('destination_name') or '—'),
-                ('TRANSPORT', doc.get('transport') or '—'),
-                ('CODE DE SUIVI', doc.get('tracking_code') or '—'),
-                ('COLIS', '%s annoncés · %s reçus · %s restants' % (total, received, max(0, total - received))),
-                ('ÉTAT', doc.get('status') or '—'),
-                ('DATE', stamp(doc.get('dispatched_at') or doc.get('created_at'))),
-                ('RÉF. SOCIÉTÉ / LOTS', (doc.get('partner_reference') or '—') if kind == 'partner'
-                 else str(doc.get('lots') if doc.get('lots') is not None else '—'))]
-        y = height - band - 13 * mm
-        for index, (label, value) in enumerate(rows):
-            column = 0 if index < 5 else 1
-            x = 11 * mm if column == 0 else 112 * mm
-            yy = y - (index * 14 * mm if column == 0 else (index - 5) * 14 * mm)
-            canvas.setFont('O24', 7)
-            canvas.setFillColor(GREY)
-            canvas.drawString(x, yy, label)
-            canvas.setFont('O24Bold', 12)
-            canvas.setFillColor(NAVY)
-            canvas.drawString(x, yy - 6.5 * mm, str(value)[:38])
+        canvas.drawString(pad, height - 11 * mm, nature)
+        canvas.setFont('O24', 6.2)
+        canvas.drawString(pad, height - 16.6 * mm, _fit(canvas, subtitle, width - 2 * pad - 34 * mm, 6.2, 4.6, 'O24'))
+        canvas.setFillColor(colors.white)
+        canvas.setFont('O24', 5.6)
+        canvas.drawRightString(width - pad, height - 6 * mm, TITLES.get(kind, 'Palette'))
+        canvas.setFont('O24Bold', 12)
+        canvas.drawRightString(width - pad, height - 13.5 * mm, str(doc.get('reference') or ''))
+
+        # --- champs : deux colonnes, quatre lignes, jamais de débordement ---
+        remaining = max(0, total - received)
+        left_rows = [('SOURCE', doc.get('source_name') or doc.get('client_name') or '—'),
+                     ('DESTINATION', doc.get('destination_name') or '—'),
+                     ('TRANSPORT', doc.get('transport') or '—'),
+                     ('CODE DE SUIVI', doc.get('tracking_code') or '—')]
+        right_rows = [('COLIS', '%s annoncés · %s reçus' % (total, received)),
+                      ('ÉTAT', doc.get('status') or '—'),
+                      ('DATE', stamp(doc.get('dispatched_at') or doc.get('created_at'))),
+                      ('LOTS / RÉF. SOCIÉTÉ', (doc.get('partner_reference') or '—') if kind == 'partner'
+                       else str(doc.get('lots') if doc.get('lots') is not None else '—'))]
+        left_x, left_w = pad, 44 * mm
+        right_x, right_w = 56 * mm, width - pad - 56 * mm
+        first_y = height - band - 7 * mm
+        row_h = 11 * mm
+        for index, ((label, value), (label2, value2)) in enumerate(zip(left_rows, right_rows)):
+            y = first_y - index * row_h
+            for x, w, lab, val in ((left_x, left_w, label, value), (right_x, right_w, label2, value2)):
+                canvas.setFillColor(GREY)
+                canvas.setFont('O24', 5.4)
+                canvas.drawString(x, y, _fit(canvas, lab, w, 5.4, 4.4, 'O24'))
+                canvas.setFillColor(NAVY)
+                canvas.setFont('O24Bold', 8.4)
+                canvas.drawString(x, y - 4.3 * mm, _fit(canvas, val, w, 8.4))
+
+        # --- QR en bas à droite ---
+        qr_side = 22 * mm
+        qr_x = width - pad - qr_side
+        qr_y = 9 * mm
         try:
             import qrcode
             buf = io.BytesIO()
             qrcode.make(str(doc.get('reference') or '')).save(buf, format='PNG')
             buf.seek(0)
-            canvas.drawImage(ImageReader(buf), width - 50 * mm, 12 * mm, 38 * mm, 38 * mm,
+            canvas.drawImage(ImageReader(buf), qr_x, qr_y, qr_side, qr_side,
                              preserveAspectRatio=True, mask='auto')
         except Exception:  # le ticket reste imprimable même si le QR échoue
             pass
-        canvas.setFont('O24', 7)
+
+        # --- pied de page ---
+        canvas.setFillColor(NAVY)
+        canvas.setFont('O24Bold', 8)
+        canvas.drawString(pad, 24 * mm, 'ORIENTAL24')
         canvas.setFillColor(GREY)
-        canvas.drawString(11 * mm, 6 * mm, 'ORIENTAL24 · ticket de palette · ' + nature)
+        canvas.setFont('O24', 5.8)
+        canvas.drawString(pad, 20 * mm, _fit(canvas, 'ticket de palette · 100 × 100 mm', 62 * mm, 5.8, 4.4, 'O24'))
+        canvas.drawString(pad, 16.4 * mm, _fit(canvas, nature + ' · ' + str(doc.get('reference') or ''), 62 * mm, 5.8, 4.4, 'O24'))
+        canvas.drawString(pad, 12.8 * mm, _fit(canvas, ('%s restant(s)' % remaining) if remaining else 'Tous les colis reçus',
+                                                62 * mm, 5.8, 4.4, 'O24'))
         canvas.showPage()
         canvas.save()
         return out.getvalue()
