@@ -113,5 +113,40 @@ class PaletteTicketNatureTests(unittest.TestCase):
         self.assertNotIn(GREEN, colors, 'une arrivée ne doit pas être verte')
 
 
+    # ---------- format 100 × 100 mm ----------
+    def page_mm(self, payload):
+        import re
+        box = re.search(rb'/MediaBox\s*\[([^\]]+)\]', payload)
+        self.assertIsNotNone(box, 'MediaBox absent du PDF')
+        parts = [float(v) for v in box.group(1).split()]
+        return round((parts[2] - parts[0]) / 72 * 25.4, 2), round((parts[3] - parts[1]) / 72 * 25.4, 2)
+
+    def pdf_of(self, kind, did):
+        response = self.client.get('/api/palette-docs/%s/%d/ticket.pdf' % (kind, did), headers=self.admin)
+        self.assertEqual(response.status_code, 200, 'HTTP %s' % response.status_code)
+        return response.data
+
+    def test_ticket_palette_format_100x100(self):
+        """Le ticket d'une palette tient sur un carré 100 × 100 mm, quel que soit le flux."""
+        transfer = self.palette(10, 90, [3])
+        self.assertEqual(self.page_mm(self.pdf_of('transfer', transfer)), (100.0, 100.0),
+                         'le ticket de palette n’est pas en 100 × 100 mm')
+        with self.conn() as c:
+            c.execute("UPDATE parcels SET status='Refusé' WHERE id=1")
+        retour = self.t.create_palette('agent', 10, 'return_to_central', 10, 90, [1], 910).get_json()['id']
+        self.assertEqual(self.page_mm(self.pdf_of('transfer', retour)), (100.0, 100.0),
+                         'le ticket de retour n’est pas en 100 × 100 mm')
+
+    def test_ticket_long_texte_ne_deborde_pas(self):
+        """Un nom de Hub très long est réduit/tronqué : le PDF reste généré en 100 × 100."""
+        with self.conn() as c:
+            c.execute("UPDATE ops_hubs SET name=? WHERE id=10",
+                      ('HUB BOUJDOUR NORD · AGENCE PRINCIPALE TRES LONGUE',))
+        did = self.palette(10, 90, [3])
+        payload = self.pdf_of('transfer', did)
+        self.assertEqual(self.page_mm(payload), (100.0, 100.0))
+        self.assertIn(GREEN, pdf_colors(payload), 'la couleur de nature a disparu avec le texte long')
+
+
 if __name__ == '__main__':
     unittest.main()
