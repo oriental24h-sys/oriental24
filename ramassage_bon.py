@@ -65,6 +65,49 @@ def register_ramassage_bon(app, services):
         CREATE TABLE IF NOT EXISTS ramassage_receive_keys(actor_id INTEGER NOT NULL,request_key TEXT NOT NULL,fingerprint TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(actor_id,request_key));
         ''')
         sync_central_receipts(c)
+        # Reprise unique : les CMD déjà ramassées portaient l'origine provisoire (Hub Central
+        # ou Hub du créateur). Leur vrai Hub d'origine est celui du bon de ramassage.
+        tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if 'settings' in tables and not c.execute("SELECT 1 FROM settings WHERE key='origin_hub_from_ramassage_v1'").fetchone():
+            c.execute('''UPDATE parcels SET origin_hub_id=(
+                    SELECT b.hub_id FROM ramassage_bon_lines l JOIN ramassage_bons b ON b.id=l.bon_id
+                     WHERE l.parcel_id=parcels.id AND l.received_at IS NOT NULL
+                     ORDER BY l.received_at LIMIT 1)
+                WHERE exchange_of_id IS NULL AND origin_hub_id IS NOT NULL
+                  AND origin_hub_id=(SELECT CAST(value AS INTEGER) FROM settings WHERE key='central_hub_id')
+                  AND EXISTS(SELECT 1 FROM ramassage_bon_lines l JOIN ramassage_bons b ON b.id=l.bon_id
+                              WHERE l.parcel_id=parcels.id AND l.received_at IS NOT NULL AND b.hub_id IS NOT NULL
+                                AND b.hub_id<>(SELECT CAST(value AS INTEGER) FROM settings WHERE key='central_hub_id'))''')
+            if 'settings' in tables:
+                c.execute("INSERT INTO settings(key,value) VALUES('origin_hub_from_ramassage_v1',?)", (now(),))
+
+    def central_hub_id(c):
+        try:
+            row = c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
+        except Exception:
+            return None
+        raw = row['value'] if row is not None else None
+        return int(raw) if raw and str(raw).strip().isdigit() else None
+
+    def set_origin_from_ramassage(c, parcel, hub_id):
+        """Le Hub d'origine d'une CMD est le Hub qui l'a RAMASSÉE chez le client.
+
+        À la création la CMD reçoit un Hub d'origine provisoire (Hub du responsable ou
+        Hub Central). Dès que le ramassage est physiquement réceptionné, l'origine réelle
+        est le Hub du bon de ramassage — sauf échange, qui hérite de l'origine de la CMD livrée.
+        """
+        if not hub_id:
+            return
+        if 'origin_hub_id' not in parcel.keys():
+            return
+        current = parcel['origin_hub_id']
+        if parcel.get('exchange_of_id'):
+            if current is None:
+                c.execute('UPDATE parcels SET origin_hub_id=? WHERE id=?', (hub_id, parcel['id']))
+            return
+        if current is None or current == central_hub_id(c):
+            if current != hub_id:
+                c.execute('UPDATE parcels SET origin_hub_id=? WHERE id=?', (hub_id, parcel['id']))
 
     def body():
         d = request.get_json()
@@ -387,6 +430,7 @@ def register_ramassage_bon(app, services):
             c.execute(
                 "UPDATE parcels SET status='Ramassé',current_hub_id=?,updated_at=? WHERE id=?",
                 (bon['hub_id'], t, p['id']))
+            set_origin_from_ramassage(c, dict(p), bon['hub_id'])
             c.execute(
                 'UPDATE ramassage_bon_lines SET received_at=?,received_by=? WHERE id=?',
                 (t, u['id'], line['id']))
@@ -436,6 +480,7 @@ def register_ramassage_bon(app, services):
             for line in lines:
                 revision=',ops_revision=ops_revision+1' if has_revision else ''
                 c.execute("UPDATE parcels SET status='Ramassé',current_hub_id=?,updated_at=?"+revision+' WHERE id=?',(bon['hub_id'],t,line['parcel_id']))
+                set_origin_from_ramassage(c, dict(c.execute('SELECT * FROM parcels WHERE id=?',(line['parcel_id'],)).fetchone()), bon['hub_id'])
                 c.execute('UPDATE ramassage_bon_lines SET received_at=?,received_by=? WHERE id=?',(t,u['id'],line['id']))
                 event(c,line['parcel_id'],'Ramassé',bon['reference']+' · réception confirmée après scan individuel : '+line['tracking'],u)
             c.execute("UPDATE ramassage_bons SET status='Reçu',completed_at=? WHERE id=?",(t,bon_id))
