@@ -42,7 +42,7 @@ assert.equal(items[0].id, 5);
 const create = src.slice(src.indexOf('async function hubPaletteCreate'));
 assert(create.includes("document.querySelectorAll('#hp-candidates .hp-pick:checked')"), 'la création ignore les cases cochées');
 assert(create.includes('hubPalettePickedItems(d.scans,d.rows,checkedIds)'), 'la sélection scannée + cochée n’est pas fusionnée');
-assert(create.includes('Scannez ou cochez au moins un colis à envoyer.'), 'message de refus non mis à jour');
+assert(create.includes('Cochez au moins un colis à envoyer.'), 'message de refus non mis à jour');
 assert(!create.includes('const parcel_ids=(d.scans||[]).map(p=>p.id);'), 'l’ancien chemin « scan uniquement » est encore actif');
 
 // 7) le bouton s’active aussi quand une case est cochée
