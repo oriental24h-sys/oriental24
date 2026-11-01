@@ -13,6 +13,7 @@ jointes sont des BLOB en base (même table que la console Palettes).
 import base64
 import io
 import re
+import sqlite3
 
 from flask import Response, jsonify, request
 from reportlab.lib import colors
@@ -38,13 +39,34 @@ DB_KINDS = {'partner': 'partner_palette', 'return': 'return_palette',
             'transfer': 'transfer', 'pickup': 'pickup'}
 TITLES = {'partner': 'Palette société', 'transfer': 'Palette inter-Hub',
           'pickup': 'Ramassage', 'return': 'Retour vendeur'}
-NATURE_COLORS = {'RAMASSAGE': colors.HexColor('#f58024'), 'RETOUR': colors.HexColor('#b3261e'),
-                 'RÉCEPTION': colors.HexColor('#0c274c')}
+# Mêmes couleurs que l'écran (bon-print.js) : vert = RAMASSAGE, bleu = RÉCEPTION, rouge = RETOUR.
+NATURE_COLORS = {'RAMASSAGE': colors.HexColor('#1d7d3f'), 'RETOUR': colors.HexColor('#b3261e'),
+                 'RÉCEPTION': colors.HexColor('#1b4ed8')}
+
+
+def is_hub_send(doc):
+    """Palette partie d'un Hub vers le Hub Central (sens « envoi »)."""
+    doc = doc or {}
+    central = doc.get('central_hub_id')
+    source, destination = doc.get('source_hub_id'), doc.get('destination_hub_id')
+    if not central or not destination:
+        return False
+    try:
+        central, destination = int(central), int(destination)
+        source = int(source) if source not in (None, '') else None
+    except (TypeError, ValueError):
+        return False
+    return destination == central and source != central
 
 
 def nature_of(kind, doc):
     """Nature du mouvement, telle qu'elle doit sauter aux yeux sur le ticket :
-    RAMASSAGE (colis ramassés), RETOUR (retour Central / origine / vendeur) ou RÉCEPTION."""
+    RAMASSAGE (colis ramassés / envoi vers le Hub Central), RETOUR (retour Central,
+    origine ou vendeur) ou RÉCEPTION (ce qui arrive dans un Hub).
+
+    Un transfert n'a pas UNE nature : c'est le SENS du document qui la donne.
+    Hub → Central = RAMASSAGE (vert). Central → Hub = RÉCEPTION (bleu).
+    """
     purpose = (doc or {}).get('palette_purpose') or 'standard'
     if kind == 'pickup':
         return 'RAMASSAGE', 'Colis ramassés à réceptionner au Hub'
@@ -55,6 +77,8 @@ def nature_of(kind, doc):
                           else 'Retour vers le Hub d’origine')
     if kind == 'partner':
         return 'RÉCEPTION', 'Arrivée société à réceptionner au Hub'
+    if kind == 'transfer' and is_hub_send(doc):
+        return 'RAMASSAGE', 'CMD ramassées à mon Hub, expédiées vers le Hub Central pour tri'
     return 'RÉCEPTION', 'Transfert inter-Hub à réceptionner'
 
 
@@ -95,6 +119,12 @@ def register_palette_docs(app, s):
             raise Error('Accès réservé.', 403)
         doc['partner_reference'] = doc.pop('societe_reference', '') or ''
         doc['transport'] = doc.pop('palette_transport', '') or doc.get('transport') or ''
+        # Le sens du trajet décide de la nature du ticket : il faut savoir où est le Central.
+        try:
+            row = c.execute("SELECT value FROM settings WHERE key='central_hub_id'").fetchone()
+            doc['central_hub_id'] = int(row['value']) if row and row['value'] else None
+        except (sqlite3.Error, TypeError, ValueError):
+            doc['central_hub_id'] = None
         return doc
 
     def lines(c, did, u, kind):
