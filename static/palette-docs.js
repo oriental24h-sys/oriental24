@@ -5,7 +5,9 @@ function paletteDocsBase(kind, id) { return '/api/palette-docs/' + kind + '/' + 
 function o24AutoTrackingCode() {
   try { return [...crypto.getRandomValues(new Uint8Array(8))].map(x => x.toString(16).padStart(2, '0')).join(''); } catch (e) { return String(Date.now()); }
 }
-const PALETTE_NATURES = { partner: 'RÉCEPTION', transfer: 'RÉCEPTION', pickup: 'RAMASSAGE', return: 'RETOUR' }
+/* La nature d'un transfert dépend du SENS du document (voir palette_docs.nature_of) :
+   Hub → Central = RAMASSAGE (vert), Central → Hub = RÉCEPTION (bleu). */
+const PALETTE_NATURES = { partner: 'RÉCEPTION', pickup: 'RAMASSAGE', return: 'RETOUR' }
 function paletteRowActions(kind, id, opener) {
   const base = paletteDocsBase(kind, id), k = String(kind).replace(/[^a-z]/g, '');
   if (!['partner', 'transfer', 'pickup', 'return'].includes(k)) return '';
