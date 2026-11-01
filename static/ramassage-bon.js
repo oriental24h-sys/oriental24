@@ -68,6 +68,11 @@ async function newRamassageBon() {
        ${textarea("note", "Note (facultatif)", "", false)}
        <div class="field full">
          <label>Colis à ramasser (état « Créé ») *</label>
+         <div class="rb-select-tools">
+           <button type="button" class="btn" id="rb-select-all" onclick="rbSelectAll(true)">✓ Sélectionner tout</button>
+           <button type="button" class="btn" id="rb-clear-all" onclick="rbSelectAll(false)">✕ Tout désélectionner</button>
+           <span class="sub" id="rb-selected-count">0 sélectionné</span>
+         </div>
          <div id="rb-eligible" style="display:grid;gap:6px;max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:10px">
            <span class="sub">Chargement…</span>
          </div>
@@ -96,6 +101,8 @@ async function newRamassageBon() {
       document.getElementById("rb-eligible-count").textContent = rows.length
         ? `${rows.length} colis éligible(s)`
         : "";
+      box.querySelectorAll("input[type=checkbox]").forEach((x) => (x.onchange = rbSelectionCount));
+      rbSelectionCount();
     } catch (e) {
       box.innerHTML = `<span class="sub">${esc(e.message)}</span>`;
     }
@@ -119,6 +126,22 @@ async function newRamassageBon() {
     await api("/ramassage-bons", "POST", payload);
     await saved("Brouillon de bon de ramassage créé");
   });
+}
+
+/* Sélection en masse des colis à ramasser : cocher un par un sur 30 CMD est ingérable. */
+function rbSelectAll(on) {
+  document
+    .querySelectorAll('#rb-eligible input[type=checkbox]')
+    .forEach((x) => (x.checked = !!on));
+  rbSelectionCount();
+}
+function rbSelectionCount() {
+  const boxes = document.querySelectorAll("#rb-eligible input[type=checkbox]");
+  const n = document.querySelectorAll("#rb-eligible input[type=checkbox]:checked").length;
+  const label = document.getElementById("rb-selected-count");
+  if (label) label.textContent = `${n} / ${boxes.length} sélectionné(s)`;
+  const all = document.getElementById("rb-select-all");
+  if (all) all.disabled = !boxes.length || n === boxes.length;
 }
 
 /* ------------------------------------------------------------- Détail d'un bon */

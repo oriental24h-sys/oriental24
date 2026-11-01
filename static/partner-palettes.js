@@ -140,7 +140,7 @@ function ppBulkReception(){
  ppFusionCount();
  const items=ppLiveRows.filter(r=>ppFusSel.has(Number(r.id))).map(r=>({id:r.id,reference:r.reference,remaining:Number(r.remaining||0)}));
  if(!items.length){toast('Cochez au moins une palette à réceptionner.',true);return}
- bulkReceptionStart('partner',items);
+ openBulkReceptionScan(items.map(x=>({kind:'partner',id:x.id})));
 }
 async function ppFusionStart(){
  if(S?.user?.role!=='admin'&&S?.user?.role!=='agent')return;

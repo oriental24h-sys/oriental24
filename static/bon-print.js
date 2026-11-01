@@ -15,7 +15,8 @@ function o24BonHtml(data){
  const status=o24BonClean(data.status),route=o24BonClean(data.route),reference=o24BonClean(data.reference)||'—';
  const signatures=(data.signatures||['Préparé par','Transporteur','Réception par le destinataire']).map(o24BonClean).filter(Boolean);
  const nature=o24BonClean(data.nature).toUpperCase(),natureNote=o24BonClean(data.nature_note);
- const natureColor={'RÉCEPTION':'#0c274c','RETOUR':'#b3261e','RAMASSAGE':'#f58024'}[nature]||'#0c274c';
+ // Trois natures, trois couleurs : bleu = réception, vert = envoi/ramassage, rouge = retour.
+ const natureColor={'RÉCEPTION':'#1b4ed8','ENVOI':'#1d7d3f','RAMASSAGE':'#1d7d3f','RETOUR':'#b3261e'}[nature]||'#1b4ed8';
  return `<style>
  @page{size:A4 portrait;margin:13mm}
  .o24-bon-print{font:10.5px/1.45 Arial,Helvetica,sans-serif;color:#172d49;width:100%;max-width:184mm}

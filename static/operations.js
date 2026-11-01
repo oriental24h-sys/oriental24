@@ -405,7 +405,7 @@ function renderLabelPreview() {
     n = labelPreview.records.length;
   modal(
     "Étiquettes de livraison",
-    `<div class="label-preview-layout"><div class="label-preview-paper">${labelMarkup(p)}</div><aside class="label-options"><span class="eyebrow orange">Prêtes à scanner</span><h3>Une étiquette.<br>Tout le nécessaire.</h3><p>QR code et code-barres Code 128 contiennent le code d’étiquette <b>société + référence</b> : il reste unique même si deux sociétés utilisent le même tracking. Le scan accepte aussi la référence seule (refus explicite si elle existe chez deux sociétés). La consultation de ses détails nécessite une connexion autorisée.</p><label for="label-format">Format d’impression</label><select id="label-format" onchange="labelPreview.format=this.value"><option value="A6" ${labelPreview.format === "A6" ? "selected" : ""}>A6 · 105 × 148 mm</option><option value="thermal" ${labelPreview.format === "thermal" ? "selected" : ""}>Thermique · 100 × 150 mm</option><option value="A4" ${labelPreview.format === "A4" ? "selected" : ""}>A4 · adresses ou notes longues</option></select><div class="label-pager"><button class="icon-btn" onclick="labelPreview.index=Math.max(0,labelPreview.index-1);renderLabelPreview()" ${labelPreview.index === 0 ? "disabled" : ""} aria-label="Étiquette précédente">${icon("back")}</button><span>${labelPreview.index + 1} / ${n}</span><button class="icon-btn" onclick="labelPreview.index=Math.min(${n - 1},labelPreview.index+1);renderLabelPreview()" ${labelPreview.index === n - 1 ? "disabled" : ""} aria-label="Étiquette suivante">${icon("arrow")}</button></div><button class="btn primary" id="print-labels-button" onclick="printPreparedLabels()">${icon("print")}Imprimer ${n > 1 ? n + " étiquettes" : "l’étiquette"}</button><div class="form-hint">Pour un PDF, choisissez « Enregistrer au format PDF ». Imprimez à 100 %, sans en-têtes ni pieds de page du navigateur.</div><small>Si l’impression est bloquée dans l’aperçu, ouvrez la plateforme dans un nouvel onglet.</small></aside></div>`,
+    `<div class="label-preview-layout"><div class="label-preview-paper">${labelMarkup(p)}</div><aside class="label-options"><span class="eyebrow orange">Prêtes à scanner</span><h3>Une étiquette.<br>Tout le nécessaire.</h3><p>QR code et code-barres Code 128 contiennent le code d’étiquette <b>société + référence</b> : il reste unique même si deux sociétés utilisent le même tracking. Le scan accepte aussi la référence seule (refus explicite si elle existe chez deux sociétés). La consultation de ses détails nécessite une connexion autorisée.</p><label for="label-format">Format d’impression</label><select id="label-format" onchange="labelPreview.format=this.value"><option value="A6" ${labelPreview.format === "A6" ? "selected" : ""}>A6 · 105 × 148 mm</option><option value="thermal" ${labelPreview.format === "thermal" ? "selected" : ""}>Thermique · 100 × 150 mm</option><option value="ticket100" ${labelPreview.format === "ticket100" ? "selected" : ""}>Ticket · 100 × 100 mm</option><option value="A4" ${labelPreview.format === "A4" ? "selected" : ""}>A4 · adresses ou notes longues</option></select><div class="label-pager"><button class="icon-btn" onclick="labelPreview.index=Math.max(0,labelPreview.index-1);renderLabelPreview()" ${labelPreview.index === 0 ? "disabled" : ""} aria-label="Étiquette précédente">${icon("back")}</button><span>${labelPreview.index + 1} / ${n}</span><button class="icon-btn" onclick="labelPreview.index=Math.min(${n - 1},labelPreview.index+1);renderLabelPreview()" ${labelPreview.index === n - 1 ? "disabled" : ""} aria-label="Étiquette suivante">${icon("arrow")}</button></div><button class="btn primary" id="print-labels-button" onclick="printPreparedLabels()">${icon("print")}Imprimer ${n > 1 ? n + " étiquettes" : "l’étiquette"}</button><div class="form-hint">Pour un PDF, choisissez « Enregistrer au format PDF ». Imprimez à 100 %, sans en-têtes ni pieds de page du navigateur.</div><small>Si l’impression est bloquée dans l’aperçu, ouvrez la plateforme dans un nouvel onglet.</small></aside></div>`,
     true,
   );
 }
@@ -436,14 +436,18 @@ async function printPreparedLabels() {
     const dim =
       labelPreview.format === "thermal"
         ? "100mm 150mm"
-        : labelPreview.format === "A4"
-          ? "210mm 297mm"
-          : "105mm 148mm";
+        : labelPreview.format === "ticket100"
+          ? "100mm 100mm"
+          : labelPreview.format === "A4"
+            ? "210mm 297mm"
+            : "105mm 148mm";
+    const margin = labelPreview.format === "ticket100" ? "2mm" : "4mm";
+    const ticketClass = labelPreview.format === "ticket100" ? " label-ticket100" : "";
     await doPrint(
-      `<style>@page{size:${dim};margin:4mm}#print-root .label-sheet{border:0;padding:0;margin:0;break-after:page;page-break-after:always}#print-root .label-sheet:last-child{break-after:auto;page-break-after:auto}#print-root{padding:0}${labelPreview.format === "A4" ? "#print-root .shipping-label{max-width:180mm;margin:auto}" : ""}</style>` +
+      `<style>@page{size:${dim};margin:${margin}}#print-root .label-sheet{border:0;padding:0;margin:0;break-after:page;page-break-after:always}#print-root .label-sheet:last-child{break-after:auto;page-break-after:auto}#print-root{padding:0}${labelPreview.format === "A4" ? "#print-root .shipping-label{max-width:180mm;margin:auto}" : ""}</style>` +
         labelPreview.records
           .map(
-            (p) => `<section class="label-sheet">${labelMarkup(p)}</section>`,
+            (p) => `<section class="label-sheet${ticketClass}">${labelMarkup(p)}</section>`,
           )
           .join(""),
     );

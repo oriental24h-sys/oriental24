@@ -1196,3 +1196,84 @@
   #print-root .shipping-label .parcel-policy-tag{font-size:6pt;padding:.5mm 1.2mm}
 }
 .import-guide a.is-disabled{opacity:.55;cursor:not-allowed}
+
+/* Ticket 100 × 100 mm : mise en page compacte pour tenir sur un carré. */
+.shipping-label.label-ticket100,
+.label-sheet.label-ticket100 .shipping-label {
+  width: 100mm;
+  min-height: 96mm;
+  padding: 6mm;
+  display: flex;
+  flex-direction: column;
+  gap: 2mm;
+  font-size: 9px;
+}
+.label-sheet.label-ticket100 .shipping-label > header > span {
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+.label-sheet.label-ticket100 .shipping-label > header > img {
+  height: 26px;
+  width: auto;
+}
+.label-sheet.label-ticket100 .label-destination {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 4mm;
+}
+.label-sheet.label-ticket100 .label-destination h2 {
+  font-size: 22px;
+  line-height: 1.05;
+  margin: 1mm 0;
+}
+.label-sheet.label-ticket100 .label-destination img {
+  width: 26mm;
+  height: 26mm;
+  flex-shrink: 0;
+}
+.label-sheet.label-ticket100 .shipping-label > footer {
+  margin-top: auto;
+  font-size: 8px;
+}
+.label-sheet.label-ticket100 .label-barcode,
+.label-sheet.label-ticket100 .label-barcode svg,
+.label-sheet.label-ticket100 .label-barcode img {
+  max-height: 18mm;
+  width: 100%;
+}
+@media print {
+  .label-sheet.label-ticket100 {
+    break-after: page;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+/* Demande de ramassage : sélection en masse des colis éligibles. */
+.rb-select-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+.rb-select-tools .btn {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+.rb-select-tools .btn:disabled {
+  opacity: .45;
+}
+.rb-select-tools .sub {
+  font-size: 12px;
+  color: #78879e;
+}
+@media (max-width: 720px) {
+  .rb-select-tools .btn {
+    flex: 1 1 46%;
+  }
+  .rb-select-tools .sub {
+    flex: 1 1 100%;
+  }
+}
