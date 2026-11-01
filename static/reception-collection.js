@@ -148,16 +148,24 @@ async function openBulkReceptionScan(items){
   return;
  }
  const docOf=did=>docs.find(d=>d.id===did);
+ let cam=null;
+ modalCleanup=()=>{try{cam&&cam.stop()}catch(e){}};
  ctx.node.querySelector('.modal-body').innerHTML=`
   <p class="form-hint">Scannez uniquement les colis <b>physiquement présents</b>. À la validation, seuls les colis scannés sont réceptionnés ; les autres restent « restant(s) » sur leur palette.</p>
-  <div class="pp-rxbox">
+  <div class="pp-rxbox"><label for="bulk-rx-input">Scanner les colis (lecteur USB, clavier ou caméra)</label>
     <form id="bulk-rx-form" class="pp-rx-entry">
-      <input id="bulk-rx-input" autocomplete="off" maxlength="80" spellcheck="false" placeholder="Scanner ou saisir un tracking puis Entrée" aria-label="Tracking du colis reçu">
-      <button type="submit" class="btn primary">${icon('scan')}Ajouter</button>
+      <input id="bulk-rx-input" autocomplete="off" maxlength="80" spellcheck="false" placeholder="Tracking ORIENTAL24 puis Entrée" aria-label="Tracking du colis reçu">
+      <button type="submit" class="btn primary">${icon('scan')}Ajouter ce colis</button>
+      <span id="pp-rx-cam-slot"></span>
+      <button type="button" class="btn sm" data-o24-snd onclick="window.o24Sound.set(!window.o24Sound.on())">${ppSound?'🔊 Son activé':'🔇 Son coupé'}</button>
+      <button type="button" class="btn sm" id="bulk-rx-reset">↺ Vider les scans</button>
     </form>
+    <div class="pp-rx-cam" id="bulk-rx-camera" hidden><video playsinline muted></video></div>
+    <span id="bulk-rx-cam-state" class="sub" aria-live="polite"></span>
     <small class="sub" id="bulk-rx-count">0 / ${pending.length} colis attendus</small>
   </div>
-  <p class="pp-rx-msg" id="bulk-rx-msg"></p>
+  <p class="pp-rx-msg" id="bulk-rx-msg" role="status" aria-live="polite"></p>
+  <p class="form-hint">${ppReceptionGuide()}</p>
   <div class="pp-rx-list" id="bulk-rx-list"></div>
   <div class="pp-validate"><b id="bulk-rx-ready"></b><button type="button" class="btn primary" id="bulk-rx-go" disabled>Réceptionner les colis scannés</button></div>`;
  const input=ctx.node.querySelector('#bulk-rx-input'),form=ctx.node.querySelector('#bulk-rx-form'),go=ctx.node.querySelector('#bulk-rx-go');
@@ -187,6 +195,21 @@ async function openBulkReceptionScan(items){
  form.onsubmit=e=>{e.preventDefault();if(!current()||busy||frozen)return;const v=input.value;input.value='';add(v);input.focus({preventScroll:true})};
  if(innerWidth>760)input.focus({preventScroll:true});
  paint();
+ /* Même scan que les autres écrans : caméra du téléphone, son, « Vider les scans ». */
+ const resetBtn=ctx.node.querySelector('#bulk-rx-reset');
+ if(resetBtn)resetBtn.onclick=()=>{if(!current()||busy||frozen)return;scanned.clear();paint();message('','Lot vidé — scannez à nouveau les colis reçus.');try{input.focus({preventScroll:true})}catch(e){}};
+ const camSlot=ctx.node.querySelector('#pp-rx-cam-slot');
+ if(camSlot){
+  try{
+   camSlot.innerHTML=await ppRxCamWidget();
+  }catch(e){camSlot.innerHTML=`<span class="sub pp-rx-camera-note">${esc(e.message)}</span>`}
+  if(!current())return;
+  const cbtn=camSlot.querySelector('#pp-rx-cam-btn');
+  if(cbtn){
+   cam=ppRxCam(ctx.node.querySelector('#bulk-rx-camera'),cbtn,ctx.node.querySelector('#bulk-rx-cam-state'),code=>add(code),null);
+   cbtn.onclick=()=>{ppUnlockSound();if(cam.active())cam.stop();else cam.start()};
+  }
+ }
  go.onclick=async()=>{
   if(!current()||!scanned.size||busy||frozen)return;
   busy=true;frozen=true;paint();
@@ -208,6 +231,7 @@ async function openBulkReceptionScan(items){
     }catch(e){results.push({ok:false,ref:doc.reference,error:e.message})}
    }
    if(!current())return;
+   try{cam&&cam.stop()}catch(e){}
    const good=results.filter(r=>r.ok),bad=results.filter(r=>!r.ok);
    const total=good.reduce((n,r)=>n+r.received,0);
    ctx.node.querySelector('.modal-body').innerHTML=`

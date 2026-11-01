@@ -41,20 +41,65 @@ function ppRxFlash(kind){const box=document.getElementById('pp-rx-box');if(!box)
 async function ppRxFind(code){const d=await api('/partner-palettes?q='+encodeURIComponent(code)+'&size=20');const rows=(d&&d.rows)||[];const c=String(code).toLowerCase();
  return rows.find(x=>String(x.reference||'').toLowerCase()===c)||rows.find(x=>String(x.partner_reference||'').toLowerCase()===c)||rows[0]||null}
 /* --- caméra : formats dispo + contrôleur réutilisable --- */
+/* Deux moteurs de décodage, un seul bouton :
+   1. BarcodeDetector natif (Android/Chrome) — rapide, aucune ressource à charger ;
+   2. sinon (iPhone/Safari, Firefox…) le décodeur ZXing livré avec l'application
+      (/static/vendor/zxing.min.js), chargé seulement au premier appui.
+   Aucune ressource externe : la caméra du téléphone fonctionne partout, en local. */
 function ppRxCamFormats(){try{if(!window.BarcodeDetector)return[];return['code_128','code_39','code_93','qr_code','ean_13','ean_8','itf','codabar','upc_a','upc_e','data_matrix']}catch(e){return[]}}
-async function ppRxCamSupported(){if(!window.BarcodeDetector||!navigator.mediaDevices?.getUserMedia)return false;try{const f=await BarcodeDetector.getSupportedFormats();return f.some(x=>ppRxCamFormats().includes(x))}catch(e){return false}}
+function ppCamHasCamera(){try{return !!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)}catch(e){return false}}
+let ppZXingPromise=null;
+function ppCamLoadZXing(){
+ if(window.ZXing)return Promise.resolve(window.ZXing);
+ if(ppZXingPromise)return ppZXingPromise;
+ ppZXingPromise=new Promise((resolve,reject)=>{
+  const s=document.createElement('script');
+  s.src='/static/vendor/zxing.min.js';s.async=true;
+  s.onload=()=>{window.ZXing?resolve(window.ZXing):reject(Error('Décodeur de codes-barres indisponible.'))};
+  s.onerror=()=>reject(Error('Décodeur de codes-barres indisponible : rechargez la page puis réessayez.'));
+  document.head.appendChild(s);
+ }).catch(e=>{ppZXingPromise=null;throw e});
+ return ppZXingPromise;
+}
+async function ppRxCamSupported(){return ppCamHasCamera()}
+async function ppRxCamWidget(){
+ const ok=await ppRxCamSupported();
+ return `<button type="button" class="btn sm" id="pp-rx-cam-btn">📷 Caméra du téléphone</button>${ok?'':`<span class="sub pp-rx-camera-note">Caméra indisponible ici (page non sécurisée ou appareil sans caméra) : lecteur USB/Bluetooth ou saisie manuelle.</span>`}`;
+}
 function ppRxCam(box,btn,state,onCode,onStatus){
  let stream=null,det=null,raf=0,track=null,last='',lastAt=0,torchBtn=null,starting=false,generation=0;
-  const setState=t=>{if(state)state.textContent=t};
-  const hideVideo=()=>{try{const v=box&&box.querySelector('video');if(v){if(typeof v.pause==='function')v.pause();v.srcObject=null}}catch(e){}if(box)box.hidden=true};
-  const loop=async()=>{
-  if(!stream)return;
+ let zx=null,zxReader=null,zxHints=null,zxCanvas=null,zxCtx=null,zxNext=0;
+ const setState=t=>{if(state)state.textContent=t};
+ const video=()=>box?box.querySelector('video'):null;
+ const hideVideo=()=>{try{const v=video();if(v){if(typeof v.pause==='function')v.pause();v.srcObject=null}}catch(e){}if(box)box.hidden=true};
+ /* Une image de la vidéo → codes-barres, via ZXing (aucune API native requise). */
+ const decodeZX=()=>{
+  const v=video();
+  if(!v||!zxCanvas||!zxReader)return '';
   try{
-   const codes=await det.detect(box.querySelector('video'));
-   const v=(codes[0]&&codes[0].rawValue||'').trim();
-   const now=Date.now();
-   if(v&&(v!==last||now-lastAt>2600)){last=v;lastAt=now;onCode(v)}
+   const vw=v.videoWidth||0,vh=v.videoHeight||0;
+   if(!vw||!vh)return '';
+   const w=Math.min(720,vw),h=Math.max(1,Math.round(vh*w/vw));
+   if(zxCanvas.width!==w||zxCanvas.height!==h){zxCanvas.width=w;zxCanvas.height=h}
+   zxCtx.drawImage(v,0,0,w,h);
+   const bitmap=new zx.BinaryBitmap(new zx.HybridBinarizer(new zx.HTMLCanvasElementLuminanceSource(zxCanvas)));
+   const result=zxReader.decode(bitmap,zxHints);
+   return String(result.getText()||'').trim();
+  }catch(e){return ''}
+ };
+ const loop=async()=>{
+  if(!stream)return;
+  let value='';
+  try{
+   if(det){
+    const codes=await det.detect(video());
+    value=(codes[0]&&codes[0].rawValue||'').trim();
+   }else if(zx){
+    const now=Date.now();
+    if(now>=zxNext){zxNext=now+200;value=decodeZX()}
+   }
   }catch(e){}
+  if(value){const now=Date.now();if(value!==last||now-lastAt>2600){last=value;lastAt=now;onCode(value)}}
   raf=requestAnimationFrame(loop);
  };
  return {
@@ -64,16 +109,37 @@ function ppRxCam(box,btn,state,onCode,onStatus){
    if(starting)return false;
    starting=true;const token=++generation;let pending=null;
    try{
-    if(!window.BarcodeDetector||!navigator.mediaDevices?.getUserMedia)throw Error('Caméra non prise en charge sur cet appareil.');
-    const supported=await BarcodeDetector.getSupportedFormats();
-    if(token!==generation)return false;
-    const fmts=supported.filter(f=>ppRxCamFormats().includes(f));
-    if(!fmts.length)throw Error('Formats de codes-barres non pris en charge.');
-    det=new BarcodeDetector({formats:fmts});
+    if(!ppCamHasCamera())throw Error('Caméra non prise en charge sur cet appareil.');
+    // 1) moteur natif si le navigateur en a un
+    if(window.BarcodeDetector){
+     try{
+      const supported=await BarcodeDetector.getSupportedFormats();
+      if(token!==generation)return false;
+      const fmts=supported.filter(f=>ppRxCamFormats().includes(f));
+      if(fmts.length)det=new BarcodeDetector({formats:fmts});
+     }catch(e){det=null}
+    }
+    // 2) sinon décodeur embarqué (iPhone/Safari, Firefox…)
+    if(!det){
+     setState('Préparation de la caméra…');
+     zx=await ppCamLoadZXing();
+     if(token!==generation)return false;
+     zxReader=new zx.MultiFormatReader();
+     zxHints=new Map();
+     const fm=zx.BarcodeFormat||{};
+     const wanted=[fm.CODE_128,fm.CODE_39,fm.CODE_93,fm.QR_CODE,fm.EAN_13,fm.ITF,fm.CODABAR].filter(v=>v!==undefined&&v!==null);
+     if(wanted.length)zxHints.set(zx.DecodeHintType.POSSIBLE_FORMATS,wanted);
+     zxHints.set(zx.DecodeHintType.TRY_HARDER,true);
+     zxCanvas=document.createElement('canvas');
+     zxCtx=zxCanvas.getContext('2d',{willReadFrequently:true});
+    }
     pending=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}},audio:false});
     if(token!==generation){pending.getTracks().forEach(t=>t.stop());return false}
     stream=pending;
-    const v=box.querySelector('video');v.srcObject=stream;box.hidden=false;await v.play();
+    const v=video();
+    if(!v)throw Error('Zone vidéo introuvable.');
+    try{v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','');v.muted=true;v.autoplay=true}catch(e){}
+    v.srcObject=stream;box.hidden=false;await v.play();
     if(token!==generation){pending.getTracks().forEach(t=>t.stop());stream=null;hideVideo();return false}
     track=stream.getVideoTracks()[0];setState('Caméra active — présentez le code');
     if(btn)btn.textContent='⏹ Arrêter la caméra';
@@ -82,20 +148,18 @@ function ppRxCam(box,btn,state,onCode,onStatus){
    }catch(e){
     pending?.getTracks().forEach(t=>t.stop());if(stream===pending)stream=null;
     det=null;hideVideo();
-    if(token===generation)setState(e.message||'Caméra refusée ou indisponible — utilisez la saisie.');return false
+    if(token===generation)setState(e.message||'Caméra refusée ou indisponible — utilisez la saisie.');
+    return false
    }finally{starting=false}
   },
   stop(){
    generation++;
    try{cancelAnimationFrame(raf)}catch(e){}
    if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
-   det=null;hideVideo();if(btn)btn.textContent='📷 Caméra du téléphone';setState('Caméra arrêtée')
+   det=null;zxReader=null;zxHints=null;zxNext=0;hideVideo();
+   if(btn)btn.textContent='📷 Caméra du téléphone';setState('Caméra arrêtée')
   }
  };
-}
-async function ppRxCamWidget(){
- const ok=await ppRxCamSupported();
- return `<button type="button" class="btn sm" id="pp-rx-cam-btn">📷 Caméra du téléphone</button>${ok?'':`<span class="sub pp-rx-camera-note">Caméra indisponible sur cet appareil : lecteur USB/Bluetooth ou saisie manuelle.</span>`}`;
 }
 /* --- étape 1 : code palette --- */
 function ppReceiveStart(){
