@@ -50,6 +50,7 @@ const paths = {
   edit: "M16 3l5 5-12 12-6 1 1-6z M14 5l5 5",
   close: "M6 6l12 12 M6 18L18 6",
   refresh: "M20 7a9 9 0 1 0 1 10 M20 2v6h-6",
+  trash: "M4 7h16 M9 7V4h6v3 M6 7l1 14h10l1-14 M10 11v6 M14 11v6",
   shield: "M12 2l9 4v6c0 5-9 10-9 10S3 17 3 12V6z M8 12l3 3 5-6",
   layers: "M12 2l10 5-10 5L2 7z M2 12l10 5 10-5 M2 17l10 5 10-5",
   up: "M5 16l5-5 4 3 7-9 M15 5h6v6",
@@ -543,6 +544,7 @@ const menu = [
     "ESPACE PERSONNEL",
     [
       ["settings", "settings", "Paramètres", ["admin"]],
+      ["data-reset", "trash", "Remise à zéro", ["admin"]],
     ],
   ],
 ];
@@ -566,6 +568,7 @@ const titles = {
   requests: "Demandes & réclamations",
   tickets: "Demandes & réclamations",
   settings: "Paramètres",
+  "data-reset": "Remise à zéro des données",
   profile: "Mon profil",
   analytics: "Statistiques & performance",
   "driver-finance": "Caisse & commissions livreurs",
@@ -715,6 +718,9 @@ async function renderView(background = false) {
         break;
       case "settings":
         html = settingsView();
+        break;
+      case "data-reset":
+        html = await dataResetView();
         break;
       case "profile":
         html = profileView();
