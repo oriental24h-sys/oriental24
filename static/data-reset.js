@@ -16,6 +16,14 @@ function drPhraseKey(value) {
 }
 const DR_PHRASE = 'REMETTRE A ZERO';
 
+/* Vide la zone de confirmation (utilisée aussi après une erreur du serveur). */
+function boxSafeClear() {
+  const box = document.getElementById('dr-phrase');
+  if (!box) return;
+  box.textContent = '';
+  box.focus({ preventScroll: true });
+}
+
 function drRows(block) {
   if (!block) return '';
   return Object.entries(block)
@@ -120,13 +128,17 @@ async function dataResetOpen(wipeAccounts) {
     ).replace('<button type="submit" class="btn primary">', '<button type="submit" class="btn primary" style="background:#b3261e;border-color:#b3261e">'),
   );
   // Style de la zone : même apparence qu'un champ, mais sans autofill possible.
+  let scrubLater = () => {};   // rempli plus bas, utilisé par l'écouteur focus
   const box = document.getElementById('dr-phrase');
   if (box) {
     box.style.cssText = 'width:100%;min-height:42px;padding:11px 14px;border:1px solid var(--line,#e9edf3);' +
       'border-radius:8px;background:#fff;font:inherit;letter-spacing:.02em;line-height:1.4;white-space:pre-wrap;' +
       'overflow-wrap:anywhere;outline:none;cursor:text';
     box.textContent = '';
-    box.addEventListener('focus', () => { box.style.borderColor = 'var(--orange,#ff7618)'; });
+    box.addEventListener('focus', () => {
+      box.style.borderColor = 'var(--orange,#ff7618)';
+      if (!box.textContent.trim()) scrubLater();
+    });
     box.addEventListener('blur', () => { box.style.borderColor = 'var(--line,#e9edf3)'; });
     // Entrée valide directement (pas de retour à la ligne dans une phrase de contrôle).
     box.addEventListener('keydown', (e) => {
@@ -146,19 +158,46 @@ async function dataResetOpen(wipeAccounts) {
   const phraseInput = document.getElementById('dr-phrase');
   const pwInput = document.getElementById('f-password');
   const submit = document.querySelector('#modal-form [type=submit]');
+  /* Le bouton n'est JAMAIS désactivé : un bouton grisé qui « ne fait rien » est
+     incompréhensible. Il reste cliquable et c'est le message d'erreur qui guide. */
   const sync = () => {
-    const ok = drPhraseKey(phraseInput.textContent) === DR_PHRASE;
-    const ready = ok && pwInput.value.length > 0;
-    if (submit) submit.disabled = !ready;
-    if (submit) submit.style.opacity = ready ? '' : '0.55';
+    const current = drPhraseKey(phraseInput.textContent);
+    const ok = current === DR_PHRASE;
+    if (submit) {
+      submit.disabled = false;
+      submit.removeAttribute('aria-disabled');
+      submit.style.opacity = ok ? '' : '0.82';
+    }
     const help = document.getElementById('dr-phrase-help');
     if (help) {
       help.className = ok ? 'form-hint green' : 'form-hint';
       help.textContent = ok
-        ? '✓ Phrase reconnue. Saisissez votre mot de passe pour activer la confirmation.'
-        : 'La casse, les accents et les espaces multiples sont ignorés : « remettre a zero » fonctionne aussi.';
+        ? '✓ Phrase reconnue — cliquez sur « Confirmer la remise à zéro ».'
+        : 'Tapez les trois mots (la casse, les accents et les espaces multiples sont ignorés).';
     }
   };
+  // Un remplissage automatique a pu glisser un e-mail ou un téléphone dans la
+  // zone malgré `contenteditable` : on la vide immédiatement, sans rien demander.
+  const scrub = () => {
+    const value = String(box.textContent || '');
+    if (value.includes('@') || /^[+\d][\d\s().-]{4,}$/.test(value.trim())) {
+      box.textContent = '';
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      const help = document.getElementById('dr-phrase-help');
+      if (help) {
+        help.className = 'form-hint';
+        help.textContent = 'Champ vidé automatiquement : un e-mail ou un numéro y avait été inséré. ' +
+          'Tapez « ' + DR_PHRASE + ' ».';
+      }
+      return true;
+    }
+    return false;
+  };
+  scrubLater = scrub;
+  if (box && submit) {
+    // Plusieurs passes : certains navigateurs remplissent après le rendu.
+    [0, 60, 220, 600, 1200].forEach((delay) => setTimeout(() => { if (box.isConnected) scrub(); }, delay));
+  }
   if (phraseInput && submit) {
     phraseInput.addEventListener('input', sync);
     pwInput.addEventListener('input', sync);
@@ -168,10 +207,12 @@ async function dataResetOpen(wipeAccounts) {
   bindForm(async (payload) => {
     const typed = String(document.getElementById('dr-phrase')?.textContent || '').trim();
     if (typed.includes('@') || /^[+\d][\d\s().-]{5,}$/.test(typed)) {
-      // Symptôme classique : un remplissage automatique a mis l'e-mail ou le
-      // téléphone du compte dans la zone de confirmation. Refus avant réseau.
-      throw new Error('La zone de confirmation contient une adresse e-mail ou un numéro de téléphone : ' +
-                      'effacez-la et tapez « ' + DR_PHRASE + ' ».');
+      boxSafeClear();
+      throw new Error('La zone contenait une adresse e-mail ou un numéro de téléphone : elle a été vidée. ' +
+                      'Tapez « ' + DR_PHRASE + ' » puis confirmez.');
+    }
+    if (drPhraseKey(typed) !== DR_PHRASE) {
+      throw new Error('La phrase ne correspond pas. Tapez exactement « ' + DR_PHRASE + ' ».');
     }
     const body = {
       confirmation: typed,
