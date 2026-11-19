@@ -94,36 +94,66 @@ async function dataResetOpen(wipeAccounts) {
   const intro = wipeAccounts
     ? 'Tous les comptes sauf l’administrateur seront supprimés, ainsi que leurs barèmes et profils. Hubs, villes et tarifs restent.'
     : 'Les comptes (clients, livreurs, responsables de Hub, supports) sont conservés.';
-  // Champs écrits à la main : le remplissage automatique du navigateur ne doit
-  // jamais injecter l'e-mail du compte à la place de la phrase de confirmation.
-  const field = (name, label, type, extra) =>
-    `<div class="field"><label for="f-${name}">${label} *</label><input id="f-${name}" name="${name}" type="${type}" value="" required ${extra}></div>`;
+  /* Zone de confirmation en `contenteditable` : un navigateur ne peut pas la
+     pré-remplir (ni e-mail, ni téléphone, ni adresse enregistrée). C'est le seul
+     moyen fiable — `autocomplete="off"` est ignoré par Chrome/Safari dès qu'un
+     champ mot de passe voisin existe. */
+  const phraseBox = `<div class="field full">
+    <label id="dr-phrase-label" for="dr-phrase">Tapez exactement ${DR_PHRASE} *</label>
+    <div id="dr-phrase" class="dr-phrase-input" contenteditable="true" role="textbox" tabindex="0"
+         aria-labelledby="dr-phrase-label" aria-multiline="false" autocapitalize="characters"
+         autocorrect="off" spellcheck="false" data-gramm="false" data-lpignore="true"
+         data-1p-ignore data-form-type="other" translate="no"></div>
+    <p class="form-hint" id="dr-phrase-help" aria-live="polite">La casse, les accents et les espaces multiples sont ignorés : « remettre a zero » fonctionne aussi.</p>
+  </div>`;
+  const pwField = `<div class="field full"><label for="f-password">Votre mot de passe administrateur *</label>
+    <input id="f-password" name="password" type="password" value="" required autocomplete="current-password"
+           data-lpignore="true" data-1p-ignore data-form-type="other"></div>`;
   modal(
     wipeAccounts ? 'Tout vider (comptes inclus)' : 'Vider les données métier',
     form(
       `<div class="full form-hint" style="border-left:4px solid #b3261e;padding-left:12px"><b>Action définitive, sans sauvegarde.</b> ${intro}</div>
-       ${field('phrase', 'Tapez exactement REMETTRE A ZERO', 'text',
-        'autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" ' +
-        'inputmode="text" placeholder="REMETTRE A ZERO" aria-describedby="dr-phrase-help" data-lpignore="true" data-1p-ignore')}
-       <div class="full form-hint" id="dr-phrase-help">La casse et les espaces multiples sont ignorés : « remettre a zero » fonctionne aussi.</div>
-       ${field('password', 'Votre mot de passe administrateur', 'password', 'autocomplete="current-password" data-lpignore="true" data-1p-ignore')}
+       ${phraseBox}
+       ${pwField}
        ${d.demo ? `<label class="full flex" style="gap:8px;align-items:center"><input type="checkbox" name="reseed" style="width:auto"> Réinjecter le jeu de démonstration juste après</label>` : ''}`,
       'Confirmer la remise à zéro',
     ).replace('<button type="submit" class="btn primary">', '<button type="submit" class="btn primary" style="background:#b3261e;border-color:#b3261e">'),
   );
-  // Validation en direct : le bouton reste inactif tant que la phrase ne correspond
-  // pas exactement, ce qui évite un aller-retour serveur inutile.
-  const phraseInput = document.getElementById('f-phrase');
+  // Style de la zone : même apparence qu'un champ, mais sans autofill possible.
+  const box = document.getElementById('dr-phrase');
+  if (box) {
+    box.style.cssText = 'width:100%;min-height:42px;padding:11px 14px;border:1px solid var(--line,#e9edf3);' +
+      'border-radius:8px;background:#fff;font:inherit;letter-spacing:.02em;line-height:1.4;white-space:pre-wrap;' +
+      'overflow-wrap:anywhere;outline:none;cursor:text';
+    box.textContent = '';
+    box.addEventListener('focus', () => { box.style.borderColor = 'var(--orange,#ff7618)'; });
+    box.addEventListener('blur', () => { box.style.borderColor = 'var(--line,#e9edf3)'; });
+    // Entrée valide directement (pas de retour à la ligne dans une phrase de contrôle).
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const submit = document.querySelector('#modal-form [type=submit]');
+        if (submit && !submit.disabled) document.getElementById('modal-form').requestSubmit();
+      }
+    });
+    // Le collage peut amener du HTML (gras, liens) : on force le texte brut.
+    box.addEventListener('paste', (e) => {
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      document.execCommand('insertText', false, String(text).replace(/[\r\n]+/g, ' '));
+    });
+  }
+  const phraseInput = document.getElementById('dr-phrase');
   const pwInput = document.getElementById('f-password');
   const submit = document.querySelector('#modal-form [type=submit]');
   const sync = () => {
-    const ok = drPhraseKey(phraseInput.value) === DR_PHRASE;
+    const ok = drPhraseKey(phraseInput.textContent) === DR_PHRASE;
     const ready = ok && pwInput.value.length > 0;
     if (submit) submit.disabled = !ready;
     if (submit) submit.style.opacity = ready ? '' : '0.55';
     const help = document.getElementById('dr-phrase-help');
     if (help) {
-      help.className = ok ? 'full form-hint green' : 'full form-hint';
+      help.className = ok ? 'form-hint green' : 'form-hint';
       help.textContent = ok
         ? '✓ Phrase reconnue. Saisissez votre mot de passe pour activer la confirmation.'
         : 'La casse, les accents et les espaces multiples sont ignorés : « remettre a zero » fonctionne aussi.';
@@ -133,17 +163,18 @@ async function dataResetOpen(wipeAccounts) {
     phraseInput.addEventListener('input', sync);
     pwInput.addEventListener('input', sync);
     sync();
+    phraseInput.focus({ preventScroll: true });
   }
   bindForm(async (payload) => {
-    const typed = String(payload.phrase || '').trim();
-    if (typed.includes('@')) {
-      // Symptôme classique : le navigateur a rempli l'e-mail du compte dans le
-      // champ de confirmation. On refuse avant tout appel réseau.
-      throw new Error('Le champ de confirmation contient une adresse e-mail : tapez « ' + DR_PHRASE +
-                      ' » (le remplissage automatique du navigateur doit être vidé).');
+    const typed = String(document.getElementById('dr-phrase')?.textContent || '').trim();
+    if (typed.includes('@') || /^[+\d][\d\s().-]{5,}$/.test(typed)) {
+      // Symptôme classique : un remplissage automatique a mis l'e-mail ou le
+      // téléphone du compte dans la zone de confirmation. Refus avant réseau.
+      throw new Error('La zone de confirmation contient une adresse e-mail ou un numéro de téléphone : ' +
+                      'effacez-la et tapez « ' + DR_PHRASE + ' ».');
     }
     const body = {
-      confirmation: payload.phrase,
+      confirmation: typed,
       password: payload.password,
       keep_accounts: !wipeAccounts,
       reseed_demo: d.demo ? !!payload.reseed : false,
