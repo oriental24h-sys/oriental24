@@ -12,7 +12,9 @@ def sidebar_counts(c, u, scope):
     # Never fall back to a global scope for a manager without an active Hub.
     if role == 'agent' and not c.execute('SELECT 1 FROM ops_hubs WHERE id=? AND active=1', (u.get('agent_hub_id'),)).fetchone():
         return counts
-    cond, args = scope(u, c=c)
+    # Même périmètre que la liste des commandes : uniquement les CMD comptées sur ce Hub,
+    # y compris celles réellement en route vers lui. Jamais celles d'un autre Hub.
+    cond, args = scope(u, c=c, include_sent=True)
     pending = "p.status NOT IN ('Livré','Retourné','Refusé','Annulé')"
     count('support-orders' if role == 'support' else 'parcels', 'parcels p', f'({cond}) AND {pending}', args)
     if role == 'support':

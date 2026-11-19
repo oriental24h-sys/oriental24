@@ -1,0 +1,115 @@
+"""Remise à zéro des données, pilotée par l'Administrateur.
+
+Ce module n'expose que trois routes, toutes réservées au rôle `admin` :
+
+* `GET  /api/admin/data-reset`  → aperçu (compteurs avant, tables qui seront
+  vidées, ce qui est conservé). Aucune écriture.
+* `POST /api/admin/data-reset`  → exécution réelle. Trois verrous :
+  1. mot de passe du compte administrateur ;
+  2. phrase exacte « REMETTRE A ZERO » ;
+  3. jeton CSRF habituel.
+* `POST /api/admin/data-reset/seed-demo` → réinjecte le jeu de démonstration
+  (mode démo uniquement) pour retrouver une préversion utilisable.
+
+Aucune sauvegarde n'est créée : la décision est explicite côté produit. En
+contrepartie, l'opération est :
+* atomique (une seule transaction : tout ou rien) ;
+* refusée en production si des données métier existent et que le déploiement
+  n'a pas armé `ORIENTAL24_ALLOW_DATA_RESET=1` (double sécurité Railway) ;
+* traçable (empreinte SHA-256 de l'état avant/après dans le journal d'audit) ;
+* confirmée par un recomptage : si une seule ligne métier subsiste, l'appel
+  échoue avec la liste des tables concernées.
+"""
+import os
+from functools import wraps
+
+from flask import jsonify, request
+from werkzeug.security import check_password_hash
+
+import data_reset
+
+PHRASE = 'REMETTRE A ZERO'
+
+
+def register_data_reset(app, services):
+    conn = services['conn']
+    auth = services['auth']
+    user = services['user']
+    Error = services['APIError']
+    now = services['now']
+
+    def admin_only(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            actor = user()
+            if actor.get('role') != 'admin':
+                raise Error('Remise à zéro réservée à l’Administrateur.', 403)
+            return fn(actor, *args, **kwargs)
+        return wrapper
+
+    def armed_by_deployment():
+        return os.environ.get('ORIENTAL24_ALLOW_DATA_RESET') == '1'
+
+    def preview_payload(c):
+        return {'before': data_reset.counters(c),
+                'tables': len(data_reset.purge_targets(c)),
+                'kept': sorted(data_reset.KEEP_TABLES),
+                'demo': bool(app.config['DEMO_MODE']),
+                'armed': armed_by_deployment(),
+                'phrase': PHRASE}
+
+    @app.get('/api/admin/data-reset')
+    @auth('admin')
+    @admin_only
+    def data_reset_preview(actor):
+        with conn() as c:
+            return jsonify(preview_payload(c))
+
+    @app.post('/api/admin/data-reset')
+    @auth('admin')
+    @admin_only
+    def data_reset_run(actor):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise Error('Objet JSON requis.')
+        if str(payload.get('confirmation', '')).strip().upper() != PHRASE:
+            raise Error('Tapez exactement « ' + PHRASE + ' » pour confirmer la remise à zéro.')
+        password = str(payload.get('password', ''))[:129]
+        if not password:
+            raise Error('Votre mot de passe administrateur est obligatoire.')
+        keep_accounts = payload.get('keep_accounts', True)
+        if type(keep_accounts) is not bool:
+            raise Error('Option keep_accounts invalide.')
+        reseed = bool(payload.get('reseed_demo', False))
+        if reseed and not app.config['DEMO_MODE']:
+            raise Error('Le jeu de démonstration ne s’injecte qu’en mode démonstration.', 409)
+        with conn() as c:
+            stored = c.execute('SELECT password FROM users WHERE id=?', (actor['id'],)).fetchone()
+            if not stored or not check_password_hash(stored[0], password):
+                raise Error('Mot de passe administrateur incorrect.', 400)
+            rows_before = sum(v['rows'] for v in data_reset.counters(c).values())
+            if (app.config['PRODUCTION_MODE'] and rows_before and not armed_by_deployment()):
+                raise Error('Remise à zéro bloquée : ajoutez ORIENTAL24_ALLOW_DATA_RESET=1 au service '
+                            'Railway, redéployez, puis relancez. Aucune donnée n’a été modifiée.', 409)
+            report = data_reset.reset_operations(
+                c, keep_accounts=keep_accounts, reseed_demo=reseed, actor=actor, now=now())
+            leftovers = data_reset.verify_empty(c)
+        if leftovers:
+            raise Error('Remise à zéro incomplète : ' + ', '.join(sorted(leftovers)) + '.')
+        report['leftovers'] = leftovers
+        report['message'] = ('Remise à zéro terminée : ' + str(report['tables_purged']) +
+                             ' tables vidées' + (' · jeu de démonstration réinjecté' if reseed else '') + '.')
+        return jsonify(report)
+
+    @app.post('/api/admin/data-reset/seed-demo')
+    @auth('admin')
+    @admin_only
+    def data_reset_seed_demo(actor):
+        if not app.config['DEMO_MODE']:
+            raise Error('Le jeu de démonstration ne s’injecte qu’en mode démonstration.', 409)
+        with conn() as c:
+            c.execute('BEGIN IMMEDIATE')
+            seeded = data_reset.seed_demo(c)
+            c.execute('COMMIT')
+            after = data_reset.counters(c)
+        return jsonify(ok=True, seeded=bool(seeded), after=after)

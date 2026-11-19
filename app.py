@@ -140,53 +140,71 @@ def init_db():
         ''')
         c.execute('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)',('dataset_kind','demo' if app.config['DEMO_MODE'] else 'production'))
         if not app.config['DEMO_MODE'] or c.execute('SELECT count(*) FROM users').fetchone()[0]: return
-        
-        t=now()
-        for name,email,role,company in [('Administrateur','admin@oriental24.ma','admin','ORIENTAL24'),('Yasmine Amrani','client@oriental24.ma','client','Maison Zina'),('Amine El Idrissi','livreur@oriental24.ma','livreur','ORIENTAL24'),('Sara Bennani','sara@example.test','client','Studio Safran'),('Youssef Alaoui','youssef@example.test','livreur','ORIENTAL24')]:
-            c.execute('INSERT INTO users(name,email,password,role,company,phone,created_at) VALUES(?,?,?,?,?,?,?)',(name,email,generate_password_hash('Oriental24!Demo'),role,company,'0600000000',t))
-        # v1.5.0 « Équipe » : la démo illustre un chef d'équipe — Youssef est sous-livreur d'Amine.
-        c.execute('UPDATE users SET team_lead_id=3 WHERE email=?',('youssef@example.test',))
-        for name,fee in [('Oujda',25),('Berkane',30),('Nador',35),('Taourirt',35),('Jerada',35),('Saïdia',30),('Driouch',40),('Figuig',45)]:
-            c.execute('INSERT INTO cities(name,region,fee,return_fee) VALUES(?,?,?,?)',(name,'Oriental',fee,10))
-        c.execute('INSERT INTO settings VALUES(?,?)',('announcement','Bienvenue chez ORIENTAL24. Votre partenaire de proximité dans l’Oriental.'))
-        recipients=['Salma A.','Mohamed B.','Imane R.','Yassine M.','Nadia S.','Omar K.','Hajar L.','Mehdi T.','Rania F.','Anas D.']
-        # v1.5.5 « Radar fraude » : un numéro distinct par destinataire (agrégat par téléphone lisible en démo).
-        rphones=['0610001001','0610001002','0610001003','0610001004','0610001005','0610001006','0610001007','0610001008','0610001009','0610001010']
-        for i in range(48):
-            d=(datetime.now()-timedelta(days=i%14,hours=i%8)).isoformat(timespec='seconds')
-            status=['En livraison','Livré','Livré','Créé','Programmé','Ramassé','Au hub','Livré','Retourné','Refusé','Livré','Livré'][i%12]
-            city=i%8+1; fee=c.execute('SELECT fee FROM cities WHERE id=?',(city,)).fetchone()[0]
-            client=2 if i%4 else 4; driver=3 if i%3 else 5
-            if status=='Créé': driver=None
-            c.execute('INSERT INTO parcels(tracking,client_id,driver_id,recipient,phone,address,city_id,amount,fee,return_fee,status,product,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (f'O24-{100001+i}',client,driver,recipients[i%10],rphones[i%10],f'{12+i}, avenue Exemple (démonstration)',city,[249,390,180,520,129,299][i%6],fee,10,status,['Accessoires maison','Coffret soin','Article textile'][i%3],'Données fictives de démonstration',d,d))
-            pid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
-            c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(pid,client,'Créé','Colis enregistré',d))
-            if status!='Créé': c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(pid,1,status,'Mise à jour de démonstration',d))
-        c.execute('INSERT INTO tickets(user_id,subject,category,created_at) VALUES(?,?,?,?)',(2,'Précision sur une adresse de livraison','Livraison',t))
-        c.execute('INSERT INTO messages(ticket_id,user_id,body,created_at) VALUES(?,?,?,?)',(1,2,'Bonjour, comment transmettre un complément d’adresse au livreur ?',t))
-        c.execute('INSERT INTO pickups(user_id,city_id,address,phone,count,date,created_at) VALUES(?,?,?,?,?,?,?)',(2,1,'12, avenue Exemple','0600000000',4,datetime.now().date().isoformat(),t))
-        c.execute('INSERT INTO products(client_id,name,reference,quantity,created_at) VALUES(?,?,?,?,?)',(2,'Coffret artisanal','ZINA-001',24,t))
-        c.execute('INSERT INTO pallets(code,source,destination,transport,count,created_at) VALUES(?,?,?,?,?,?)',('PAL-1001','Hub Oujda','Hub Berkane','Navette régionale',12,t))
-        # v1.5.5 « Radar fraude » : deux numéros répétitivement en échec (refus / retours) pour illustrer le score.
-        c.execute("UPDATE parcels SET status='Refusé' WHERE recipient='Anas D.'")
-        c.execute("UPDATE parcels SET status='Retourné' WHERE recipient='Rania F.'")
+        seed_demo_dataset(c)
+def seed_demo_dataset(c):
+    """Jeu de démonstration (mode démo uniquement). Idempotent : ne sème qu'une base neuve.
 
-        # v1.5.3 « Fin de journée » : activité d'aujourd'hui visible dans la démo (2 livrés Amine, 1 tournée Youssef).
-        c.execute('UPDATE parcels SET updated_at=? WHERE id IN (SELECT id FROM parcels ORDER BY id LIMIT 3)',(now(),))
-        # v1.5.4 « Paiements vendeurs » : factures client ouvertes de différentes anciennetés pour illustrer l'aging 30/60/90.
-        def seed_client_invoice(cid,count,age_days,livres_only=True):
-            cond="status='Livré'" if livres_only else "status IN ('Retourné','Refusé')"
-            ps=c.execute(f"SELECT * FROM parcels WHERE client_id=? AND invoice_id IS NULL AND {cond} ORDER BY id LIMIT ?",(cid,count)).fetchall()
-            if not ps:return
-            cod=round(sum(p['amount'] for p in ps if p['status']=='Livré'),2)
-            fees=round(sum(p['fee'] if p['status']=='Livré' else p['return_fee'] for p in ps),2)
-            at=(datetime.now()-timedelta(days=age_days)).isoformat(timespec='seconds')
-            cur=c.execute('INSERT INTO invoices(client_id,cod,fees,total,created_at) VALUES(?,?,?,?,?)',(cid,cod,fees,round(cod-fees,2),at))
-            for p in ps:c.execute('UPDATE parcels SET invoice_id=? WHERE id=?',(cur.lastrowid,p['id']))
-        # Maison Zina : créances à verser réparties sur les quatre tranches ; Studio Safran : petites dettes retours (« À encaisser »).
-        seed_client_invoice(2,2,20);seed_client_invoice(2,2,45);seed_client_invoice(2,2,75);seed_client_invoice(2,3,105)
-        seed_client_invoice(4,2,75,False);seed_client_invoice(4,3,105,False)
+    Extrait de init_db pour être rejoué après une remise à zéro « remise à 0 » en démo.
+    """
+    if c.execute('SELECT count(*) FROM parcels').fetchone()[0]:
+        return False
+    t=now()
+    # Les comptes déjà présents sont conservés (jamais écrasés) : le semis complète
+    # seulement les adresses manquantes, et les rôles ne changent pas.
+    for name,email,role,company in [('Administrateur','admin@oriental24.ma','admin','ORIENTAL24'),('Yasmine Amrani','client@oriental24.ma','client','Maison Zina'),('Amine El Idrissi','livreur@oriental24.ma','livreur','ORIENTAL24'),('Sara Bennani','sara@example.test','client','Studio Safran'),('Youssef Alaoui','youssef@example.test','livreur','ORIENTAL24')]:
+        c.execute('INSERT INTO users(name,email,password,role,company,phone,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET role=excluded.role,company=excluded.company WHERE users.role<>\'admin\'',(name,email,generate_password_hash('Oriental24!Demo'),role,company,'0600000000',t))
+    # v1.5.0 « Équipe » : la démo illustre un chef d'équipe — Youssef est sous-livreur d'Amine.
+    # Identifiants réels des comptes de démonstration : le semis ne suppose plus
+    # que les identifiants 2..5 sont libres (la remise à zéro peut les conserver).
+    demo={r['email'].lower():r['id'] for r in c.execute(
+        "SELECT id,email FROM users WHERE lower(email) IN "
+        "('admin@oriental24.ma','client@oriental24.ma','livreur@oriental24.ma','sara@example.test','youssef@example.test')")}
+    client_id_a=demo['client@oriental24.ma'];client_id_b=demo['sara@example.test']
+    driver_id_a=demo['livreur@oriental24.ma'];driver_id_b=demo['youssef@example.test']
+    c.execute('UPDATE users SET team_lead_id=? WHERE email=?',(driver_id_a,'youssef@example.test'))
+    for name,fee in [('Oujda',25),('Berkane',30),('Nador',35),('Taourirt',35),('Jerada',35),('Saïdia',30),('Driouch',40),('Figuig',45)]:
+        c.execute('INSERT INTO cities(name,region,fee,return_fee) VALUES(?,?,?,?) ON CONFLICT(name) DO UPDATE SET fee=excluded.fee WHERE cities.fee IS NOT excluded.fee',(name,'Oriental',fee,10))
+    c.execute('INSERT OR IGNORE INTO settings VALUES(?,?)',('announcement','Bienvenue chez ORIENTAL24. Votre partenaire de proximité dans l’Oriental.'))
+    recipients=['Salma A.','Mohamed B.','Imane R.','Yassine M.','Nadia S.','Omar K.','Hajar L.','Mehdi T.','Rania F.','Anas D.']
+    # v1.5.5 « Radar fraude » : un numéro distinct par destinataire (agrégat par téléphone lisible en démo).
+    rphones=['0610001001','0610001002','0610001003','0610001004','0610001005','0610001006','0610001007','0610001008','0610001009','0610001010']
+    for i in range(48):
+        d=(datetime.now()-timedelta(days=i%14,hours=i%8)).isoformat(timespec='seconds')
+        status=['En livraison','Livré','Livré','Créé','Programmé','Ramassé','Au hub','Livré','Retourné','Refusé','Livré','Livré'][i%12]
+        city=i%8+1; fee=c.execute('SELECT fee FROM cities WHERE id=?',(city,)).fetchone()[0]
+        client=client_id_a if i%4 else client_id_b; driver=driver_id_a if i%3 else driver_id_b
+        if status=='Créé': driver=None
+        c.execute('INSERT INTO parcels(tracking,client_id,driver_id,recipient,phone,address,city_id,amount,fee,return_fee,status,product,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (f'O24-{100001+i}',client,driver,recipients[i%10],rphones[i%10],f'{12+i}, avenue Exemple (démonstration)',city,[249,390,180,520,129,299][i%6],fee,10,status,['Accessoires maison','Coffret soin','Article textile'][i%3],'Données fictives de démonstration',d,d))
+        pid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(pid,client,'Créé','Colis enregistré',d))
+        if status!='Créé': c.execute('INSERT INTO events(parcel_id,actor_id,status,note,created_at) VALUES(?,?,?,?,?)',(pid,1,status,'Mise à jour de démonstration',d))
+    ticket_id=c.execute('INSERT INTO tickets(user_id,subject,category,created_at) VALUES(?,?,?,?)',(client_id_a,'Précision sur une adresse de livraison','Livraison',t)).lastrowid
+    c.execute('INSERT INTO messages(ticket_id,user_id,body,created_at) VALUES(?,?,?,?)',(ticket_id,client_id_a,'Bonjour, comment transmettre un complément d’adresse au livreur ?',t))
+    c.execute('INSERT INTO pickups(user_id,city_id,address,phone,count,date,created_at) VALUES(?,?,?,?,?,?,?)',(client_id_a,1,'12, avenue Exemple','0600000000',4,datetime.now().date().isoformat(),t))
+    c.execute('INSERT INTO products(client_id,name,reference,quantity,created_at) VALUES(?,?,?,?,?)',(client_id_a,'Coffret artisanal','ZINA-001',24,t))
+    c.execute('INSERT INTO pallets(code,source,destination,transport,count,created_at) VALUES(?,?,?,?,?,?)',('PAL-1001','Hub Oujda','Hub Berkane','Navette régionale',12,t))
+    # v1.5.5 « Radar fraude » : deux numéros répétitivement en échec (refus / retours) pour illustrer le score.
+    c.execute("UPDATE parcels SET status='Refusé' WHERE recipient='Anas D.'")
+    c.execute("UPDATE parcels SET status='Retourné' WHERE recipient='Rania F.'")
+
+    # v1.5.3 « Fin de journée » : activité d'aujourd'hui visible dans la démo (2 livrés Amine, 1 tournée Youssef).
+    c.execute('UPDATE parcels SET updated_at=? WHERE id IN (SELECT id FROM parcels ORDER BY id LIMIT 3)',(now(),))
+    # v1.5.4 « Paiements vendeurs » : factures client ouvertes de différentes anciennetés pour illustrer l'aging 30/60/90.
+    def seed_client_invoice(cid,count,age_days,livres_only=True):
+        cond="status='Livré'" if livres_only else "status IN ('Retourné','Refusé')"
+        ps=c.execute(f"SELECT * FROM parcels WHERE client_id=? AND invoice_id IS NULL AND {cond} ORDER BY id LIMIT ?",(cid,count)).fetchall()
+        if not ps:return
+        cod=round(sum(p['amount'] for p in ps if p['status']=='Livré'),2)
+        fees=round(sum(p['fee'] if p['status']=='Livré' else p['return_fee'] for p in ps),2)
+        at=(datetime.now()-timedelta(days=age_days)).isoformat(timespec='seconds')
+        cur=c.execute('INSERT INTO invoices(client_id,cod,fees,total,created_at) VALUES(?,?,?,?,?)',(cid,cod,fees,round(cod-fees,2),at))
+        for p in ps:c.execute('UPDATE parcels SET invoice_id=? WHERE id=?',(cur.lastrowid,p['id']))
+    # Maison Zina : créances à verser réparties sur les quatre tranches ; Studio Safran : petites dettes retours (« À encaisser »).
+    seed_client_invoice(client_id_a,2,20);seed_client_invoice(client_id_a,2,45);seed_client_invoice(client_id_a,2,75);seed_client_invoice(client_id_a,3,105)
+    seed_client_invoice(client_id_b,2,75,False);seed_client_invoice(client_id_b,3,105,False)
+    return True
+
 init_db()
 from company_profile import ensure_schema as ensure_company_profile_schema, eligible as company_profile_eligible, own_profile as own_company_profile, save_profile as save_company_profile
 from client_profile_extras import ensure_schema as ensure_client_extras_schema
@@ -1283,6 +1301,8 @@ from hub_manager_analytics import register_hub_manager_analytics
 register_hub_manager_analytics(app, globals())
 from admin_hub_analytics import register_admin_hub_analytics
 register_admin_hub_analytics(app, globals())
+from data_reset_routes import register_data_reset
+register_data_reset(app, globals())
 
 # Optional demo seeding for the reception agent: set ORIENTAL24_DEMO_AGENT=1 on demo
 # instances only (e.g. the preview). Idempotent; production databases are never seeded.

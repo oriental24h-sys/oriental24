@@ -298,21 +298,107 @@ def hub_tracking_parcel_scope(conn, alias, hub_id):
               AND a.id=(SELECT max(latest.id) FROM ops_assignments latest WHERE latest.parcel_id={alias}.id))))""", [hub_id, hub_id]
 
 
-def hub_read_parcel_scope(conn, alias, hub_id):
-    """Read-only tracking includes parcels actually dispatched by this Hub.
+def _hub_tables(conn):
+    try:
+        return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    except sqlite3.Error:
+        return set()
 
-    Historical departure evidence remains valid after receipt or onward delivery.
-    Never use this scope for mutations, inventory, dispatch candidates or finance.
+
+def _hub_columns(conn, table):
+    try:
+        return {r[1] for r in conn.execute('PRAGMA table_info(%s)' % table)}
+    except sqlite3.Error:
+        return set()
+
+
+def hub_inbound_parcel_scope(conn, alias, hub_id):
+    """Colis PAS ENCORE arrivés mais déjà « comptés » sur ce Hub.
+
+    Trois cas, jamais un autre Hub :
+    - palette inter-Hub réellement partie, pas encore reçue, destination = ce Hub ;
+    - colis en transit dont la ville de livraison appartient à ce Hub ;
+    - retour de ce Hub en cours de route (il devra le remettre au client).
+    """
+    if (not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', alias)
+            or isinstance(hub_id, bool) or not isinstance(hub_id, int) or hub_id <= 0):
+        return '1=0', []
+    tables = _hub_tables(conn)
+    if not tables:
+        return '1=0', []
+    parts, args = [], []
+    if {'ops_documents', 'ops_document_lines'} <= tables:
+        line_columns = _hub_columns(conn, 'ops_document_lines')
+        doc_columns = _hub_columns(conn, 'ops_documents')
+        line_filters = [f'inl.parcel_id={alias}.id']
+        if 'active' in line_columns:
+            line_filters.append('inl.active=1')
+        if 'received_at' in line_columns:
+            line_filters.append('inl.received_at IS NULL')
+        if 'departure_reconciled_at' in line_columns:
+            line_filters.append('inl.departure_reconciled_at IS NULL')
+        if {'departure_scan_required', 'dispatched_at'} <= doc_columns and 'departure_scanned_at' in line_columns:
+            line_filters.append('(inl.departure_scanned_at IS NOT NULL'
+                                ' OR (ind.departure_scan_required=0 AND ind.dispatched_at IS NOT NULL))')
+        doc_filters = ["ind.kind='transfer'", "ind.status!='Annulé'", 'ind.destination_hub_id=?']
+        parts.append(f"""({alias}.current_hub_id IS NULL AND EXISTS(
+            SELECT 1 FROM ops_document_lines inl JOIN ops_documents ind ON ind.id=inl.document_id
+            WHERE {' AND '.join(line_filters)} AND {' AND '.join(doc_filters)}))""")
+        args.append(hub_id)
+    parcel_columns = _hub_columns(conn, 'parcels')
+    departure_guard = ''
+    if {'ops_documents', 'ops_document_lines'} <= tables:
+        guard_filters = ["gl.parcel_id={alias}.id".format(alias=alias), "gd.kind='transfer'", "gd.status!='Annulé'"]
+        guard_line_columns = _hub_columns(conn, 'ops_document_lines')
+        if 'active' in guard_line_columns:
+            guard_filters.append('gl.active=1')
+        if 'received_at' in guard_line_columns:
+            guard_filters.append('gl.received_at IS NULL')
+        if 'departure_reconciled_at' in guard_line_columns:
+            guard_filters.append('gl.departure_reconciled_at IS NULL')
+        departure_guard = ("\n            AND NOT EXISTS(SELECT 1 FROM ops_document_lines gl"
+                          " JOIN ops_documents gd ON gd.id=gl.document_id WHERE "
+                          + ' AND '.join(guard_filters) + ')')
+    if 'cities' in tables and 'city_id' in parcel_columns:
+        # La palette fait foi : si le colis est déjà dans un départ réel, seul le Hub
+        # de destination de cette palette le voit (jamais la ville par défaut).
+        city_scope = (f"""({alias}.current_hub_id IS NULL
+            AND {alias}.status IN ('Transit','Vers Hub Central')
+            AND EXISTS(SELECT 1 FROM cities incity
+                       WHERE incity.id={alias}.city_id AND incity.hub_id=?)""" + departure_guard + ')')
+        parts.append(city_scope)
+        args.append(hub_id)
+    if 'return_state' in parcel_columns and 'origin_hub_id' in parcel_columns:
+        parts.append(f"""({alias}.origin_hub_id=?
+            AND {alias}.return_state IN ('envoye','transit_origine','recu_entrepot'))""")
+        args.append(hub_id)
+    if not parts:
+        return '1=0', []
+    return '(' + ' OR '.join(parts) + ')', args
+
+
+def hub_read_parcel_scope(conn, alias, hub_id):
+    """LECTURE : uniquement les CMD réellement « comptées » sur ce Hub.
+
+    Règle métier : un Hub ne voit que ses propres commandes, jamais celles d'un
+    autre Hub, et jamais un colis qu'il a déjà expédié vers un autre Hub.
+
+        colis chez lui (ou chez un de ses livreurs)
+      + colis en route vers lui (palette partie / ville de livraison)
+      + retour de ce Hub en cours de route
+
+    L'ancien historique d'expédition ne donne plus aucun droit de lecture : dès
+    que le colis part vers un autre Hub, il disparaît de la liste du Hub
+    expéditeur. Mutations, inventaire, dispatch et finance continuent d'utiliser
+    hub_parcel_scope (custody physique).
     """
     current, args = hub_tracking_parcel_scope(conn, alias, hub_id)
     if not args:
         return '1=0', []
-    return f"""({current} OR EXISTS(
-        SELECT 1 FROM ops_document_lines sent JOIN ops_documents doc ON doc.id=sent.document_id
-        WHERE sent.parcel_id={alias}.id AND doc.kind='transfer' AND doc.source_hub_id=?
-          AND doc.status!='Annulé' AND sent.departure_reconciled_at IS NULL
-          AND (sent.departure_scanned_at IS NOT NULL
-               OR (doc.departure_scan_required=0 AND doc.dispatched_at IS NOT NULL))))""", args + [hub_id]
+    inbound, inbound_args = hub_inbound_parcel_scope(conn, alias, hub_id)
+    if inbound == '1=0':
+        return current, args
+    return f'({current} OR {inbound})', list(args) + list(inbound_args)
 
 
 def parcel_by_tracking_at_hub(conn, tracking, hub_id):
