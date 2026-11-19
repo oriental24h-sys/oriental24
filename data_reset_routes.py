@@ -22,6 +22,7 @@ contrepartie, l'opération est :
 """
 import os
 from functools import wraps
+from pathlib import Path
 
 from flask import jsonify, request
 from werkzeug.security import check_password_hash
@@ -56,7 +57,24 @@ def register_data_reset(app, services):
         return wrapper
 
     def armed_by_deployment():
-        return os.environ.get('ORIENTAL24_ALLOW_DATA_RESET') == '1'
+        """Railway ajoute parfois des espaces/guillemets : on tolère « 1 », « true », « TRUE »."""
+        raw = str(os.environ.get('ORIENTAL24_ALLOW_DATA_RESET', '')).strip().strip('\'"').strip().lower()
+        return raw in ('1', 'true', 'yes', 'oui', 'on')
+
+    def reset_allowed_here():
+        """Vrai si la remise à zéro peut s'exécuter dans ce déploiement.
+
+        * mode démo : toujours autorisé (pas de risque sur un jeu de démonstration) ;
+        * production : uniquement si le service a été armé explicitement.
+        """
+        return (not app.config['PRODUCTION_MODE']) or armed_by_deployment()
+
+    def deployment_facts():
+        """Ce que l'admin doit voir pour savoir OÙ il travaille (Railway/volume)."""
+        return {'mode': 'production' if app.config['PRODUCTION_MODE'] else 'demo',
+                'database': Path(app.config.get('DB_PATH') or '').name or 'oriental24.sqlite',
+                'armed': armed_by_deployment(),
+                'allowed': reset_allowed_here()}
 
     def preview_payload(c):
         return {'before': data_reset.counters(c),
@@ -64,6 +82,8 @@ def register_data_reset(app, services):
                 'kept': sorted(data_reset.KEEP_TABLES),
                 'demo': bool(app.config['DEMO_MODE']),
                 'armed': armed_by_deployment(),
+                'allowed': reset_allowed_here(),
+                'deployment': deployment_facts(),
                 'phrase': PHRASE}
 
     @app.get('/api/admin/data-reset')
@@ -102,8 +122,10 @@ def register_data_reset(app, services):
                 raise Error('Mot de passe administrateur incorrect.', 400)
             rows_before = sum(v['rows'] for v in data_reset.counters(c).values())
             if (app.config['PRODUCTION_MODE'] and rows_before and not armed_by_deployment()):
-                raise Error('Remise à zéro bloquée : ajoutez ORIENTAL24_ALLOW_DATA_RESET=1 au service '
-                            'Railway, redéployez, puis relancez. Aucune donnée n’a été modifiée.', 409)
+                raise Error('Remise à zéro bloquée : la variable ORIENTAL24_ALLOW_DATA_RESET n’est pas lue par '
+                            'ce déploiement. Railway → service → Variables → ORIENTAL24_ALLOW_DATA_RESET = 1 '
+                            '(sans guillemets, sans espace) → Deploy/Redéployer, puis rechargez cette page. '
+                            'Aucune donnée n’a été modifiée.', 409)
             report = data_reset.reset_operations(
                 c, keep_accounts=keep_accounts, reseed_demo=reseed, actor=actor, now=now())
             leftovers = data_reset.verify_empty(c)

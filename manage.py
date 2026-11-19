@@ -46,6 +46,13 @@ def reset_data(args):
     import data_reset
     if args.reseed_demo and not application.app.config['DEMO_MODE']:
         raise ValueError('--reseed-demo est réservé au mode démonstration.')
+    # Le script est la voie de secours quand l'écran admin est bloqué : il rappelle
+    # donc où l'on écrit et ce que contient réellement la base visée.
+    print('Mode : %s | base : %s' % ('production' if application.app.config['PRODUCTION_MODE'] else 'démonstration',
+                                     application.app.config.get('DB_PATH', application.DB)))
+    if application.app.config['PRODUCTION_MODE'] and not args.dry_run:
+        print('Rappel : la double sécurité Railway (ORIENTAL24_ALLOW_DATA_RESET=1) ne concerne '
+              'que l’écran web ; ce script local agit directement sur la base ci-dessus.')
     if application.app.config['DEMO_MODE'] and not args.reseed_demo:
         pass  # autorisé : la préversion peut rester vide
     with application.conn() as c:

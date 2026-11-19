@@ -86,4 +86,5 @@ def configure(app, base):
         AUTH_ABSOLUTE_SECONDS=hours*3600,AUTH_IDLE_SECONDS=idle*60)
     if not production and os.getenv('PREVIEW_COOKIES')=='1':
         app.config.update(SESSION_COOKIE_SECURE=True,SESSION_COOKIE_SAMESITE='None',SESSION_COOKIE_PARTITIONED=True)
+    app.config['DB_PATH']=str(db)
     return db
