@@ -14,12 +14,18 @@ const manage = fs.readFileSync('manage.py', 'utf8');
 assert(/\["data-reset", "trash", "Remise à zéro", \["admin"\]\]/.test(app), 'entrée de menu admin absente');
 assert(app.includes('case "data-reset":'), 'la vue n’est pas rendue');
 assert(app.includes('trash: "M4 7h16'), 'icône « trash » absente');
-assert(index.includes('/static/data-reset.js?v=remise-a-zero-2026-11-01'), 'script non inclus dans la page');
+assert(index.includes('/static/data-reset.js?v=remise-a-zero-autofill-2026-11-19'), 'script non inclus dans la page');
 
 // 2) trois verrous côté interface
 assert(reset.includes('REMETTRE A ZERO'), 'la phrase de confirmation est absente');
-assert(/'password', 'Votre mot de passe administrateur', '', 'password'/.test(reset),
+assert(/field\('password', 'Votre mot de passe administrateur', 'password'/.test(reset),
   'le mot de passe administrateur est demandé');
+// Correctif capture : le champ phrase ne doit jamais être rempli par le navigateur.
+assert(/field\('phrase'/.test(reset), 'champ phrase dédié');
+assert(reset.includes('autocomplete="off"'), 'le champ phrase autorise encore le remplissage automatique');
+assert(reset.includes('data-lpignore') && reset.includes('data-1p-ignore'), 'les gestionnaires de mots de passe ne sont pas bloqués');
+assert(reset.includes("includes('@')"), 'aucun garde-fou contre l’e-mail injecté');
+assert(reset.includes('drPhraseKey'), 'aucune normalisation casse/accents/espaces');
 assert(reset.includes("api('/admin/data-reset', 'POST'"), 'l’écran n’appelle pas la route');
 assert(reset.includes('keep_accounts'), 'l’option comptes n’est pas transmise');
 assert(reset.includes('Aucune sauvegarde') || reset.includes('sans sauvegarde'), 'l’absence de sauvegarde n’est pas annoncée');
