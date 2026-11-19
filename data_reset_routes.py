@@ -81,9 +81,10 @@ def register_data_reset(app, services):
         if not isinstance(payload, dict):
             raise Error('Objet JSON requis.')
         typed = str(payload.get('confirmation', ''))
-        if '@' in typed:
-            raise Error('Le champ de confirmation contient une adresse e-mail : tapez « ' + PHRASE +
-                        ' ». Le remplissage automatique du navigateur doit être vidé.')
+        import re as _re
+        if '@' in typed or _re.fullmatch(r'[+\d][\d\s().-]{5,}', typed.strip()):
+            raise Error('La zone de confirmation contient une adresse e-mail ou un numéro de téléphone : '
+                        'effacez-la et tapez « ' + PHRASE + ' ».')
         if phrase_key(typed) != PHRASE:
             raise Error('Tapez exactement « ' + PHRASE + ' » pour confirmer la remise à zéro.')
         password = str(payload.get('password', ''))[:129]
