@@ -31,6 +31,14 @@ import data_reset
 PHRASE = 'REMETTRE A ZERO'
 
 
+def phrase_key(value):
+    """Normalise la phrase de confirmation : casse, accents et espaces ignorés."""
+    import unicodedata
+    text = unicodedata.normalize('NFD', str(value or ''))
+    text = ''.join(ch for ch in text if unicodedata.category(ch) != 'Mn')
+    return ' '.join(text.replace('\u00a0', ' ').split()).upper()
+
+
 def register_data_reset(app, services):
     conn = services['conn']
     auth = services['auth']
@@ -72,7 +80,11 @@ def register_data_reset(app, services):
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             raise Error('Objet JSON requis.')
-        if str(payload.get('confirmation', '')).strip().upper() != PHRASE:
+        typed = str(payload.get('confirmation', ''))
+        if '@' in typed:
+            raise Error('Le champ de confirmation contient une adresse e-mail : tapez « ' + PHRASE +
+                        ' ». Le remplissage automatique du navigateur doit être vidé.')
+        if phrase_key(typed) != PHRASE:
             raise Error('Tapez exactement « ' + PHRASE + ' » pour confirmer la remise à zéro.')
         password = str(payload.get('password', ''))[:129]
         if not password:
