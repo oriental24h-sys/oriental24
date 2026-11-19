@@ -245,12 +245,31 @@ class ResetRouteTests(unittest.TestCase):
         admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo', '10.80.0.10')
         preview = admin.get('/api/admin/data-reset')
         self.assertEqual(preview.status_code, 200, preview.json)
-        before = preview.json['before']['parcels']['rows']
-        self.assertGreater(before, 0)
+        baseline = preview.json['before']['parcels']['rows']
+        self.assertGreater(baseline, 0)
         # 1) phrase fausse
         wrong = admin.post('/api/admin/data-reset', json={'confirmation': 'oui', 'password': 'Oriental24!Demo'}, headers=headers)
         self.assertEqual(wrong.status_code, 400)
         self.assertIn('REMETTRE A ZERO', wrong.json['error'])
+        # 1bis) le navigateur a rempli l'e-mail à la place de la phrase : refus explicite
+        email_instead = admin.post('/api/admin/data-reset',
+                                   json={'confirmation': 'oriental24h@gmail.com', 'password': 'Oriental24!Demo'}, headers=headers)
+        self.assertEqual(email_instead.status_code, 400)
+        self.assertIn('adresse e-mail', email_instead.json['error'])
+        # 1ter) casse, accents et espaces multiples sont tolérés
+        for spelling in ('remettre a zero', 'Remettre  à  Zéro', '  REMETTRE A ZERO  '):
+            ok_phrase = admin.post('/api/admin/data-reset',
+                                   json={'confirmation': spelling, 'password': 'Oriental24!Demo'}, headers=headers)
+            self.assertEqual(ok_phrase.status_code, 200, (spelling, ok_phrase.json))
+            self.assertEqual(ok_phrase.json['after']['parcels']['rows'], 0)
+            with self.m.conn() as c:
+                c.execute('BEGIN IMMEDIATE')
+                from data_reset import seed_demo
+                seed_demo(c)
+                c.execute('COMMIT')
+        # Les variantes ont bien vidé la base : le compteur de référence change, pas
+        # la règle « rien ne bouge tant que les trois verrous ne sont pas réunis ».
+        before = admin.get('/api/admin/data-reset').json['before']['parcels']['rows']
         # 2) mot de passe faux
         bad_pw = admin.post('/api/admin/data-reset', json={'confirmation': 'REMETTRE A ZERO', 'password': 'nope'}, headers=headers)
         self.assertEqual(bad_pw.status_code, 400)
