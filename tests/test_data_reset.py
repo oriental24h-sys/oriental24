@@ -294,6 +294,70 @@ class ResetRouteTests(unittest.TestCase):
         self.assertEqual(admin.get('/api/export').status_code, 200)
         self.assertEqual(admin.get('/api/audit').status_code, 200)
 
+    def test_deployment_facts_tolerate_railway_value_shapes(self):
+        """Railway renvoie parfois « 1 », « 1 », « true » : le service doit le comprendre."""
+        self.m.app.config['PRODUCTION_MODE'] = True
+        admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo', '10.80.0.12')
+        saved = os.environ.get('ORIENTAL24_ALLOW_DATA_RESET')
+        try:
+            for raw, expected in (('1', True), (' 1 ', True), ('true', True), ('TRUE', True),
+                                  ('"1"', True), ('0', False), ('', False), ('non', False)):
+                if raw == '':
+                    os.environ.pop('ORIENTAL24_ALLOW_DATA_RESET', None)
+                else:
+                    os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = raw
+                seen = admin.get('/api/admin/data-reset', headers=headers,
+                                 base_url='https://oriental24.test').json
+                self.assertEqual(seen['deployment']['armed'], expected, 'valeur Railway %r' % raw)
+                self.assertEqual(seen['deployment']['allowed'], expected, 'valeur Railway %r' % raw)
+                self.assertEqual(seen['deployment']['mode'], 'production')
+                self.assertTrue(seen['deployment']['database'].endswith('.sqlite'))
+        finally:
+            if saved is None:
+                os.environ.pop('ORIENTAL24_ALLOW_DATA_RESET', None)
+            else:
+                os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = saved
+            self.m.app.config['PRODUCTION_MODE'] = False
+
+    def test_deployment_facts_are_always_open_in_demo(self):
+        admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo', '10.80.0.13')
+        saved = os.environ.pop('ORIENTAL24_ALLOW_DATA_RESET', None)
+        try:
+            # Mode démo : le cookie de session est émis pour http://localhost.
+            seen = admin.get('/api/admin/data-reset', headers=headers,
+                             base_url='http://localhost').json
+            self.assertTrue(seen['allowed'], 'en démonstration la remise à zéro reste disponible')
+            self.assertEqual(seen['deployment']['mode'], 'demo')
+        finally:
+            if saved is not None:
+                os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = saved
+
+    def test_production_runs_once_the_switch_is_set(self):
+        """Avec ORIENTAL24_ALLOW_DATA_RESET=1, la production exécute la purge."""
+        self.m.app.config['PRODUCTION_MODE'] = True
+        saved = os.environ.get('ORIENTAL24_ALLOW_DATA_RESET')
+        try:
+            admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo', '10.80.0.14')
+            for raw in ('1', ' 1 ', 'true'):
+                os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = raw
+                with self.m.conn() as c:
+                    c.execute("""INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,
+                            return_fee,status,created_at,updated_at)
+                            VALUES(?,2,'X','0600000000','A',1,100,20,10,'Créé',?,?)""",
+                              ('ARMED-' + uuid.uuid4().hex[:6], self.m.now(), self.m.now()))
+                done = admin.post('/api/admin/data-reset',
+                                  json={'confirmation': 'REMETTRE A ZERO', 'password': 'Oriental24!Demo'},
+                                  headers=headers, base_url='https://oriental24.test')
+                self.assertEqual(done.status_code, 200, 'valeur Railway %r : %s' % (raw, done.json))
+                self.assertTrue(done.json['ok'])
+                self.assertEqual(done.json['after']['parcels']['rows'], 0)
+        finally:
+            if saved is None:
+                os.environ.pop('ORIENTAL24_ALLOW_DATA_RESET', None)
+            else:
+                os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = saved
+            self.m.app.config['PRODUCTION_MODE'] = False
+
     def test_production_guard_requires_the_railway_switch(self):
         # Le mode démo n'est pas concerné : on simule la production en mémoire.
         self.m.app.config['PRODUCTION_MODE'] = True
