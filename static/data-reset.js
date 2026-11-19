@@ -4,6 +4,18 @@
    volontairement lente et l'écran affiche les compteurs avant/après. */
 let drState = null;
 
+/* Comparaison tolérante : casse, accents et espaces multiples ignorés.
+   « remettre à zéro » = « REMETTRE A ZERO ». */
+function drPhraseKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s\u00a0]+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+const DR_PHRASE = 'REMETTRE A ZERO';
+
 function drRows(block) {
   if (!block) return '';
   return Object.entries(block)
@@ -82,17 +94,54 @@ async function dataResetOpen(wipeAccounts) {
   const intro = wipeAccounts
     ? 'Tous les comptes sauf l’administrateur seront supprimés, ainsi que leurs barèmes et profils. Hubs, villes et tarifs restent.'
     : 'Les comptes (clients, livreurs, responsables de Hub, supports) sont conservés.';
+  // Champs écrits à la main : le remplissage automatique du navigateur ne doit
+  // jamais injecter l'e-mail du compte à la place de la phrase de confirmation.
+  const field = (name, label, type, extra) =>
+    `<div class="field"><label for="f-${name}">${label} *</label><input id="f-${name}" name="${name}" type="${type}" value="" required ${extra}></div>`;
   modal(
     wipeAccounts ? 'Tout vider (comptes inclus)' : 'Vider les données métier',
     form(
       `<div class="full form-hint" style="border-left:4px solid #b3261e;padding-left:12px"><b>Action définitive, sans sauvegarde.</b> ${intro}</div>
-       ${input('phrase', 'Tapez exactement REMETTRE A ZERO', '', 'text', true, 'autocomplete="off" spellcheck="false"')}
-       ${input('password', 'Votre mot de passe administrateur', '', 'password', true, 'autocomplete="current-password"')}
+       ${field('phrase', 'Tapez exactement REMETTRE A ZERO', 'text',
+        'autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" ' +
+        'inputmode="text" placeholder="REMETTRE A ZERO" aria-describedby="dr-phrase-help" data-lpignore="true" data-1p-ignore')}
+       <div class="full form-hint" id="dr-phrase-help">La casse et les espaces multiples sont ignorés : « remettre a zero » fonctionne aussi.</div>
+       ${field('password', 'Votre mot de passe administrateur', 'password', 'autocomplete="current-password" data-lpignore="true" data-1p-ignore')}
        ${d.demo ? `<label class="full flex" style="gap:8px;align-items:center"><input type="checkbox" name="reseed" style="width:auto"> Réinjecter le jeu de démonstration juste après</label>` : ''}`,
       'Confirmer la remise à zéro',
     ).replace('<button type="submit" class="btn primary">', '<button type="submit" class="btn primary" style="background:#b3261e;border-color:#b3261e">'),
   );
+  // Validation en direct : le bouton reste inactif tant que la phrase ne correspond
+  // pas exactement, ce qui évite un aller-retour serveur inutile.
+  const phraseInput = document.getElementById('f-phrase');
+  const pwInput = document.getElementById('f-password');
+  const submit = document.querySelector('#modal-form [type=submit]');
+  const sync = () => {
+    const ok = drPhraseKey(phraseInput.value) === DR_PHRASE;
+    const ready = ok && pwInput.value.length > 0;
+    if (submit) submit.disabled = !ready;
+    if (submit) submit.style.opacity = ready ? '' : '0.55';
+    const help = document.getElementById('dr-phrase-help');
+    if (help) {
+      help.className = ok ? 'full form-hint green' : 'full form-hint';
+      help.textContent = ok
+        ? '✓ Phrase reconnue. Saisissez votre mot de passe pour activer la confirmation.'
+        : 'La casse, les accents et les espaces multiples sont ignorés : « remettre a zero » fonctionne aussi.';
+    }
+  };
+  if (phraseInput && submit) {
+    phraseInput.addEventListener('input', sync);
+    pwInput.addEventListener('input', sync);
+    sync();
+  }
   bindForm(async (payload) => {
+    const typed = String(payload.phrase || '').trim();
+    if (typed.includes('@')) {
+      // Symptôme classique : le navigateur a rempli l'e-mail du compte dans le
+      // champ de confirmation. On refuse avant tout appel réseau.
+      throw new Error('Le champ de confirmation contient une adresse e-mail : tapez « ' + DR_PHRASE +
+                      ' » (le remplissage automatique du navigateur doit être vidé).');
+    }
     const body = {
       confirmation: payload.phrase,
       password: payload.password,
