@@ -14,7 +14,7 @@ const manage = fs.readFileSync('manage.py', 'utf8');
 assert(/\["data-reset", "trash", "Remise à zéro", \["admin"\]\]/.test(app), 'entrée de menu admin absente');
 assert(app.includes('case "data-reset":'), 'la vue n’est pas rendue');
 assert(app.includes('trash: "M4 7h16'), 'icône « trash » absente');
-assert(index.includes('/static/data-reset.js?v=remise-a-zero-bouton-2026-11-19'), 'script non inclus dans la page');
+assert(index.includes('/static/data-reset.js?v=remise-a-zero-armement-2026-11-19'), 'script non inclus dans la page');
 
 // 2) trois verrous côté interface
 assert(reset.includes('REMETTRE A ZERO'), 'la phrase de confirmation est absente');
@@ -57,3 +57,11 @@ assert(manage.includes('--dry-run'), 'le mode vérification manque');
 assert(manage.includes('ORIENTAL24_RESET_PASSWORD'), 'le mode --yes n’est pas protégé');
 
 console.log('Remise à zéro (écran admin + route + script) PASS');
+
+/* --- Déploiement : l'admin doit voir où il écrit et si l'interrupteur est lu --- */
+assert(reset.includes('deployment'), 'le bandeau de déploiement est absent de l’écran');
+assert(reset.includes('Interrupteur ORIENTAL24_ALLOW_DATA_RESET'), 'l’état de l’interrupteur n’est pas affiché');
+assert(routes.includes("'allowed'"), 'l’aperçu n’expose pas l’état autorisé');
+assert(routes.includes('deployment_facts'), 'les informations de déploiement manquent');
+assert(routes.includes("strip('\\'\"')") || routes.includes('strip('),
+  'la lecture de la variable Railway n’est pas tolérante');
