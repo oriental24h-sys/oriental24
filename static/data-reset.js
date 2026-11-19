@@ -49,6 +49,14 @@ async function dataResetView() {
       'Vider les commandes, les bons d’envoi et de réception, les factures et toute la finance.',
       `<button class="btn" onclick="dataResetRefresh()">${icon('refresh')}Actualiser les compteurs</button>`,
     ) +
+    (d.deployment ? `<div class="card" style="border-color:#e9edf3">
+      <div class="flex" style="gap:10px;align-items:center;flex-wrap:wrap;font-size:13px">
+        <span class="badge" style="background:${d.deployment.mode === 'production' ? '#e8f0fe;color:#1a4fa0' : '#fff4e5;color:#8a4b00'}">
+          ${d.deployment.mode === 'production' ? 'Production' : 'Demonstration'}</span>
+        <span class="sub">Base : <b>${esc(d.deployment.database)}</b></span>
+        <span class="sub">Interrupteur ORIENTAL24_ALLOW_DATA_RESET : <b>${d.deployment.allowed ? 'ouvert' : 'ferme'}</b></span>
+      </div>
+    </div>` : '') +
     `<div class="card" style="border-color:var(--red,#b3261e)">
       <div class="flex" style="align-items:flex-start;gap:18px;flex-wrap:wrap">
         <span class="stat-icon" style="background:#fdecea;color:#b3261e">${icon('alert')}</span>
@@ -59,8 +67,8 @@ async function dataResetView() {
           motifs et paramètres sont conservés.</p>
           <p class="sub"><b>${d.tables}</b> tables seront vidées · <b>${total}</b> lignes métier actuellement.
           ${d.demo ? 'Mode démonstration : le jeu de démonstration peut être réinjecté juste après.'
-                   : (d.armed ? 'Déploiement armé (ORIENTAL24_ALLOW_DATA_RESET=1).'
-                              : 'Production : ajoutez ORIENTAL24_ALLOW_DATA_RESET=1 sur Railway avant de lancer.')}</p>
+                   : (d.armed ? 'Deploiement arme : la remise a zero peut s’executer.'
+                              : 'Production : ORIENTAL24_ALLOW_DATA_RESET=1 n’est pas lue par ce service.')}</p>
         </div>
       </div>
       <div class="flex" style="gap:12px;margin-top:16px;flex-wrap:wrap">
