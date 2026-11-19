@@ -14,7 +14,7 @@ const manage = fs.readFileSync('manage.py', 'utf8');
 assert(/\["data-reset", "trash", "Remise à zéro", \["admin"\]\]/.test(app), 'entrée de menu admin absente');
 assert(app.includes('case "data-reset":'), 'la vue n’est pas rendue');
 assert(app.includes('trash: "M4 7h16'), 'icône « trash » absente');
-assert(index.includes('/static/data-reset.js?v=remise-a-zero-noautofill-2026-11-19'), 'script non inclus dans la page');
+assert(index.includes('/static/data-reset.js?v=remise-a-zero-bouton-2026-11-19'), 'script non inclus dans la page');
 
 // 2) trois verrous côté interface
 assert(reset.includes('REMETTRE A ZERO'), 'la phrase de confirmation est absente');
