@@ -530,7 +530,7 @@ class HubDriverWorkspaceTests(unittest.TestCase):
             p=c.execute('SELECT * FROM parcels WHERE id=?',(pid,)).fetchone()
             self.assertEqual((p['current_hub_id'],p['driver_id'],p['status']),(self.hub,self.driver,'Reçu par le livreur'))
 
-    def test_sent_transfers_remain_visible_with_manifest_without_mutation_rights(self):
+    def test_departed_transfers_belong_to_the_destination_and_leave_the_sender(self):
         from werkzeug.security import generate_password_hash
         unique=uuid.uuid4().hex
         with self.m.conn() as c:
@@ -568,18 +568,22 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         # Partial departure retains the source manifest, but only dispatched lines reach the destination.
         self.assertEqual({l['tracking'] for l in self.client.get(path).json['lines']},trackings)
         self.assertEqual({l['tracking'] for l in destination.get(path).json['lines']},{first[1]})
-        self.assertEqual(destination.get(f'/api/parcels/{first[0]}').status_code,404)
+        # Une CMD partie n'est plus comptée sur le Hub expéditeur...
+        self.assertNotIn(first[0],{p['id'] for p in self.client.get('/api/bootstrap').json['parcels']})
+        self.assertEqual(self.client.get(f'/api/parcels/{first[0]}').status_code,404)
+        # ... elle est déjà celle du Hub de destination : lecture seule avant la réception physique.
+        inbound=destination.get(f'/api/parcels/{first[0]}')
+        self.assertEqual(inbound.status_code,200,inbound.json)
+        self.assertTrue(inbound.json['parcel']['hub_read_only'])
+        self.assertFalse(inbound.json['parcel']['hub_status_editable'])
         self.assertEqual(self.post(f'logistics/documents/{did}/departure-scan',dict(tracking=second[1])).status_code,200)
-        def assert_source_tracking():
+        def assert_source_owns_nothing():
             rows={p['id']:p for p in self.client.get('/api/bootstrap').json['parcels']}
-            self.assertTrue(ids <= rows.keys())
             self.assertNotIn(foreign,rows)  # An origin_hub_id alone is never departure evidence.
             for pid in ids:
-                self.assertTrue(rows[pid]['hub_read_only'])
-                self.assertFalse(rows[pid]['hub_status_editable'])
-                detail=self.client.get(f'/api/parcels/{pid}')
-                self.assertEqual(detail.status_code,200,detail.json)
-                r=self.client.patch(f'/api/parcels/{pid}',json={'status':'Reporté','revision':detail.json['parcel']['ops_revision']},headers=self.headers)
+                self.assertNotIn(pid,rows)  # Aucune CMD expédiée ne reste « comptée » sur le Hub.
+                self.assertEqual(self.client.get(f'/api/parcels/{pid}').status_code,404)
+                r=self.client.patch(f'/api/parcels/{pid}',json={'status':'Reporté','revision':0},headers=self.headers)
                 self.assertEqual(r.status_code,404,r.json)
             doc=self.client.get(path)
             self.assertEqual(doc.status_code,200,doc.json)
@@ -587,7 +591,7 @@ class HubDriverWorkspaceTests(unittest.TestCase):
             self.assertEqual(doc.json['count'],2)
             listed=next(d for d in self.client.get('/api/logistics/documents').json if d['id']==did)
             self.assertEqual({l['tracking'] for l in listed['lines']},trackings)
-        assert_source_tracking()
+        assert_source_owns_nothing()
         for pid in ids:
             self.assertEqual(unrelated.get(f'/api/parcels/{pid}').status_code,404)
         candidates=self.client.get('/api/logistics/palette-candidates',query_string={'source_hub_id':self.hub,'destination_hub_id':self.foreign,'mode':'standard'})
@@ -596,14 +600,16 @@ class HubDriverWorkspaceTests(unittest.TestCase):
         for pid,tracking in (first,second):
             r=destination.post(path+'/receive',json={'tracking':tracking},headers=headers['destination'])
             self.assertEqual(r.status_code,200,r.json)
-        assert_source_tracking()
+        assert_source_owns_nothing()
         self.assertEqual(self.client.get(path).json['status'],'Reçu')
         self.assertEqual({l['tracking'] for l in destination.get(path).json['lines']},trackings)
+        # Toutes les CMD sont maintenant comptées sur le Hub de destination.
+        self.assertTrue(ids <= {p['id'] for p in destination.get('/api/bootstrap').json['parcels']})
         with self.m.conn() as c:
-            # History is retained even after a later onward movement; no transfer line is active anymore.
+            # Départ vers un troisième Hub : elles quittent aussi la liste du Hub de destination.
             c.execute('UPDATE parcels SET current_hub_id=? WHERE id IN (?,?)',(outside,first[0],second[0]))
-        assert_source_tracking()
-        self.assertEqual({l['tracking'] for l in destination.get(path).json['lines']},trackings)
+        assert_source_owns_nothing()
+        self.assertFalse(ids & {p['id'] for p in destination.get('/api/bootstrap').json['parcels']})
         with self.m.conn() as c:c.execute('UPDATE ops_hubs SET active=0 WHERE id=?',(self.hub,))
         self.assertEqual(self.client.get(path).status_code,403)
         self.assertFalse(ids & {p['id'] for p in self.client.get('/api/bootstrap').json['parcels']})

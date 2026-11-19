@@ -34,7 +34,7 @@ class SidebarCountsTests(unittest.TestCase):
         self.c.close()
 
     @staticmethod
-    def scope(u, c=None):
+    def scope(u, c=None, include_sent=False):
         if u['role']=='admin': return '1=1', []
         field = {'client':'client_id','agent':'current_hub_id','support':'support_id','livreur':'driver_id'}[u['role']]
         return f'p.{field}=?', [u.get('agent_hub_id') if u['role']=='agent' else u['id']]

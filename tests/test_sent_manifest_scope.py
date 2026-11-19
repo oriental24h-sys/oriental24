@@ -24,20 +24,25 @@ class SentManifestScopeTests(unittest.TestCase):
         where,args=(hub_read_parcel_scope if read else hub_tracking_parcel_scope)(self.c,'p',hub)
         return {r[0] for r in self.c.execute('SELECT p.id FROM parcels p WHERE '+where,args)}
 
-    def test_only_real_departures_grant_historical_read_access(self):
-        self.assertEqual(self.ids(),{1,2,6})
-        self.assertEqual(self.ids(read=False),set())
-        self.assertEqual(self.ids(20),{2})
+    def test_a_departed_parcel_belongs_to_its_destination_not_to_the_sender(self):
+        # Règle métier : chaque Hub ne voit que les CMD comptées sur lui.
+        # 10 a tout expédié -> plus rien ; 20 reçoit le colis 1 en route ; 30 garde le sien.
+        self.assertEqual(self.ids(10),set())
+        self.assertEqual(self.ids(20),{1,2})
         self.assertEqual(self.ids(30),{6})
+        # La lecture large ne change jamais la garde physique (mutations).
+        self.assertEqual(self.ids(20,read=False),{2})
 
     def test_invalid_or_inactive_hub_is_fail_closed(self):
         for hub in (None,True,0,'10',999):self.assertEqual(self.ids(hub),set())
-        self.c.execute('UPDATE ops_hubs SET active=0 WHERE id=10')
-        self.assertEqual(self.ids(),set())
+        self.c.execute('UPDATE ops_hubs SET active=0 WHERE id=20')
+        self.assertEqual(self.ids(20),set())
 
-    def test_cancellation_and_reconciliation_never_create_history_rights(self):
-        self.c.execute("UPDATE ops_document_lines SET departure_scanned_at='bad-import' WHERE parcel_id IN (3,4)")
-        self.assertEqual(self.ids(),{1,2,6})
+    def test_cancellation_reconciliation_and_unscanned_departures_never_reach_a_hub(self):
+        # Un départ annulé, réconcilié ou jamais scanné n'attribue la CMD à personne.
+        self.assertEqual(self.ids(20),{1,2})
+        self.c.execute("UPDATE ops_document_lines SET departure_scanned_at=NULL WHERE parcel_id=1")
+        self.assertEqual(self.ids(20),{2})
 
     def test_manifest_participants_keep_sent_lines_not_other_hub_inventory(self):
         doc=dict(kind='transfer',source_hub_id=10,destination_hub_id=20,departure_scan_required=1,dispatched_at='sent')
