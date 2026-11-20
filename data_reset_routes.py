@@ -112,8 +112,11 @@ def register_data_reset(app, services):
             # Une variable d'environnement n'est plus exigée : la double confirmation
             # « phrase exacte + mot de passe administrateur » suffit et ne dépend
             # d'aucun redéploiement Railway.
-            report = data_reset.reset_operations(
-                c, keep_accounts=keep_accounts, reseed_demo=reseed, actor=actor, now=now())
+            try:
+                report = data_reset.reset_operations(
+                    c, keep_accounts=keep_accounts, reseed_demo=reseed, actor=actor, now=now())
+            except data_reset.ResetRefused as exc:
+                raise Error(str(exc), 409) from exc
             leftovers = data_reset.verify_empty(c)
         if leftovers:
             raise Error('Remise à zéro incomplète : ' + ', '.join(sorted(leftovers)) + '.')

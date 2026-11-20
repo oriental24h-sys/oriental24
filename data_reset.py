@@ -11,8 +11,7 @@ Règles de sécurité appliquées :
   l'ordre des dépendances, avec la liste des tables lues dans le schéma réel
   (une future table est donc purgée automatiquement).
 * Les garde-fous d'audit (triggers « no_update / no_delete ») sont désactivés
-  uniquement pendant la transaction de purge, puis réinstallés par la migration
-  normale au démarrage suivant. Rien d'autre n'est contourné.
+  uniquement pendant la transaction de purge, puis réinstallés dans la même transaction.
 * Une empreinte SHA-256 de l'état purgé est calculée et envoyée à l'audit : la
   remise à zéro est prouvable et ne peut pas être confondue avec une perte.
 * En mode démonstration, le jeu de démonstration est réinjecté tout de suite
@@ -133,20 +132,24 @@ def _restore_guards(c, guards):
 
 
 def _prune_orphan_users(c):
-    """Supprime les lignes de configuration qui pointent vers un compte disparu."""
+    """Retire les comptes disparus sans effacer le réseau ni ses tarifs.
+
+    Les configurations appartenant aux comptes supprimés et leurs sessions sont
+    supprimées. Les simples auteurs de modification sont détachés si nullable.
+    """
     removed = 0
-    for table in sorted(KEEP_TABLES):
-        if table == 'users':
-            continue
-        try:
-            refs = [r for r in c.execute('PRAGMA foreign_key_list("%s")' % table) if r[2] == 'users']
-        except sqlite3.Error:
-            continue
+    ownership = {'user_id', 'client_id', 'driver_id', 'support_id'}
+    for table in sorted((KEEP_TABLES | KEEP_ALWAYS) & set(_tables(c))):
+        info = {r[1]: r for r in c.execute('PRAGMA table_info("%s")' % table)}
+        refs = [r for r in c.execute('PRAGMA foreign_key_list("%s")' % table) if r[2] == 'users']
         for ref in refs:
             column = ref[3]
-            removed += c.execute(
-                'DELETE FROM "%s" WHERE "%s" IS NOT NULL AND "%s" NOT IN (SELECT id FROM users)'
-                % (table, column, column)).rowcount
+            predicate = ('"%s" IS NOT NULL AND "%s" NOT IN (SELECT id FROM users)'
+                         % (column, column))
+            if column in ownership or info[column][3] or info[column][5]:
+                removed += c.execute('DELETE FROM "%s" WHERE %s' % (table, predicate)).rowcount
+            else:
+                c.execute('UPDATE "%s" SET "%s"=NULL WHERE %s' % (table, column, predicate))
     return removed
 
 
@@ -159,32 +162,33 @@ def fingerprint(payload):
 def reset_operations(c, *, keep_accounts=True, reseed_demo=False, actor=None, now=None):
     """Vide les données métier et renvoie un rapport complet.
 
-    La fonction travaille dans la transaction de l'appelant : soit tout passe,
+    La fonction ouvre sa propre transaction : soit tout passe,
     soit rien n'est modifié. `keep_accounts=False` vide aussi les comptes
     non-administrateurs (les Hubs et villes restent).
     """
     if c.in_transaction:
         raise ResetRefused('La remise à zéro doit ouvrir sa propre transaction.')
-    c.execute('BEGIN IMMEDIATE')
+    # SQLite ignore PRAGMA foreign_keys=OFF si BEGIN a déjà été exécuté.
+    # Il faut donc le poser AVANT la transaction et restaurer l'état initial
+    # seulement APRÈS COMMIT/ROLLBACK (y compris en cas d'échec).
+    foreign_keys = c.execute('PRAGMA foreign_keys').fetchone()[0]
+    c.execute('PRAGMA foreign_keys=OFF')
     try:
+        c.execute('BEGIN IMMEDIATE')
         before = counters(c)
         targets = purge_targets(c)
         guards = _drop_guards(c, targets)
-        # Les suppressions suivent l'ordre des dépendances : la base reste
-        # cohérente même si une clé étrangère est vérifiée en fin de transaction.
-        c.execute('PRAGMA foreign_keys=OFF')
         try:
             for table in targets:
                 c.execute('DELETE FROM "%s"' % table)
             if not keep_accounts:
-                c.execute("DELETE FROM users WHERE role<>'admin'")
+                removed_users = c.execute("DELETE FROM users WHERE role<>'admin'").rowcount
                 # Réglages attachés aux comptes supprimés (barèmes livreur, profils,
                 # tarifs négociés…) : sans cette purge, il resterait des orphelins.
-                removed_users = _prune_orphan_users(c)
+                _prune_orphan_users(c)
             else:
                 removed_users = 0
         finally:
-            c.execute('PRAGMA foreign_keys=ON')
             _restore_guards(c, guards)
         if reseed_demo:
             seed_demo(c)
@@ -201,10 +205,20 @@ def reset_operations(c, *, keep_accounts=True, reseed_demo=False, actor=None, no
                   ((actor or {}).get('id') or 0, (actor or {}).get('name') or 'Opérateur local',
                    'data_reset', 'database', 'operations', json.dumps(before, ensure_ascii=False),
                    json.dumps(after, ensure_ascii=False), json.dumps(detail, ensure_ascii=False), stamp))
+        # Vérification dans la transaction : en cas d'incohérence, rien n'est
+        # validé. Ne jamais réactiver les FK en laissant des sessions orphelines.
+        violations = list(c.execute('PRAGMA foreign_key_check'))
+        if violations:
+            tables = ', '.join(sorted({r[0] for r in violations}))
+            raise ResetRefused('Références invalides après purge : ' + tables +
+                               '. Opération annulée, aucune donnée modifiée.')
         c.execute('COMMIT')
     except Exception:
-        c.execute('ROLLBACK')
+        if c.in_transaction:
+            c.execute('ROLLBACK')
         raise
+    finally:
+        c.execute('PRAGMA foreign_keys=%d' % foreign_keys)
     return {'ok': True, 'at': stamp, 'tables_purged': len(targets), 'account_rows_removed': removed_users, 'guards_restored': len(guards),
             'before': before, 'after': after, 'fingerprint': fingerprint(payload),
             'keep_accounts': bool(keep_accounts), 'reseeded': bool(reseed_demo)}
