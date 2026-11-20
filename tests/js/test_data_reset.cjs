@@ -14,7 +14,7 @@ const manage = fs.readFileSync('manage.py', 'utf8');
 assert(/\["data-reset", "trash", "Remise à zéro", \["admin"\]\]/.test(app), 'entrée de menu admin absente');
 assert(app.includes('case "data-reset":'), 'la vue n’est pas rendue');
 assert(app.includes('trash: "M4 7h16'), 'icône « trash » absente');
-assert(index.includes('/static/data-reset.js?v=remise-a-zero-armement-2026-11-19'), 'script non inclus dans la page');
+assert(index.includes('/static/data-reset.js?v=remise-a-zero-libre-2026-11-19'), 'script non inclus dans la page');
 
 // 2) trois verrous côté interface
 assert(reset.includes('REMETTRE A ZERO'), 'la phrase de confirmation est absente');
@@ -35,7 +35,7 @@ assert(reset.includes('Aucune sauvegarde') || reset.includes('sans sauvegarde'),
 // 3) la route est verrouillée côté serveur aussi
 assert(routes.includes("@auth('admin')"), 'la route n’exige pas le rôle admin');
 assert(routes.includes('check_password_hash'), 'le mot de passe n’est pas revérifié côté serveur');
-assert(routes.includes('ORIENTAL24_ALLOW_DATA_RESET'), 'la double sécurité production est absente');
+assert(!routes.includes('ORIENTAL24_ALLOW_DATA_RESET'), 'aucune variable Railway ne doit être exigée');
 assert(routes.includes('verify_empty'), 'aucun recomptage final');
 
 // 4) le module conserve la structure et purge le métier
@@ -58,10 +58,9 @@ assert(manage.includes('ORIENTAL24_RESET_PASSWORD'), 'le mode --yes n’est pas 
 
 console.log('Remise à zéro (écran admin + route + script) PASS');
 
-/* --- Déploiement : l'admin doit voir où il écrit et si l'interrupteur est lu --- */
+/* --- Plus aucun verrou d'environnement : la confirmation suffit --- */
+assert(!routes.includes('ORIENTAL24_ALLOW_DATA_RESET'), 'la route exige encore une variable Railway');
+assert(!reset.includes('ALLOW_DATA_RESET'), 'l’écran parle encore de la variable Railway');
+assert(!routes.includes('bloquée'), 'un message de blocage Railway subsiste');
 assert(reset.includes('deployment'), 'le bandeau de déploiement est absent de l’écran');
-assert(reset.includes('Interrupteur ORIENTAL24_ALLOW_DATA_RESET'), 'l’état de l’interrupteur n’est pas affiché');
-assert(routes.includes("'allowed'"), 'l’aperçu n’expose pas l’état autorisé');
 assert(routes.includes('deployment_facts'), 'les informations de déploiement manquent');
-assert(routes.includes("strip('\\'\"')") || routes.includes('strip('),
-  'la lecture de la variable Railway n’est pas tolérante');
