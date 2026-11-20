@@ -54,7 +54,7 @@ async function dataResetView() {
         <span class="badge" style="background:${d.deployment.mode === 'production' ? '#e8f0fe;color:#1a4fa0' : '#fff4e5;color:#8a4b00'}">
           ${d.deployment.mode === 'production' ? 'Production' : 'Demonstration'}</span>
         <span class="sub">Base : <b>${esc(d.deployment.database)}</b></span>
-        <span class="sub">Interrupteur ORIENTAL24_ALLOW_DATA_RESET : <b>${d.deployment.allowed ? 'ouvert' : 'ferme'}</b></span>
+        <span class="sub">Operation disponible : <b>oui</b> (phrase + mot de passe admin)</span>
       </div>
     </div>` : '') +
     `<div class="card" style="border-color:var(--red,#b3261e)">
@@ -66,9 +66,8 @@ async function dataResetView() {
           mouvements de caisse, scans, retours et historiques seront supprimés. Les Hubs, villes, tarifs,
           motifs et paramètres sont conservés.</p>
           <p class="sub"><b>${d.tables}</b> tables seront vidées · <b>${total}</b> lignes métier actuellement.
-          ${d.demo ? 'Mode démonstration : le jeu de démonstration peut être réinjecté juste après.'
-                   : (d.armed ? 'Deploiement arme : la remise a zero peut s’executer.'
-                              : 'Production : ORIENTAL24_ALLOW_DATA_RESET=1 n’est pas lue par ce service.')}</p>
+          ${d.demo ? 'Mode demonstration : le jeu de demonstration peut etre reinjecte juste apres.'
+                   : 'Production : la purge est irreversible et immediate.'}</p>
         </div>
       </div>
       <div class="flex" style="gap:12px;margin-top:16px;flex-wrap:wrap">
