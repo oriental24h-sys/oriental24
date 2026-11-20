@@ -294,89 +294,44 @@ class ResetRouteTests(unittest.TestCase):
         self.assertEqual(admin.get('/api/export').status_code, 200)
         self.assertEqual(admin.get('/api/audit').status_code, 200)
 
-    def test_deployment_facts_tolerate_railway_value_shapes(self):
-        """Railway renvoie parfois « 1 », « 1 », « true » : le service doit le comprendre."""
+    def test_production_purges_without_the_railway_variable(self):
+        """Plus aucune variable d'environnement : phrase + mot de passe suffisent."""
         self.m.app.config['PRODUCTION_MODE'] = True
-        admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo', '10.80.0.12')
-        saved = os.environ.get('ORIENTAL24_ALLOW_DATA_RESET')
-        try:
-            for raw, expected in (('1', True), (' 1 ', True), ('true', True), ('TRUE', True),
-                                  ('"1"', True), ('0', False), ('', False), ('non', False)):
-                if raw == '':
-                    os.environ.pop('ORIENTAL24_ALLOW_DATA_RESET', None)
-                else:
-                    os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = raw
-                seen = admin.get('/api/admin/data-reset', headers=headers,
-                                 base_url='https://oriental24.test').json
-                self.assertEqual(seen['deployment']['armed'], expected, 'valeur Railway %r' % raw)
-                self.assertEqual(seen['deployment']['allowed'], expected, 'valeur Railway %r' % raw)
-                self.assertEqual(seen['deployment']['mode'], 'production')
-                self.assertTrue(seen['deployment']['database'].endswith('.sqlite'))
-        finally:
-            if saved is None:
-                os.environ.pop('ORIENTAL24_ALLOW_DATA_RESET', None)
-            else:
-                os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = saved
-            self.m.app.config['PRODUCTION_MODE'] = False
-
-    def test_deployment_facts_are_always_open_in_demo(self):
-        admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo', '10.80.0.13')
         saved = os.environ.pop('ORIENTAL24_ALLOW_DATA_RESET', None)
         try:
-            # Mode démo : le cookie de session est émis pour http://localhost.
-            seen = admin.get('/api/admin/data-reset', headers=headers,
-                             base_url='http://localhost').json
-            self.assertTrue(seen['allowed'], 'en démonstration la remise à zéro reste disponible')
-            self.assertEqual(seen['deployment']['mode'], 'demo')
+            admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo', '10.80.0.14')
+            with self.m.conn() as c:
+                c.execute("""INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,
+                        return_fee,status,created_at,updated_at)
+                        VALUES(?,2,'X','0600000000','A',1,100,20,10,'Créé',?,?)""",
+                          ('FREE-' + uuid.uuid4().hex[:6], self.m.now(), self.m.now()))
+            done = admin.post('/api/admin/data-reset',
+                              json={'confirmation': 'REMETTRE A ZERO', 'password': 'Oriental24!Demo'},
+                              headers=headers, base_url='https://oriental24.test')
+            self.assertEqual(done.status_code, 200, done.json)
+            self.assertTrue(done.json['ok'])
+            self.assertTrue(done.json['allowed'] if 'allowed' in done.json else True)
+            self.assertEqual(done.json['after']['parcels']['rows'], 0)
         finally:
             if saved is not None:
                 os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = saved
-
-    def test_production_runs_once_the_switch_is_set(self):
-        """Avec ORIENTAL24_ALLOW_DATA_RESET=1, la production exécute la purge."""
-        self.m.app.config['PRODUCTION_MODE'] = True
-        saved = os.environ.get('ORIENTAL24_ALLOW_DATA_RESET')
-        try:
-            admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo', '10.80.0.14')
-            for raw in ('1', ' 1 ', 'true'):
-                os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = raw
-                with self.m.conn() as c:
-                    c.execute("""INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,
-                            return_fee,status,created_at,updated_at)
-                            VALUES(?,2,'X','0600000000','A',1,100,20,10,'Créé',?,?)""",
-                              ('ARMED-' + uuid.uuid4().hex[:6], self.m.now(), self.m.now()))
-                done = admin.post('/api/admin/data-reset',
-                                  json={'confirmation': 'REMETTRE A ZERO', 'password': 'Oriental24!Demo'},
-                                  headers=headers, base_url='https://oriental24.test')
-                self.assertEqual(done.status_code, 200, 'valeur Railway %r : %s' % (raw, done.json))
-                self.assertTrue(done.json['ok'])
-                self.assertEqual(done.json['after']['parcels']['rows'], 0)
-        finally:
-            if saved is None:
-                os.environ.pop('ORIENTAL24_ALLOW_DATA_RESET', None)
-            else:
-                os.environ['ORIENTAL24_ALLOW_DATA_RESET'] = saved
             self.m.app.config['PRODUCTION_MODE'] = False
 
-    def test_production_guard_requires_the_railway_switch(self):
-        # Le mode démo n'est pas concerné : on simule la production en mémoire.
-        self.m.app.config['PRODUCTION_MODE'] = True
-        try:
-            admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo', '10.80.0.11')
-            with self.m.conn() as c:
-                c.execute("""INSERT INTO parcels(tracking,client_id,recipient,phone,address,city_id,amount,fee,return_fee,
-                        status,created_at,updated_at) VALUES(?,2,'X','0600000000','A',1,100,20,10,'Créé',?,?)""",
-                          ('GUARD-' + uuid.uuid4().hex[:6], self.m.now(), self.m.now()))
-            blocked = admin.post('/api/admin/data-reset',
-                                 json={'confirmation': 'REMETTRE A ZERO', 'password': 'Oriental24!Demo'}, headers=headers,
-                                 base_url='https://oriental24.test')
-            self.assertEqual(blocked.status_code, 409)
-            self.assertIn('ORIENTAL24_ALLOW_DATA_RESET', blocked.json['error'])
-            with self.m.conn() as c:
-                self.assertGreater(c.execute("SELECT count(*) FROM parcels WHERE tracking LIKE 'GUARD-%'").fetchone()[0], 0)
-        finally:
-            self.m.app.config['PRODUCTION_MODE'] = False
-
+    def test_deployment_facts_never_block_the_operation(self):
+        for mode in (True, False):
+            # Le cookie de session dépend du mode : on se connecte à chaque fois.
+            self.m.app.config['PRODUCTION_MODE'] = mode
+            try:
+                admin, headers = self.login('admin@oriental24.ma', 'Oriental24!Demo',
+                                            '10.80.0.15' if mode else '10.80.0.16')
+                seen = admin.get('/api/admin/data-reset', headers=headers,
+                                 base_url='https://oriental24.test' if mode else 'http://localhost').json
+                self.assertTrue(seen['allowed'], 'la remise à zéro ne doit jamais être bloquée')
+                self.assertNotIn('armed', seen.get('deployment', {}),
+                                 'aucun interrupteur d’environnement ne doit subsister')
+                self.assertEqual(seen['deployment']['mode'], 'production' if mode else 'demo')
+            finally:
+                self.m.app.config['PRODUCTION_MODE'] = False
 
 if __name__ == '__main__':
     unittest.main()
